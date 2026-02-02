@@ -76,9 +76,6 @@ export async function subscriptionGuard(
         error: `Seu plano permite apenas ${planConfig.maxSessions} sessão(ões).`
       });
     }
-
-    // 🧭 Painel web
-    return res.redirect("/checkout?limit=sessions");
   }
 
   next();
