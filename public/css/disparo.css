@@ -1,0 +1,197 @@
+:root {
+  --bg: #0D1222;
+  --panel: #161B30;
+  --stroke: #373E59;
+
+  --text: #FFFFFF;
+  --muted: #AAB0D9;
+
+  --accent: #6C64EF;
+  --accent-2: #8B5CF6;
+  --danger: #E54848;
+}
+
+/* ===============================
+   BASE
+=============================== */
+* {
+  box-sizing: border-box;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #151a3a, var(--bg));
+  color: var(--text);
+  min-height: 100vh;
+}
+
+/* ===============================
+   HEADER
+=============================== */
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  background: rgba(22, 27, 48, 0.9);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--stroke);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand i {
+  color: var(--accent);
+  font-size: 20px;
+}
+
+.brand h1 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.btn-back {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+  opacity: 0.85;
+}
+
+.btn-back:hover {
+  opacity: 1;
+}
+
+/* ===============================
+   CONTEÚDO
+=============================== */
+.wrap {
+  max-width: 900px;
+  margin: 40px auto;
+  padding: 0 20px;
+}
+
+.card {
+  background: linear-gradient(180deg, #181f3d, #12172e);
+  border: 1px solid var(--stroke);
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 12px 40px rgba(108,100,239,.18);
+}
+
+/* ===============================
+   CAMPOS
+=============================== */
+.field {
+  margin-bottom: 20px;
+}
+
+label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 140px;
+  border-radius: 12px;
+  padding: 12px;
+  background: #0f1530;
+  color: var(--text);
+  border: 1px solid var(--stroke);
+  font-size: 14px;
+  outline: none;
+  resize: vertical;
+}
+
+textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(108,100,239,.25);
+}
+
+input[type="file"] {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+/* ===============================
+   BOTÃO
+=============================== */
+.btn-primary {
+  margin-top: 10px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  border: none;
+  padding: 14px 22px;
+  font-size: 15px;
+  border-radius: 14px;
+  cursor: pointer;
+  color: #fff;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+  transition: .25s;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.15);
+  box-shadow: 0 0 30px rgba(108,100,239,.45);
+}
+
+/* ===============================
+   PROGRESSO
+=============================== */
+.progress {
+  margin-top: 24px;
+  padding: 16px;
+  background: #0f1530;
+  border-radius: 14px;
+  border: 1px solid var(--stroke);
+  display: none;
+}
+
+/* ===============================
+   FOOTER
+=============================== */
+footer {
+  margin-top: 50px;
+  padding: 20px 10px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  border-top: 1px solid var(--stroke);
+}
+
+footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+footer a:hover {
+  text-decoration: underline;
+}
+
+/* ===============================
+   RESPONSIVO
+=============================== */
+@media (max-width: 600px) {
+  .card {
+    padding: 20px;
+  }
+}

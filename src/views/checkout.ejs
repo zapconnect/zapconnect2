@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Checkout • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Font Awesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  />
+
+  <link rel="stylesheet" href="/css/checkout.css" />
+</head>
+
+<body>
+
+  <!-- HEADER -->
+  <header class="topbar">
+    <div class="brand">
+      <i class="fa-solid fa-credit-card"></i>
+      <h1>Escolha seu plano</h1>
+    </div>
+
+    <a href="/user" class="back-link">
+      <i class="fa-solid fa-arrow-left"></i> Voltar
+    </a>
+  </header>
+
+  <!-- ALERTA -->
+  <div id="alert-container"></div>
+
+  <!-- PLANOS -->
+  <main class="plans">
+
+    <!-- FREE -->
+    <div class="plan free">
+      <span class="badge">Free</span>
+
+      <h3>
+        <i class="fa-solid fa-gift"></i>
+        Plano Free
+      </h3>
+
+      <div class="price">R$ 0</div>
+
+      <ul class="features">
+        <li><i class="fa-solid fa-check"></i> 1 sessão de WhatsApp</li>
+        <li><i class="fa-solid fa-robot"></i> 500 mensagens IA</li>
+        <li><i class="fa-solid fa-clock"></i> 7 dias grátis</li>
+      </ul>
+
+      <button class="btn" disabled>
+        <i class="fa-solid fa-lock"></i>
+        Ativado automaticamente
+      </button>
+    </div>
+
+    <!-- STARTER -->
+    <div class="plan highlight">
+      <span class="badge primary">Popular</span>
+
+      <h3>
+        <i class="fa-solid fa-rocket"></i>
+        Starter
+      </h3>
+
+      <div class="price">R$ 97<span>/mês</span></div>
+
+      <ul class="features">
+        <li><i class="fa-solid fa-check"></i> 1 sessão de WhatsApp</li>
+        <li><i class="fa-solid fa-robot"></i> 500 mensagens IA / mês</li>
+        <li><i class="fa-solid fa-headset"></i> Suporte completo</li>
+      </ul>
+
+      <button class="btn btn-primary" onclick="assinar('starter', this)">
+        <i class="fa-solid fa-credit-card"></i>
+        Assinar agora
+      </button>
+    </div>
+
+    <!-- PRO -->
+    <div class="plan">
+      <span class="badge pro">Pro</span>
+
+      <h3>
+        <i class="fa-solid fa-crown"></i>
+        Pro
+      </h3>
+
+      <div class="price">R$ 197<span>/mês</span></div>
+
+      <ul class="features">
+        <li><i class="fa-solid fa-layer-group"></i> Até 3 sessões</li>
+        <li><i class="fa-solid fa-infinity"></i> IA ilimitada</li>
+        <li><i class="fa-solid fa-star"></i> Recursos avançados</li>
+      </ul>
+
+      <button class="btn btn-primary" onclick="assinar('pro', this)">
+        <i class="fa-solid fa-bolt"></i>
+        Assinar Pro
+      </button>
+    </div>
+
+  </main>
+
+  <!-- SCRIPT (inalterado) -->
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const alertContainer = document.getElementById("alert-container");
+
+    const messages = {
+      expired: "⚠️ Seu plano expirou. Assine para continuar.",
+      cancelled: "❌ Assinatura cancelada. Assine novamente.",
+      past_due: "⚠️ Pagamento pendente. Atualize seu cartão."
+    };
+
+    const status = params.get("status");
+
+    if (params.get("expired") === "1" || messages[status]) {
+      alertContainer.innerHTML = `
+        <div class="alert">
+          <span>${messages[status] || messages.expired}</span>
+          <button onclick="this.parentElement.remove()">×</button>
+        </div>
+      `;
+    }
+
+    async function assinar(plan, btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Redirecionando...';
+
+      try {
+        const res = await fetch("/subscription/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan })
+        });
+
+        const data = await res.json();
+        if (!data.url) throw new Error();
+
+        window.location.href = data.url;
+      } catch {
+        alert("Erro ao iniciar pagamento");
+        btn.disabled = false;
+        btn.innerText = "Assinar plano";
+      }
+    }
+  </script>
+
+</body>
+</html>

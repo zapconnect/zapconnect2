@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Disparo em Massa • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Font Awesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  />
+
+  <link rel="stylesheet" href="/css/disparo.css">
+</head>
+
+<body>
+
+  <!-- HEADER -->
+  <header class="topbar">
+    <div class="brand">
+      <i class="fa-solid fa-bullhorn"></i>
+      <h1>Disparo em Massa</h1>
+    </div>
+
+    <a href="/painel" class="btn-back">
+      <i class="fa-solid fa-arrow-left"></i>
+      Voltar
+    </a>
+  </header>
+
+  <!-- CONTEÚDO -->
+  <main class="wrap">
+
+    <section class="card">
+
+      <!-- NÚMEROS -->
+      <div class="field">
+        <label>
+          <i class="fa-solid fa-phone"></i>
+          Números (um por linha)
+        </label>
+
+        <textarea
+          id="numbers"
+          placeholder="5531999999999&#10;5511988888888"
+        ></textarea>
+
+        <small>Inclua o DDI + DDD, sem espaços.</small>
+      </div>
+
+      <!-- MENSAGEM -->
+      <div class="field">
+        <label>
+          <i class="fa-solid fa-message"></i>
+          Mensagem
+        </label>
+
+        <textarea
+          id="message"
+          placeholder="Digite a mensagem que será enviada"
+        ></textarea>
+      </div>
+
+      <!-- MÍDIA -->
+      <div class="field">
+        <label>
+          <i class="fa-solid fa-paperclip"></i>
+          Mídia (opcional)
+        </label>
+
+        <input type="file" id="file" />
+      </div>
+
+      <!-- BOTÃO -->
+      <button id="btnStart" class="btn-primary">
+        <i class="fa-solid fa-rocket"></i>
+        Iniciar Disparo
+      </button>
+
+      <!-- PROGRESSO -->
+      <div id="progress" class="progress"></div>
+
+    </section>
+
+  </main>
+
+  <!-- FOOTER -->
+  <footer>
+    © 2026 ZapConnect — Todos os direitos reservados.<br>
+    Desenvolvido por <a href="https://seusite.com" target="_blank">Vinicius Souza</a>
+  </footer>
+
+  <!-- JS -->
+  <script src="/js/disparo.js"></script>
+</body>
+</html>

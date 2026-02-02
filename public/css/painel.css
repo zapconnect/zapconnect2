@@ -1,0 +1,134 @@
+.tag {
+  background: rgba(108,100,239,.15);
+  color: var(--primary);
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.top-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* BOTÃO FULL */
+.full {
+  width: 100%;
+  justify-content: center;
+}
+
+/* LABEL */
+.label {
+  display: block;
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: var(--text-muted);
+}
+
+/* ATALHOS */
+.shortcuts-card h2 {
+  margin-bottom: 12px;
+}
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.shortcut {
+  border: none;
+  border-radius: 12px;
+  padding: 14px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transition: .25s;
+}
+
+.shortcut i {
+  font-size: 18px;
+}
+
+.shortcut:hover {
+  transform: translateY(-3px);
+  filter: brightness(1.1);
+}
+
+/* CORES */
+.purple { background: #6d28d9; }
+.pink { background: #db2777; }
+.red { background: #dc2626; }
+.violet { background: #7c3aed; }
+.green { background: #16a34a; }
+.blue { background: #0284c7; }
+
+/* QR */
+.qr-area {
+  margin-top: 16px;
+}
+
+/* RESPONSIVO */
+@media (max-width: 700px) {
+  .shortcut-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+/* ==============================
+   LOGO TOPO
+============================== */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-logo {
+  height: 25px;     /* ajuste se quiser maior */
+  width: auto;
+  display: block;
+}
+/* =========================
+   QR CODE LOADING
+========================= */
+.qr-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 26px;
+  border-radius: 14px;
+  background: rgba(255,255,255,.04);
+  border: 1px dashed var(--border);
+  animation: fadeIn .3s ease;
+}
+
+.qr-loading i {
+  font-size: 42px;
+  color: var(--accent);
+  animation: spin 1.2s linear infinite;
+}
+
+.qr-loading p {
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* animação */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+
+@media (max-width: 600px) {
+  .brand-logo {
+    height: 24px;
+  }
+}

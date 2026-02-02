@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dashboard Admin • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Font Awesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  >
+
+  <link rel="stylesheet" href="/css/dashboard.css" />
+</head>
+<body>
+
+<!-- =========================
+🔝 TOPO
+========================= -->
+<header class="topbar">
+  <div class="title">
+    <h1><i class="fa-solid fa-chart-line"></i> Dashboard Administrativo</h1>
+    <span class="subtitle">Visão geral do sistema</span>
+  </div>
+</header>
+
+<!-- =========================
+📊 MÉTRICAS
+========================= -->
+<section class="cards" id="stats">
+  <!-- preenchido via JS -->
+</section>
+
+<!-- =========================
+🔍 FILTROS
+========================= -->
+<section class="filters">
+  <div class="filter-group">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <input type="text" id="search" placeholder="Buscar por nome ou email">
+  </div>
+
+  <select id="plan">
+    <option value="">Todos os planos</option>
+    <option value="free">Free</option>
+    <option value="starter">Starter</option>
+    <option value="pro">Pro</option>
+  </select>
+
+  <select id="status">
+    <option value="">Todos os status</option>
+    <option value="active">Ativo</option>
+    <option value="trial">Trial</option>
+    <option value="past_due">Inadimplente</option>
+    <option value="cancelled">Cancelado</option>
+  </select>
+
+  <button id="export" class="btn-export">
+    <i class="fa-solid fa-file-export"></i>
+    Exportar CSV
+  </button>
+</section>
+
+<!-- =========================
+👤 TABELA
+========================= -->
+<section class="table-box">
+  <h2><i class="fa-solid fa-users"></i> Clientes</h2>
+
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>Nome</th>
+          <th>Email</th>
+          <th>Plano</th>
+          <th>Status</th>
+          <th>Último Pagamento</th>
+          <th>Método</th>
+          <th>Falhas</th>
+        </tr>
+      </thead>
+      <tbody id="users">
+        <!-- preenchido via JS -->
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script src="/js/dashboard.js"></script>
+</body>
+</html>

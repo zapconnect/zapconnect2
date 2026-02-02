@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>Fluxos Inteligentes</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/css/fluxos.css">
+  <style>
+    /* ajustes mínimos para a tela de fluxos */
+    .container { padding:20px; }
+    .flow-list { display:flex; gap:12px; flex-wrap:wrap; }
+    .flow-card { background:#111827; border:1px solid #1e293b; padding:12px; border-radius:8px; width:260px; }
+    .actions-list { margin-top:8px; }
+    .action-item { background:#0f172a; padding:8px; border-radius:6px; margin-bottom:6px; display:flex; gap:8px; align-items:center; justify-content:space-between; }
+    .btn { padding:8px 10px; border-radius:8px; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Fluxos Inteligentes</h1>
+    <p>Criar / editar / deletar fluxos por usuário</p>
+
+    <div style="margin-bottom:12px">
+      <button id="btnNewFlow" class="btn">+ Novo Fluxo</button>
+    </div>
+
+    <div id="flowsWrap" class="flow-list"></div>
+  </div>
+
+  <!-- MODAL -->
+  <div id="flowModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center;">
+    <div style="background:var(--panel,#0f172a); padding:20px; border-radius:10px; width:720px; max-height:90vh; overflow:auto;">
+      <h2 id="flowModalTitle">Novo Fluxo</h2>
+
+      <label>Nome</label>
+      <input id="flowName" style="width:100%; padding:8px; margin-bottom:8px">
+
+      <label>Trigger (palavra/expressão)</label>
+      <input id="flowTrigger" style="width:100%; padding:8px; margin-bottom:8px" placeholder="ex: preço, orçamento, ajuda">
+
+      <h4>Ações</h4>
+      <div id="flowActions"></div>
+
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <select id="addActionType">
+          <option value="send_text">Enviar Texto</option>
+          <option value="delay">Aguardar (segundos)</option>
+          <option value="send_media">Enviar Mídia (base64 URL)</option>
+          <option value="handover_human">Encaminhar para humano</option>
+        </select>
+        <button id="btnAddAction" class="btn">Adicionar Ação</button>
+      </div>
+
+      <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
+        <button id="flowCancel" class="btn">Cancelar</button>
+        <button id="flowSave" class="btn">Salvar Fluxo</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="userdata" data-user='<%- JSON.stringify(user || {}) %>'></div>
+
+  <script src="/js/fluxos.js"></script>
+</body>
+</html>

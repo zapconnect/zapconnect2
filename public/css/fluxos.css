@@ -1,0 +1,237 @@
+body {
+    margin: 0;
+    background: #0d1117;
+    color: #fff;
+    font-family: "Inter", sans-serif;
+}
+
+.page {
+    display: flex;
+    height: 100vh;
+}
+
+/* ========================== */
+/* 🔹 SIDEBAR COM FECHAMENTO  */
+/* ========================== */
+
+.sidebar {
+    width: 300px;
+    background: #111827;
+    border-right: 1px solid #1f2937;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    transition: all 0.25s ease;
+}
+
+.sidebar.closed {
+    width: 0;
+    padding: 0;
+    overflow: hidden;
+    border-right: none;
+}
+
+/* Botão para recolher a sidebar */
+.sidebar-toggle {
+    position: absolute;
+    right: -45px;
+    top: 20px;
+    background: #111827;
+    border: 1px solid #1f2937;
+    color: white;
+    padding: 8px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+}
+
+.sidebar.closed .sidebar-toggle {
+    right: -55px;
+}
+
+/* ========================== */
+/* 🔸 BOTÕES */
+/* ========================== */
+
+.btn {
+    padding: 10px 14px;
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+}
+.btn.full { width: 100%; }
+.btn.ghost { background: transparent; border: 1px solid #3b4252; }
+.btn.danger { background: #dc2626; }
+
+/* ========================== */
+/* LISTA DE FLUXOS */
+/* ========================== */
+
+.flow-list {
+    flex: 1;
+    margin-top: 20px;
+    overflow-y: auto;
+}
+
+.flow-item {
+    padding: 12px;
+    background: #1a2235;
+    margin-bottom: 10px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.flow-item:hover { background: #1f2a41; }
+
+/* ========================== */
+/* ÁREA PRINCIPAL */
+/* ========================== */
+
+.main {
+    flex: 1;
+    padding: 20px;
+    overflow-y: auto;
+    transition: all 0.25s ease;
+}
+
+.empty {
+    text-align: center;
+    margin-top: 100px;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ========================== */
+/* EDITOR */
+/* ========================== */
+
+.editor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.editor-header input {
+    width: 60%;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid #374151;
+    background: #111827;
+    color: white;
+}
+
+.trigger-config,
+.actions-area {
+    margin-top: 15px;
+    padding: 15px;
+    background: #111827;
+    border: 1px solid #1f2937;
+    border-radius: 6px;
+}
+/* base para inputs/selects */
+input, select, textarea, .editor-header input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #263044; /* borda sutil */
+  background: #0f1724;        /* tom levemente mais claro que o fundo */
+  color: #e6eef8;
+  outline: none;
+  font-size: 14px;
+  transition: box-shadow .12s ease, border-color .12s ease, transform .06s ease;
+}
+
+/* placeholder */
+input::placeholder, textarea::placeholder {
+  color: #9aa6b2;
+  opacity: 1;
+}
+
+/* foco */
+input:focus, textarea:focus, select:focus {
+  border-color: #3b82f6; /* azul vivo */
+  box-shadow: 0 6px 20px rgba(59,130,246,0.06);
+  transform: translateY(-0.5px);
+}
+
+/* estado disabled */
+input:disabled, textarea:disabled, select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #0b1116;
+  border-color: #1f2a37;
+}
+
+/* textarea estilinho */
+textarea {
+  min-height: 100px;
+  resize: vertical;
+  padding-top: 12px;
+}
+
+/* select — aparência custom (inclui setinha) */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  padding-right: 36px; /* espaço pra seta */
+  background-image: linear-gradient(45deg, transparent 50%, #9aa6b2 50%),
+                    linear-gradient(135deg, #9aa6b2 50%, transparent 50%),
+                    linear-gradient(to right, rgba(255,255,255,0.02), rgba(255,255,255,0.02));
+  background-position: calc(100% - 18px) calc(1em + 2px), calc(100% - 12px) calc(1em + 2px), 100% 0;
+  background-size: 6px 6px, 6px 6px, 1px 100%;
+  background-repeat: no-repeat;
+}
+
+/* select em focus mantém comportamento */
+select:focus {
+  background-image: linear-gradient(45deg, transparent 50%, #3b82f6 50%),
+                    linear-gradient(135deg, #3b82f6 50%, transparent 50%),
+                    linear-gradient(to right, rgba(59,130,246,0.03), rgba(59,130,246,0.03));
+}
+
+/* inputs pequenos (ex.: botões de busca inline) */
+.input-sm {
+  padding: 6px 8px;
+  font-size: 13px;
+  border-radius: 6px;
+}
+
+/* bordo interno leve em formulários */
+.form-row { display: flex; gap: 12px; align-items: center; }
+.form-row .col { flex: 1; }
+
+/* garantir contraste em mobile */
+@media (max-width: 900px) {
+  input, select, textarea { font-size: 15px; }
+}
+
+/* ========================== */
+/* RESPONSIVIDADE */
+/* ========================== */
+
+@media (max-width: 900px) {
+    .sidebar {
+        position: absolute;
+        height: 100vh;
+        z-index: 50;
+        left: 0;
+        transform: translateX(0);
+    }
+
+    .sidebar.closed {
+        transform: translateX(-100%);
+        width: 300px; /* mantém a largura base para reabrir */
+        padding: 20px;
+    }
+
+    .sidebar-toggle {
+        right: -50px;
+    }
+}

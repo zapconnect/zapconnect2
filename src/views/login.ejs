@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8">
+  <title>Entrar • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Font Awesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  />
+
+  <link rel="stylesheet" href="/css/login.css">
+  <script src="/js/login.js" defer></script>
+</head>
+
+<body>
+
+  <div class="login-box">
+
+    <!-- HEADER -->
+    <div class="login-header">
+      <i class="fa-solid fa-bolt"></i>
+      <h2>Entrar</h2>
+      <p>Acesse sua conta ZapConnect</p>
+    </div>
+
+    <!-- EMAIL -->
+    <label>Email</label>
+    <input
+      id="email"
+      type="email"
+      placeholder="seu@email.com"
+      autocomplete="email"
+      autofocus
+    >
+
+    <!-- SENHA (IGUAL AO PRINT) -->
+    <label>Senha</label>
+    <div class="input-group">
+      <input
+        id="password"
+        type="password"
+        placeholder="••••••••"
+        autocomplete="current-password"
+      >
+      <button
+        type="button"
+        class="eye-btn"
+        onclick="togglePassword()"
+        aria-label="Mostrar senha"
+      >
+        <i id="eyeIcon" class="fa-solid fa-eye"></i>
+      </button>
+    </div>
+
+    <!-- BOTÃO -->
+    <button class="acessar" onclick="login()">
+      <i class="fa-solid fa-right-to-bracket"></i>
+      Acessar
+    </button>
+
+    <!-- FOOTER -->
+    <p class="login-footer">
+      Não tem conta?
+      <a href="/register">Criar conta</a>
+    </p>
+
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,634 @@
+:root {
+  --bg:#0D1222;
+  --panel:#161B30;
+  --border:#373E59;
+
+  --text:#fff;
+  --muted:#AAB0D9;
+
+  --accent:#6C64EF;
+  --accent-hover:#8B5CF6;
+
+  --success:#2EE6A6;
+  --danger:#E54848;
+
+  --p-novo:#F2C94C;
+  --p-qualificando:#F2994A;
+  --p-negociacao:#6C64EF;
+  --p-fechado:#2EE6A6;
+  --p-perdido:#FF5F5F;
+}
+
+* {
+  box-sizing: border-box;
+  font-family: Inter, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: radial-gradient(circle at top, #151a3a, var(--bg));
+  color: var(--text);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ================= HEADER ================= */
+.main-header {
+  padding: 18px 22px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: rgba(22,27,48,.9);
+  backdrop-filter: blur(12px);
+}
+
+.title h1 {
+  margin: 0;
+  font-size: 20px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.title p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.main-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0f1530;
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  border-radius: 10px;
+}
+
+.search-box input {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+}
+
+/* ================= BOTÕES ================= */
+.btn {
+  background: var(--accent);
+  border: none;
+  padding: 9px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn:hover { background: var(--accent-hover); }
+
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+}
+
+.btn.small {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* ================= FILTROS ================= */
+.filters {
+  display: flex;
+  gap: 20px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* ================= KANBAN ================= */
+.kanban-board {
+  flex: 1;
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  overflow-x: auto;
+}
+
+.kanban-column {
+  min-width: 260px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.kanban-column-header {
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+
+.count {
+  margin-left: auto;
+  background: #0f1530;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.dot { width: 10px; height: 10px; border-radius: 50%; }
+.dot-novo{background:var(--p-novo);}
+.dot-qualificando{background:var(--p-qualificando);}
+.dot-negociacao{background:var(--p-negociacao);}
+.dot-fechado{background:var(--p-fechado);}
+.dot-perdido{background:var(--p-perdido);}
+
+.kanban-dropzone {
+  flex: 1;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.kanban-card {
+  background: #131a2b;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+  cursor: grab;
+  transition: transform .15s, box-shadow .15s;
+}
+
+.kanban-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+}
+
+/* ================= MODAL ================= */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(4px);
+  display: none;
+  justify-content: center;
+  align-items: center;
+  z-index: 999;
+}
+
+.modal {
+  width: 460px;
+  max-height: 95vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px;
+}
+
+.modal input,
+.modal select,
+.modal textarea {
+  width: 100%;
+  padding: 10px;
+  margin-top: 6px;
+  background: #0f1530;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+}
+
+/* ================= TOAST ================= */
+.toasts {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toast {
+  background: #1e293b;
+  padding: 12px 16px;
+  border-radius: 10px;
+  border-left: 4px solid var(--accent);
+}
+
+.toast.success { border-color: var(--success); }
+.toast.error { border-color: var(--danger); }
+
+/* =====================================
+   SCROLLBAR DISCRETA — KANBAN
+===================================== */
+
+/* Firefox */
+.kanban-board {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.351) transparent;
+}
+
+/* Chrome / Edge / Safari */
+.kanban-board::-webkit-scrollbar {
+  height: 6px;              /* mais fina */
+}
+
+.kanban-board::-webkit-scrollbar-track {
+  background: transparent; /* some o fundo */
+}
+
+.kanban-board::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.581); /* bem sutil */
+  border-radius: 999px;
+}
+
+.kanban-board::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.4);  /* só aparece mais no hover */
+}
+/* =====================================
+   CHECKBOX SaaS — FILTROS KANBAN
+===================================== */
+
+/* Container do filtro */
+.filters label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-weight: 500;
+  color: var(--text);
+}
+
+/* Esconde o checkbox nativo */
+.filters input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  display: grid;
+  place-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+/* Hover */
+.filters input[type="checkbox"]:hover {
+  border-color: var(--accent);
+}
+
+/* Check marcado */
+.filters input[type="checkbox"]:checked {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  border-color: transparent;
+  box-shadow: 0 0 0 3px rgba(108, 100, 239, 0.25);
+}
+
+/* Ícone de check */
+.filters input[type="checkbox"]::before {
+  content: "";
+  width: 10px;
+  height: 6px;
+  border-left: 2px solid #fff;
+  border-bottom: 2px solid #fff;
+  transform: rotate(-45deg) scale(0);
+  transition: transform 0.15s ease;
+}
+
+/* Mostra o check quando marcado */
+.filters input[type="checkbox"]:checked::before {
+  transform: rotate(-45deg) scale(1);
+}
+
+/* Desabilitado (se usar no futuro) */
+.filters input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+#filterNovo:checked { background: var(--p-novo); }
+#filterQualificando:checked { background: var(--p-qualificando); }
+#filterNegociacao:checked { background: var(--p-negociacao); }
+#filterFechado:checked { background: var(--p-fechado); }
+#filterPerdido:checked { background: var(--p-perdido); }
+
+/* =====================================
+   ANIMAÇÃO DE ATIVAR / DESATIVAR COLUNA
+===================================== */
+
+.kanban-column {
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease,
+    max-width 0.3s ease,
+    margin 0.3s ease,
+    padding 0.3s ease;
+  transform-origin: left center;
+}
+
+/* estado oculto */
+.kanban-column.is-hidden {
+  opacity: 0;
+  transform: scale(0.96) translateY(6px);
+  pointer-events: none;
+
+  max-width: 0 !important;
+  min-width: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+/* suaviza o board quando muda */
+.kanban-board {
+  transition: gap 0.3s ease;
+}
+.crm-app,
+.page,
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+
+
+/* ================= RESPONSIVO ================= */
+@media (max-width: 900px) {
+  .filters { flex-wrap: wrap; }
+}
+@media (max-width: 900px) {
+  .main-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .main-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .search-box {
+    width: 100%;
+  }
+}
+@media (max-width: 700px) {
+  .filters {
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+  }
+
+  .filters::-webkit-scrollbar {
+    display: none;
+  }
+
+  .filters label {
+    background: #0f1530;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+  }
+}
+@media (max-width: 700px) {
+  .kanban-board {
+    padding: 12px;
+    gap: 14px;
+    scroll-snap-type: x mandatory;
+  }
+
+  .kanban-column {
+    min-width: 85vw;
+    max-width: 85vw;
+    scroll-snap-align: start;
+  }
+}
+@media (max-width: 700px) {
+  .kanban-card {
+    padding: 14px;
+    font-size: 15px;
+  }
+
+  .kanban-column-header {
+    font-size: 15px;
+  }
+}
+@media (max-width: 600px) {
+  .modal {
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
+
+  .modal-actions {
+    position: sticky;
+    bottom: 0;
+    background: var(--panel);
+    padding: 12px;
+    border-top: 1px solid var(--border);
+  }
+}
+@media (max-width: 600px) {
+  .btn {
+    padding: 12px 16px;
+    font-size: 15px;
+  }
+}
+/* ================================
+   MODAL CRM — PREMIUM SAAS
+================================ */
+
+/* Overlay */
+.modal-overlay {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+/* Modal container */
+.modal {
+  width: 100%;
+  max-width: 480px;
+  background: linear-gradient(180deg, #181f3d, #12172e);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: 0 25px 80px rgba(0,0,0,.55);
+  animation: modalIn .25s ease;
+  position: relative;
+}
+
+/* Animação */
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(.96) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+/* Botão fechar */
+.close-modal {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 8px;
+  transition: .2s;
+}
+
+.close-modal:hover {
+  background: rgba(255,255,255,.08);
+  color: #fff;
+}
+
+/* Título */
+.modal h2 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+/* Subtítulos (Tags / Notas) */
+.modal h3 {
+  margin: 20px 0 8px;
+  font-size: 14px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* Labels */
+.modal label {
+  font-size: 13px;
+  margin-top: 14px;
+  display: block;
+  color: var(--muted);
+}
+
+/* Inputs */
+.modal input,
+.modal select,
+.modal textarea {
+  background: #0f1530;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+  color: var(--text);
+  margin-top: 6px;
+  font-size: 14px;
+  transition: .2s;
+}
+
+.modal input:focus,
+.modal select:focus,
+.modal textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(108,100,239,.3);
+}
+
+/* Tags */
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tags .tag {
+  background: #1c2340;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Linha nova tag */
+.tag-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.tag-row input {
+  flex: 1;
+}
+
+/* Notas */
+.notes-area {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.notes-area .note {
+  background: #131a2b;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 13px;
+}
+
+/* Área nova nota */
+#modalNoteText {
+  min-height: 80px;
+  resize: vertical;
+}
+
+/* Ações */
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.kanban-card.dragging {
+  opacity: 0.5;
+  transform: rotate(2deg) scale(0.97);
+}
+
+
+/* Responsivo */
+@media (max-width: 520px) {
+  .modal {
+    max-width: 100%;
+    padding: 20px;
+  }
+
+  .modal-actions {
+    flex-direction: column;
+  }
+
+  .modal-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}

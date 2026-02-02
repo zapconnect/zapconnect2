@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Minha Conta • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Font Awesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  />
+
+  <link rel="stylesheet" href="/css/index.css">
+  <link rel="stylesheet" href="/css/user.css">
+</head>
+
+<body>
+
+  <!-- HEADER -->
+  <header class="topbar">
+    <div class="brand">
+      <i class="fa-solid fa-user"></i>
+      <h1>Minha Conta</h1>
+    </div>
+
+    <a href="/painel" class="btn small">
+      <i class="fa-solid fa-arrow-left"></i> Voltar
+    </a>
+  </header>
+
+  <!-- CARD PRINCIPAL -->
+  <main class="card user-card">
+
+    <!-- DADOS -->
+    <section class="section">
+      <h2><i class="fa-solid fa-id-card"></i> Dados do Usuário</h2>
+
+      <div class="info-grid">
+        <div>
+          <span>Nome</span>
+          <strong><%= user.name %></strong>
+        </div>
+
+        <div>
+          <span>Email</span>
+          <strong><%= user.email %></strong>
+        </div>
+      </div>
+    </section>
+
+    <hr>
+
+    <!-- PLANO -->
+    <section class="section">
+      <h2><i class="fa-solid fa-box"></i> Plano</h2>
+
+      <p>
+        <b>Plano atual:</b>
+        <span class="badge-plan"><%= user.plan.toUpperCase() %></span>
+      </p>
+
+      <% const statusMap = {
+        active: "Ativa",
+        trial: "Período de teste",
+        cancelled: "Cancelada",
+        past_due: "Pagamento pendente"
+      }; %>
+
+      <p class="status <%= user.subscription_status %>">
+        <i class="fa-solid fa-circle"></i>
+        <%= statusMap[user.subscription_status] || user.subscription_status %>
+      </p>
+
+      <!-- ASSINATURA ATIVA -->
+      <% if (user.subscription_status === "active" && lastPaymentAt) { 
+        const nextBilling = lastPaymentAt + 30*24*60*60*1000;
+        const daysLeft = Math.ceil((nextBilling - now) / (1000*60*60*24));
+      %>
+
+        <p class="muted">
+          <i class="fa-solid fa-rotate"></i>
+          Próxima cobrança:
+          <b><%= new Date(nextBilling).toLocaleDateString("pt-BR") %></b>
+        </p>
+
+        <% if (daysLeft <= 3) { %>
+          <p class="warning">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            Cobrança em <b><%= daysLeft %> dias</b>
+          </p>
+        <% } %>
+
+      <% } %>
+
+      <!-- TRIAL -->
+      <% if (user.subscription_status === "trial" && user.plan_expires_at) { 
+        const daysLeft = Math.ceil((user.plan_expires_at - now) / (1000*60*60*24));
+      %>
+
+        <p class="active">
+          <i class="fa-solid fa-gift"></i>
+          Avaliação ativa até
+          <b><%= new Date(user.plan_expires_at).toLocaleDateString("pt-BR") %></b>
+        </p>
+
+        <% if (daysLeft <= 2) { %>
+          <p class="warning">
+            <i class="fa-solid fa-hourglass-half"></i>
+            Teste expira em <b><%= daysLeft %> dias</b>
+          </p>
+        <% } %>
+
+      <% } %>
+
+      <!-- PAGAMENTO PENDENTE -->
+      <% if (user.subscription_status === "past_due") { %>
+        <p class="expired">
+          <i class="fa-solid fa-circle-xmark"></i>
+          Pagamento pendente. Atualize para evitar bloqueio.
+        </p>
+
+        <a href="/checkout" class="btn warning">
+          <i class="fa-solid fa-arrows-rotate"></i>
+          Atualizar pagamento
+        </a>
+      <% } %>
+
+      <div class="actions">
+        <a href="/checkout" class="btn btn-primary">
+          <i class="fa-solid fa-credit-card"></i>
+          Alterar / Assinar Plano
+        </a>
+      </div>
+    </section>
+
+    <hr>
+
+    <!-- PAGAMENTOS -->
+    <section class="section">
+      <h2><i class="fa-solid fa-receipt"></i> Histórico de Pagamentos</h2>
+
+      <% if (!payments || payments.length === 0) { %>
+        <p class="muted">Nenhum pagamento encontrado.</p>
+      <% } else { %>
+
+        <div class="table-wrapper">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Data</th>
+                <th>Valor</th>
+                <th>Método</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <% payments.forEach(p => { %>
+                <tr>
+                  <td><%= new Date(p.created_at).toLocaleDateString("pt-BR") %></td>
+                  <td>R$ <%= p.amount.toFixed(2) %></td>
+                  <td><%= p.payment_method %></td>
+                  <td class="status <%= p.status === 'approved' ? 'active' : 'expired' %>">
+                    <i class="fa-solid fa-circle"></i>
+                    <%= p.status %>
+                  </td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+        </div>
+
+      <% } %>
+    </section>
+
+  </main>
+
+</body>
+</html>

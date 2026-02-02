@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Pagamento Pendente • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Font Awesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  >
+
+  <style>
+    :root {
+      --bg: #0D1222;
+      --card: #161B30;
+      --border: #373E59;
+      --text: #FFFFFF;
+      --muted: #AAB0D9;
+      --primary: #6C64EF;
+      --primary-hover: #8B5CF6;
+      --warning: #F59E0B;
+    }
+
+    * {
+      box-sizing: border-box;
+      font-family: Inter, system-ui, sans-serif;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top, #151a3a, var(--bg));
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    .pending-card {
+      background: linear-gradient(180deg, #181f3d, #12172e);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 36px 32px;
+      width: 100%;
+      max-width: 420px;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(108,100,239,.35);
+      animation: fadeIn .4s ease;
+    }
+
+    .icon {
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      background: rgba(245,158,11,.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+
+    .icon i {
+      font-size: 32px;
+      color: var(--warning);
+      animation: pulse 1.6s infinite;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    p {
+      margin-top: 10px;
+      font-size: 14px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .actions {
+      margin-top: 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 14px;
+      border-radius: 14px;
+      border: none;
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      box-shadow: 0 0 30px rgba(108,100,239,.35);
+      transition: .2s;
+    }
+
+    .btn:hover {
+      filter: brightness(1.15);
+    }
+
+    .btn.ghost {
+      background: transparent;
+      box-shadow: none;
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    .btn.ghost:hover {
+      background: rgba(255,255,255,.04);
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(14px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.08); opacity: .7; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="pending-card">
+
+    <div class="icon">
+      <i class="fa-solid fa-hourglass-half"></i>
+    </div>
+
+    <h1>Pagamento pendente</h1>
+
+    <p>
+      Seu pagamento ainda está em processamento.<br>
+      Assim que for confirmado, seu plano será ativado automaticamente.
+    </p>
+
+    <div class="actions">
+      <a href="/painel" class="btn">
+        <i class="fa-solid fa-gauge-high"></i>
+        Ir para o painel
+      </a>
+
+      <a href="/checkout" class="btn ghost">
+        <i class="fa-solid fa-credit-card"></i>
+        Atualizar pagamento
+      </a>
+    </div>
+
+  </div>
+
+</body>
+</html>

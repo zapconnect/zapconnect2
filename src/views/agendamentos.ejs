@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agendamentos • ZapConnect</title>
+
+  <!-- Font Awesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  >
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="/css/agendamentos.css">
+</head>
+
+<body>
+
+<!-- =========================
+🔝 HEADER
+========================= -->
+<header class="topbar">
+  <div class="brand">
+    <i class="fa-solid fa-calendar-check"></i>
+    <h1>Agendamentos</h1>
+  </div>
+
+  <a href="/painel" class="btn-back">
+    <i class="fa-solid fa-arrow-left"></i>
+    Voltar
+  </a>
+</header>
+
+<!-- =========================
+📦 CONTEÚDO
+========================= -->
+<main class="container">
+
+  <!-- FORM -->
+  <section class="card form">
+    <h2><i class="fa-solid fa-plus"></i> Novo Agendamento</h2>
+
+    <label>
+      <i class="fa-solid fa-phone"></i>
+      Lista de números
+    </label>
+    <textarea id="nums" rows="4" placeholder="54999999999&#10;55988888888"></textarea>
+
+    <label>
+      <i class="fa-solid fa-message"></i>
+      Mensagem
+    </label>
+    <textarea id="msg" rows="3"></textarea>
+
+    <label>
+      <i class="fa-solid fa-paperclip"></i>
+      Arquivo (base64 opcional)
+    </label>
+    <input type="text" id="file" placeholder="data:...base64">
+
+    <label>
+      <i class="fa-solid fa-file"></i>
+      Nome do arquivo
+    </label>
+    <input type="text" id="filename" placeholder="foto.png">
+
+    <label>
+      <i class="fa-solid fa-clock"></i>
+      Data e Hora
+    </label>
+    <input type="datetime-local" id="sendAt">
+
+    <button class="btn-primary" onclick="agendar()">
+      <i class="fa-solid fa-calendar-plus"></i>
+      Agendar Mensagem
+    </button>
+
+    <p id="result"></p>
+  </section>
+
+  <!-- LISTA -->
+  <section class="card list">
+    <h2><i class="fa-solid fa-list"></i> Agendamentos Criados</h2>
+
+    <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Número(s)</th>
+            <th>Mensagem</th>
+            <th>Data / Hora</th>
+            <th>Status</th>
+            <th>Ação</th>
+          </tr>
+        </thead>
+        <tbody id="agendamentosTable">
+          <tr>
+            <td colspan="5" class="loading">Carregando...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  async function agendar() {
+    const numbers = document.getElementById("nums").value
+      .split("\n")
+      .map(n => n.trim())
+      .filter(Boolean);
+
+    const payload = {
+      numbers,
+      message: document.getElementById("msg").value,
+      file: document.getElementById("file").value,
+      filename: document.getElementById("filename").value,
+      sendAt: new Date(document.getElementById("sendAt").value).getTime()
+    };
+
+    const res = await fetch("/api/agendamentos/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+    document.getElementById("result").innerText =
+      data.ok ? "Agendamento criado com sucesso!" : "Erro ao agendar";
+
+    carregarAgendamentos();
+  }
+
+  async function excluir(id) {
+    if (!confirm("Excluir este agendamento?")) return;
+    await fetch(`/api/agendamentos/delete/${id}`, { method: "DELETE" });
+    carregarAgendamentos();
+  }
+
+  async function carregarAgendamentos() {
+    const tabela = document.getElementById("agendamentosTable");
+    tabela.innerHTML = `<tr><td colspan="5" class="loading">Carregando...</td></tr>`;
+
+    try {
+      const res = await fetch("/api/agendamentos/list");
+      const rows = await res.json();
+
+      if (!rows.length) {
+        tabela.innerHTML = `<tr><td colspan="5" class="loading">Nenhum agendamento encontrado</td></tr>`;
+        return;
+      }
+
+      tabela.innerHTML = "";
+
+      rows.forEach(row => {
+        const nums = JSON.parse(row.numbers || "[]");
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${nums.join("<br>")}</td>
+          <td>${row.message || "(com arquivo)"}</td>
+          <td>${formatarData(row.send_at)}</td>
+          <td class="status ${row.status}">
+            ${row.status === "pending" ? "Pendente" : "Enviado"}
+          </td>
+          <td class="action-cell">
+            <button class="btn-del" onclick="excluir(${row.id})">
+              <i class="fa-solid fa-trash"></i>
+              Excluir
+            </button>
+          </td>
+        `;
+        tabela.appendChild(tr);
+      });
+
+    } catch {
+      tabela.innerHTML = `<tr><td colspan="5" class="error">Erro ao carregar</td></tr>`;
+    }
+  }
+
+  function formatarData(ts) {
+    const d = new Date(ts);
+    return d.toLocaleDateString() + " " +
+      d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  carregarAgendamentos();
+  setInterval(carregarAgendamentos, 10000);
+</script>
+
+</body>
+</html>

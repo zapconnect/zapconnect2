@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <title>CRM Kanban • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <!-- Font Awesome -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  >
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="/css/crm.css">
+</head>
+
+<body>
+
+<div class="page">
+
+  <main class="main">
+
+    <!-- =============================
+         🔝 HEADER
+    ============================== -->
+    <header class="main-header">
+
+      <div class="title">
+        <h1>
+          <i class="fa-solid fa-chart-column"></i>
+          Pipeline de Vendas
+        </h1>
+        <p>Arraste os clientes entre os estágios</p>
+      </div>
+
+      <div class="main-actions">
+
+        <div class="search-box">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input id="q" placeholder="Buscar cliente, telefone ou tag">
+        </div>
+
+        <button id="refreshBtn" class="btn ghost" title="Atualizar">
+          <i class="fa-solid fa-rotate"></i>
+        </button>
+
+        <button id="addClientBtn" class="btn">
+          <i class="fa-solid fa-user-plus"></i>
+          Novo Cliente
+        </button>
+
+        <a href="/painel" class="btn ghost">
+          <i class="fa-solid fa-arrow-left"></i>
+          Voltar
+        </a>
+
+      </div>
+    </header>
+
+    <!-- =============================
+         🔎 FILTROS
+    ============================== -->
+    <div class="filters">
+      <label><input type="checkbox" id="filterNovo" checked> Novo</label>
+      <label><input type="checkbox" id="filterQualificando" checked> Qualificando</label>
+      <label><input type="checkbox" id="filterNegociacao" checked> Negociação</label>
+      <label><input type="checkbox" id="filterFechado" checked> Fechado</label>
+      <label><input type="checkbox" id="filterPerdido" checked> Perdido</label>
+    </div>
+
+    <!-- =============================
+         📌 KANBAN
+    ============================== -->
+    <section class="kanban-board" id="kanbanBoard">
+
+      <!-- NOVO -->
+      <div class="kanban-column" data-stage="Novo">
+        <div class="kanban-column-header">
+          <span class="dot dot-novo"></span>
+          <span>Novo</span>
+          <span class="count" id="count-Novo">0</span>
+        </div>
+        <div class="kanban-dropzone" data-stage="Novo"></div>
+      </div>
+
+      <!-- QUALIFICANDO -->
+      <div class="kanban-column" data-stage="Qualificando">
+        <div class="kanban-column-header">
+          <span class="dot dot-qualificando"></span>
+          <span>Qualificando</span>
+          <span class="count" id="count-Qualificando">0</span>
+        </div>
+        <div class="kanban-dropzone" data-stage="Qualificando"></div>
+      </div>
+
+      <!-- NEGOCIAÇÃO -->
+      <div class="kanban-column" data-stage="Negociação">
+        <div class="kanban-column-header">
+          <span class="dot dot-negociacao"></span>
+          <span>Negociação</span>
+          <span class="count" id="count-Negociação">0</span>
+        </div>
+        <div class="kanban-dropzone" data-stage="Negociação"></div>
+      </div>
+
+      <!-- FECHADO -->
+      <div class="kanban-column" data-stage="Fechado">
+        <div class="kanban-column-header">
+          <span class="dot dot-fechado"></span>
+          <span>Fechado</span>
+          <span class="count" id="count-Fechado">0</span>
+        </div>
+        <div class="kanban-dropzone" data-stage="Fechado"></div>
+      </div>
+
+      <!-- PERDIDO -->
+      <div class="kanban-column" data-stage="Perdido">
+        <div class="kanban-column-header">
+          <span class="dot dot-perdido"></span>
+          <span>Perdido</span>
+          <span class="count" id="count-Perdido">0</span>
+        </div>
+        <div class="kanban-dropzone" data-stage="Perdido"></div>
+      </div>
+
+    </section>
+
+    <!-- =============================
+         🧾 MODAL CLIENTE
+    ============================== -->
+    <div id="clientModal" class="modal-overlay">
+      <div class="modal">
+        <button class="close-modal" id="closeClientModal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+
+        <h2 id="modalTitle">Novo Cliente</h2>
+
+        <label>Nome</label>
+        <input id="modalName">
+
+        <label>Telefone</label>
+        <input id="modalPhone">
+
+        <label>Cidade / Estado</label>
+        <input id="modalCity">
+
+        <label>Estágio</label>
+        <select id="modalStage">
+          <option>Novo</option>
+          <option>Qualificando</option>
+          <option>Negociação</option>
+          <option>Fechado</option>
+          <option>Perdido</option>
+        </select>
+
+        <h3>Tags</h3>
+        <div id="modalTags" class="tags"></div>
+
+        <div class="tag-row">
+          <input id="modalNewTag" placeholder="Nova tag">
+          <button class="btn small" id="modalAddTag">Adicionar</button>
+        </div>
+
+        <h3>Notas</h3>
+        <div id="modalNotes" class="notes-area"></div>
+
+        <textarea id="modalNoteText" placeholder="Nova nota..."></textarea>
+        <button class="btn small" id="modalAddNote">Salvar Nota</button>
+
+        <div class="modal-actions">
+          <button id="modalCancel" class="btn ghost">Cancelar</button>
+          <button id="modalSave" class="btn">Salvar Cliente</button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- TOASTS -->
+<div class="toasts" id="toasts"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/js/crm.js"></script>
+
+</body>
+</html>

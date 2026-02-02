@@ -1,19 +1,25 @@
 import { type Whatsapp } from '@wppconnect-team/wppconnect';
 
+/**
+ * ✂️ Divide mensagens sem quebrar links, PDF, JSON, números e e-mails
+ */
 export function splitMessages(text: string): string[] {
+  if (!text) return [];
+
   const complexPattern =
     /(http[s]?:\/\/[^\s]+)|(www\.[^\s]+)|([^\s]+@[^\s]+\.[^\s]+)|(["'].*?["'])|(\b\d+\.\s)|(\w+\.\w+)/g;
   const placeholders = text.match(complexPattern) ?? [];
 
   const placeholder = 'PLACEHOLDER_';
-  let currentIndex = 0;
-  const textWithPlaceholders = text.replace(
+  let index = 0;
+
+  const withPlaceholders = text.replace(
     complexPattern,
-    () => `${placeholder}${currentIndex++}`
+    () => `${placeholder}${index++}`
   );
 
   const splitPattern = /(?<!\b\d+\.\s)(?<!\w+\.\w+)[^.?!]+(?:[.?!]+["']?|$)/g;
-  let parts = textWithPlaceholders.match(splitPattern) ?? ([] as string[]);
+  let parts = (withPlaceholders.match(splitPattern) ?? []).map((p) => p.trim());
 
   if (placeholders.length > 0) {
     parts = parts.map((part) =>
@@ -24,9 +30,12 @@ export function splitMessages(text: string): string[] {
     );
   }
 
-  return parts;
+  return parts.filter((p) => p.length > 0);
 }
 
+/**
+ * 💬 Envia mensagens com digitação contínua e tempo realista + emite ao painel em tempo real
+ */
 export async function sendMessagesWithDelay({
   messages,
   client,
@@ -36,22 +45,41 @@ export async function sendMessagesWithDelay({
   client: Whatsapp;
   targetNumber: string;
 }): Promise<void> {
-  for (const [, msg] of messages.entries()) {
-    const dynamicDelay = msg.length * 100;
-    await new Promise((resolve) => setTimeout(resolve, dynamicDelay));
-    client
-      .sendText(targetNumber, msg.trimStart())
-      .then(async (result) => {
-        console.log('Mensagem enviada:', result.body);
-        const chatId = targetNumber; // Assuming targetNumber is the chat ID
-        await client.startTyping(chatId.toString());
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        await client.stopTyping(chatId.toString());
-        console.log('Parando digitação...');
-        
-      })
-      .catch((erro) => {
-        console.error('Erro ao enviar mensagem:', erro);
-      });
+  const chatId = targetNumber.toString();
+
+  try { await client.startTyping(chatId); } catch {}
+
+  for (const msg of messages) {
+    if (!msg) continue;
+
+    const dynamicDelay = Math.min(Math.max(msg.length * 100, 900), 6000);
+    await new Promise(resolve => setTimeout(resolve, dynamicDelay));
+
+    try {
+      await client.sendText(chatId, msg.trimStart());
+      console.log('📤 Mensagem enviada:', msg);
+
+      try {
+        const { io } = await import("../server");
+        io.emit("newMessage", {
+          chatId,
+          body: msg.trimStart(),
+          timestamp: Date.now(),
+          fromBot: true,
+          _isFromMe: true,
+          name: "🤖 Bot"
+        });
+      } catch (err) {
+        console.error("⚠️ Falha ao emitir para painel:", err);
+      }
+
+    } catch (erro) {
+      console.error('⚠️ Erro ao enviar mensagem:', erro);
+    }
   }
+
+  try {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await client.stopTyping(chatId);
+  } catch {}
 }

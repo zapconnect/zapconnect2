@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Painel WhatsApp IA • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+  <!-- Boxicons -->
+  <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
+
+  <link rel="stylesheet" href="/css/index.css">
+  <link rel="stylesheet" href="/css/painel.css">
+
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+
+<body>
+
+  <!-- ============================
+🔝 HEADER
+============================= -->
+  <header class="topbar">
+    <div class="brand">
+      <img src="/img/logo3.png" alt="ZapConnect" class="brand-logo">
+    </div>
+
+    <div class="top-actions">
+      <div id="status-indicator" class="status-indicator">
+        <span id="status-dot" class="status-dot status-offline"></span>
+        <span id="status-text">Offline</span>
+      </div>
+
+      <button class="btn-danger small" onclick="logout()">
+        <i class="fa-solid fa-right-from-bracket"></i>
+        Sair
+      </button>
+    </div>
+  </header>
+
+  <!-- ============================
+📦 CONTEÚDO
+============================= -->
+  <main class="container">
+
+    <div class="grid">
+
+      <!-- 👤 Usuário -->
+      <section class="card">
+        <h2><i class="fa-solid fa-user"></i> Usuário</h2>
+
+        <p><b>ID:</b> <span id="user-id"></span></p>
+        <p><b>Nome:</b> <span id="user-name"></span></p>
+
+        <label class="label">Prompt da IA</label>
+        <textarea id="user-prompt" class="textarea"
+          placeholder="Defina como a IA deve responder aos clientes..."></textarea>
+
+        <button class="btn btn-primary full" onclick="updatePrompt()">
+          <i class="fa-solid fa-floppy-disk"></i>
+          Salvar Prompt
+        </button>
+      </section>
+
+      <!-- ⚡ Atalhos -->
+      <section class="card shortcuts-card">
+        <h2><i class="fa-solid fa-bolt"></i> Atalhos Rápidos</h2>
+
+        <div class="shortcut-grid">
+          <button class="shortcut purple" onclick="goToChat()">
+            <i class="fa-solid fa-comments"></i>
+            Chats
+          </button>
+
+          <button class="shortcut pink" onclick="goToDisparo()">
+            <i class="fa-solid fa-bullhorn"></i>
+            Disparo
+          </button>
+
+          <button class="shortcut red" onclick="goToAgendamentos()">
+            <i class="fa-solid fa-clock"></i>
+            Agendar
+          </button>
+
+          <button class="shortcut violet" onclick="window.location.href='/crm'">
+            <i class="fa-solid fa-address-book"></i>
+            CRM
+          </button>
+
+          <button class="shortcut green" onclick="goToSessions()">
+            <i class="fa-solid fa-mobile-screen-button"></i>
+            Sessões
+          </button>
+
+          <button class="shortcut blue" onclick="window.location.href='/user'">
+            <i class="fa-solid fa-user-gear"></i>
+            Conta
+          </button>
+        </div>
+      </section>
+
+      <!-- 🤖 IA -->
+      <section class="card">
+        <h2><i class="fa-solid fa-robot"></i> IA Automática</h2>
+
+        <label class="switch">
+          <input type="checkbox" id="ia-toggle" <%=user.ia_enabled ? 'checked' : '' %>
+          onchange="toggleIA()"
+          >
+          <span class="slider"></span>
+        </label>
+
+        <p class="muted">
+          Status:
+          <b id="ia-status">
+            <%= user.ia_enabled ? 'Ativada' : 'Desativada' %>
+          </b>
+        </p>
+      </section>
+
+      <!-- 📱 Criar Sessão -->
+      <!-- 📱 Criar Sessão -->
+      <section class="card">
+        <h2><i class="fa-solid fa-plus"></i> Criar Sessão</h2>
+
+        <input id="session-name" class="textarea" placeholder="Ex: celular1">
+
+        <button class="btn btn-accent full" onclick="createSession()">
+          <i class="fa-solid fa-circle-check"></i>
+          Criar Sessão
+        </button>
+
+        <!-- QR AREA -->
+        <div id="qr-preview" class="hidden qr-area">
+
+          <!-- 🔄 LOADING -->
+          <div id="qr-loading" class="qr-loading" style="display: none;">
+            <i class="fa-solid fa-qrcode"></i>
+            <p>Gerando QR Code…</p>
+          </div>
+
+          <!-- 📸 QR -->
+          <img id="qr-img" class="qr-img" style="display:none;">
+
+          <!-- 🔁 REFRESH -->
+          <button id="qr-refresh" class="btn small btn-accent" style="display:none;" onclick="refreshQR()">
+            <i class="fa-solid fa-rotate"></i>
+            Atualizar QR
+          </button>
+
+          <!-- ⏱️ TIMER -->
+          <p id="qr-timer" class="qr-info"></p>
+        </div>
+      </section>
+
+
+    </div>
+
+    <!-- 📱 Sessões -->
+    <section class="card">
+      <h2><i class="fa-solid fa-server"></i> Sessões</h2>
+      <div id="sessions-list"></div>
+    </section>
+
+  </main>
+
+  <footer>
+    © 2026 ZapConnect — Todos os direitos reservados.<br>
+    Desenvolvido por <a href="https://seusite.com" target="_blank">Vinicius Souza</a>
+  </footer>
+
+  <script src="/js/index.js"></script>
+  <script src="/js/config.js"></script>
+
+  <script>
+    function goToChat() { location.href = "/chat"; }
+    function goToDisparo() { location.href = "/disparo"; }
+    function goToAgendamentos() { location.href = "/agendamentos"; }
+    function goToSessions() {
+      document.getElementById("sessions-list")
+        ?.scrollIntoView({ behavior: "smooth" });
+    }
+  </script>
+
+</body>
+
+</html>

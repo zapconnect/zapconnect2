@@ -1,0 +1,491 @@
+/* ============================================
+   🔥 Painel Estilo WhatsApp Web (Dark)
+   ============================================ */
+
+:root {
+  /* Brand */
+  --primary: #6C64EF;        /* Roxo ZapConnect */
+  --primary-light: #CCD0F3;  /* Roxo claro / glow */
+  --accent: #1b0ffb;        
+  --danger: #d93838;
+  --accent2: #6C64EF;
+  /* Backgrounds */
+  --bg: #0D1222;           /* Fundo principal */
+  --sidebar: #161B30;      /* Sidebar / topo */
+  --panel: #0D1222;        /* Fundo de áreas */
+  --card: #161B30;         /* Cards */
+  --border: #373E59;       /* Bordas */
+  --hover: #1f2547;        /* Hover de botões */
+
+  /* Text */
+  --text: #FFFFFF;
+  --text-muted: #AAB0D9;
+  --white: #ffffff;
+}
+
+
+* {
+    margin: 0;
+    padding: 0;
+    font-family: "Inter", sans-serif;
+    box-sizing: border-box;
+}
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 0;
+}
+
+/* ===========================
+   TOPO
+   =========================== */
+.topbar {
+    width: 100%;
+    background: var(--sidebar);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 12px;
+    /* 👈 diminuiu */
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    /* 👈 novo */
+}
+
+.topbar button,
+.status-indicator {
+    margin-left: 4px;
+}
+
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.brand h1 {
+    font-size: 17px;
+    font-weight: 600;
+}
+
+.status {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* ===========================
+   CONTAINER
+   =========================== */
+.container {
+    max-width: 1300px;
+    margin: auto;
+    padding: 20px;
+}
+
+.grid {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 900px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ===========================
+   CARDS
+   =========================== */
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+}
+
+.card h2 {
+    font-size: 17px;
+    font-weight: 600;
+    margin-bottom: 12px;
+}
+
+/* ===========================
+   🔘 BOTÕES MODERNOS
+   =========================== */
+
+.btn {
+    background: var(--hover);
+    border: none;
+    padding: 12px 18px;
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+    transition: 0.25s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+    background: #3c4a52;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+/* Botão principal (verde WhatsApp) */
+.btn-primary {
+    background: var(--primary);
+    color: var(--white);
+}
+
+.btn-primary:hover {
+    background: #015ca3;
+    box-shadow: 0 4px 12px rgba(0, 168, 132, 0.4);
+}
+
+/* Botão de destaque (azul) */
+.btn-accent {
+    background: #0274c7;
+    color: var(--white);
+}
+
+.btn-accent:hover {
+    background: #015ca3;
+    box-shadow: 0 4px 12px rgba(2, 116, 199, 0.35);
+}
+
+/* Botão de perigo (vermelho) */
+.btn-danger {
+    background: #d93838;
+    color: var(--white);
+}
+
+.btn-danger:hover {
+    background: #b82f2f;
+    box-shadow: 0 4px 12px rgba(217, 56, 56, 0.35);
+}
+
+/* Botões pequenos */
+.small {
+    padding: 6px 10px;
+    font-size: 12px;
+    border-radius: 7px;
+}
+
+
+/* ===========================
+   TEXT AREA / CAMPOS
+   =========================== */
+.textarea {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    width: 100%;
+    padding: 10px;
+    resize: vertical;
+    min-height: 100px;
+}
+
+input,
+textarea {
+    outline: none;
+}
+
+/* ===============================
+   📱 LISTA DE SESSÕES (ZapConnect)
+=============================== */
+
+#sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* Cada sessão */
+.session-row {
+  background: linear-gradient(180deg, #181f3d, #12172e);
+  border: 1px solid #373E59;
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transition: 0.25s ease;
+  box-shadow: 0 8px 30px rgba(108, 100, 239, 0.12);
+}
+
+/* Hover premium */
+.session-row:hover {
+  transform: translateY(-3px);
+  border-color: #6C64EF;
+  box-shadow: 0 16px 40px rgba(108, 100, 239, 0.28);
+}
+
+/* Nome da sessão */
+.session-row b {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Status */
+.session-row small {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: #AAB0D9;
+}
+
+/* Botão Apagar */
+.session-row button {
+  background: rgba(255, 95, 95, 0.12);
+  border: 1px solid rgba(255, 95, 95, 0.4);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  transition: 0.2s;
+}
+
+.session-row button:hover {
+  background: linear-gradient(135deg, #FF5F5F, #E54848);
+  box-shadow: 0 0 20px rgba(255, 95, 95, 0.5);
+}
+
+/* Ícones online/offline */
+.session-row b::before {
+  content: "●";
+  font-size: 12px;
+  margin-right: 6px;
+  color: #888;
+}
+
+/* Quando conectado (📱) */
+.session-row:has(b:contains()) b::before {
+    color: #2EE6A6;
+    text-shadow: 0 0 10px #2EE6A6;
+}
+
+/* Quando offline (📴) */
+.session-row:has(b:contains()) b::before {
+  color: #FF5F5F;
+  text-shadow: 0 0 10px #FF5F5F;
+}
+
+
+/* ===========================
+   QR CODE
+   =========================== */
+.qr-info {
+    font-size: 13px;
+    margin-bottom: 8px;
+    color: var(--text);
+}
+
+.qr-img {
+    width: 250px;
+    border: 1px solid var(--border);
+    padding: 10px;
+    border-radius: 12px;
+    background: var(--white);
+}
+
+/* ===========================
+   LOGS
+   =========================== */
+#logsBox {
+    background: #0b141a;
+    color: var(--text-muted);
+    font-size: 12px;
+    border: 1px solid var(--border);
+    padding: 12px;
+    border-radius: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    line-height: 1.4;
+}
+
+/* ===========================
+   FOOTER
+   =========================== */
+footer {
+  margin-top: 50px;
+  padding: 20px 10px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  border-top: 1px solid var(--stroke);
+}
+
+footer a {
+  color: var(--accent2);
+  text-decoration: none;
+}
+
+footer a:hover {
+  text-decoration: underline;
+}
+
+.session-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.session-actions button {
+    min-width: 90px;
+    text-align: center;
+    display: flex;
+    gap: 5px;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ===========================
+   STATUS (ONLINE / OFFLINE)
+=========================== */
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    border-radius: 12px;
+    background: var(--hover);
+    margin-right: 12px;
+    /* 👈 aproxima do botão */
+}
+
+
+.status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    animation: pulse 1.2s infinite;
+}
+
+.status-online {
+    background: #00c46c;
+}
+
+.status-offline {
+    background: #d93838;
+}
+
+@keyframes pulse {
+    0% {
+        transform: scale(1);
+        opacity: .8;
+    }
+
+    50% {
+        transform: scale(1.5);
+        opacity: 1;
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: .8;
+    }
+}
+
+.qr-box {
+
+    position: relative;
+    display: inline-block;
+}
+
+.qr-timer {
+    position: absolute;
+    bottom: 8px;
+    right: 12px;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 4px 8px;
+    font-size: 12px;
+    border-radius: 6px;
+    color: #fff;
+}
+
+.qr-refresh {
+    margin-top: 8px;
+}
+
+.qr-updated {
+    animation: blink 0.6s ease 2;
+}
+
+@keyframes blink {
+    0% {
+        opacity: 0.3;
+    }
+
+    50% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0.3;
+    }
+}
+
+.qr-status {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+/* SWITCH TOGGLE */
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 55px;
+    height: 28px;
+}
+
+.switch input {
+    display: none;
+}
+
+.slider {
+    position: absolute;
+    cursor: pointer;
+    background-color: #555;
+    border-radius: 50px;
+    inset: 0;
+    transition: .2s;
+}
+
+.slider:before {
+    position: absolute;
+    content: "";
+    height: 22px;
+    width: 22px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    border-radius: 50%;
+    transition: .2s;
+}
+
+input:checked+.slider {
+    background-color: #00a884;
+}
+
+input:checked+.slider:before {
+    transform: translateX(26px);
+}
