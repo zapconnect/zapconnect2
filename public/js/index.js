@@ -59,11 +59,24 @@ async function loadUser() {
 
 
 // ===============================
-// 🚪 LOGOUT
+// 🚪 LOGOUT (CORRETO)
 // ===============================
-function logout() {
-    document.cookie = "token=; Max-Age=0; path=/";
-    location.href = "/login";
+async function logout() {
+    try {
+        await fetch(API + "/auth/logout", {
+            method: "POST",
+            credentials: "include" // 🔥 OBRIGATÓRIO
+        });
+
+        // limpeza extra (opcional, mas recomendado)
+        localStorage.clear();
+        sessionStorage.clear();
+
+        window.location.href = "/login";
+    } catch (err) {
+        console.error("Erro ao sair:", err);
+        alert("Erro ao sair da conta");
+    }
 }
 
 // ===============================

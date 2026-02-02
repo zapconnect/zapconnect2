@@ -1164,7 +1164,19 @@ app.post("/auth/login", async (req, res) => {
   res.json({ ok: true });
 });
 
+// =======================================
+// 🚪 LOGOUT
+// =======================================
+app.post("/auth/logout", (_req, res) => {
+  res.clearCookie("token", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/", // 🔥 OBRIGATÓRIO
+  });
 
+  return res.json({ ok: true });
+});
 
 
 app.post("/user/update-prompt", authMiddleware, async (req, res) => {
