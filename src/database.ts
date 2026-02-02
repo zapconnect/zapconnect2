@@ -4,6 +4,11 @@ import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
 let pool: mysql.Pool;
 
 export async function initDB() {
+  console.log("DB_HOST =", process.env.DB_HOST);
+  console.log("DB_PORT =", process.env.DB_PORT);
+  console.log("DB_USER =", process.env.DB_USER);
+  console.log("DB_NAME =", process.env.DB_NAME);
+  
   pool = mysql.createPool({
     host: process.env.DB_HOST,
     port: Number(process.env.DB_PORT || 3306),
