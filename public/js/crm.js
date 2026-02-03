@@ -103,15 +103,17 @@ function renderModalNotes() {
 // LOAD CLIENTS
 // ------------------------------------------------------
 async function loadClients() {
-    try {
-        const res = await fetch("/api/crm/list");
-        clients = await res.json();
-        renderBoard();
-    } catch (err) {
-        showToast("Erro ao carregar clientes", "error");
-    }
-}
+  try {
+    const res = await fetch("/api/crm/list");
+    const data = await res.json();
 
+    clients = data.clients || [];   // ✅
+    renderBoard();
+  } catch (err) {
+    console.error(err);
+    showToast("Erro ao carregar clientes", "error");
+  }
+}
 // ------------------------------------------------------
 // RENDER KANBAN
 // ------------------------------------------------------
@@ -140,7 +142,7 @@ function renderBoard() {
         if (stage === "Perdido" && !filterPerdido.checked) return;
 
         // busca
-        const tags = c.tags ? JSON.parse(c.tags) : [];
+        const tags = Array.isArray(c.tags) ? c.tags : [];
         const haystack = [
             c.name || "",
             c.phone || "",
@@ -191,26 +193,19 @@ function renderBoard() {
 }
 function openClientModal() {
   clientModal.style.display = "flex";
-
-  // trava scroll do body
   document.body.style.overflow = "hidden";
 
-  // ativa scroll interno do modal
   const modalBox = clientModal.querySelector(".modal");
   modalBox.style.maxHeight = "90vh";
   modalBox.style.overflowY = "auto";
 
-  // foco automático
   setTimeout(() => modalName.focus(), 100);
 }
 
 function closeClientModal() {
   clientModal.style.display = "none";
-
-  // libera scroll do body
   document.body.style.overflow = "";
 
-  // opcional: limpa estilos inline
   const modalBox = clientModal.querySelector(".modal");
   modalBox.style.overflowY = "";
   modalBox.style.maxHeight = "";
@@ -235,10 +230,10 @@ function selectClient(id) {
     modalCity.value = selectedClient.citystate;
     modalStage.value = selectedClient.stage;
 
-    modalTags = selectedClient.tags ? JSON.parse(selectedClient.tags) : [];
+    modalTags = Array.isArray(selectedClient.tags) ? selectedClient.tags : [];
     renderModalTags();
 
-    modalNotes = selectedClient.notes ? JSON.parse(selectedClient.notes) : [];
+    modalNotes = Array.isArray(selectedClient.notes) ? selectedClient.notes : [];
     renderModalNotes();
 }
 

@@ -554,18 +554,24 @@ app.get("/crm", authMiddleware, (req, res) => {
 
 app.get("/api/crm/list", authMiddleware, async (req, res) => {
   try {
+    const user = (req as any).user;
     const db = getDB();
-    const rows = await db.all("SELECT * FROM crm ORDER BY id DESC");
 
-    const parsed = rows.map((r: any) => ({
+    const rows = await db.all(
+      `SELECT * FROM crm WHERE user_id = ? ORDER BY id DESC`,
+      [user.id]
+    );
+
+    const clients = rows.map((r: any) => ({
       ...r,
-      tags: typeof r.tags === "string" ? JSON.parse(r.tags) : r.tags,
-      notes: typeof r.notes === "string" ? JSON.parse(r.notes) : r.notes,
+      tags: typeof r.tags === "string" ? JSON.parse(r.tags) : [],
+      notes: typeof r.notes === "string" ? JSON.parse(r.notes) : [],
     }));
 
-    res.json(parsed);
+    res.json({ ok: true, clients }); // ✅
   } catch (err) {
-    res.json([]);
+    console.error("❌ Erro ao listar CRM:", err);
+    res.json({ ok: false, clients: [] });
   }
 });
 
@@ -853,16 +859,16 @@ setInterval(async () => {
 // Atualizar estágio do CRM Kanban
 app.post("/api/crm/stage", authMiddleware, subscriptionGuard, async (req, res) => {
   try {
-    const db = getDB();
+    const user = (req as any).user;
     const { id, stage } = req.body;
+    const db = getDB();
 
     await db.run(
-      `UPDATE crm SET stage = ? WHERE id = ?`,
-      [stage, id]
+      `UPDATE crm SET stage = ? WHERE id = ? AND user_id = ?`,
+      [stage, id, user.id]
     );
 
     res.json({ ok: true });
-
   } catch (err) {
     console.error(err);
     res.json({ ok: false });
@@ -945,14 +951,16 @@ app.post("/api/crm/note", authMiddleware, subscriptionGuard, async (req, res) =>
 // Criar cliente
 app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) => {
   try {
+    const user = (req as any).user;
     const db = getDB();
 
     const { name, phone, citystate, stage, tags, notes } = req.body;
 
     await db.run(
-      `INSERT INTO crm (name, phone, citystate, stage, tags, notes)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO crm (user_id, name, phone, citystate, stage, tags, notes)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
+        user.id,
         name,
         phone,
         citystate || "",
@@ -963,9 +971,8 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
     );
 
     res.json({ ok: true });
-
   } catch (err) {
-    console.error(err);
+    console.error("❌ Erro criar CRM:", err);
     res.status(500).json({ ok: false });
   }
 });
