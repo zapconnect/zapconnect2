@@ -301,7 +301,7 @@ export async function deleteWppSession(userId: number, sessionName: string) {
   const full = `USER${userId}_${sessionName}`;
   const sessionDir = path.join(process.cwd(), "tokens", full);
 
-  console.log("🗑 Apagando sessão:", full);
+  console.log("🗑 Apagando sessão COMPLETA:", full);
 
   try {
     const client = clients.get(full);
@@ -312,20 +312,34 @@ export async function deleteWppSession(userId: number, sessionName: string) {
       clients.delete(full);
     }
 
+    // ❌ remover eventos e memória
     eventsAttached.delete(full);
     clearSessionMemory(full);
 
+    // 🗑 remover QR
     const qrPath = getQRPathFor(full);
     if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
 
+    // 🔥 APAGAR TOKEN (PASTA DA SESSÃO)
+    if (fs.existsSync(sessionDir)) {
+      const removed = await safeRmDir(sessionDir);
+      console.log(
+        removed
+          ? "🧹 Token (userDataDir) removido"
+          : "⚠️ Falha ao remover token"
+      );
+    }
+
+    // 🧾 remover do banco
     const db = await getDB();
     await db.run(
       `DELETE FROM sessions WHERE user_id = ? AND session_name = ?`,
       [userId, sessionName]
     );
 
-    console.log("🔥 Sessão removida com sucesso:", full);
+    console.log("✅ Sessão totalmente removida:", full);
     return true;
+
   } catch (err) {
     console.error("❌ Erro ao apagar sessão:", err);
     return false;
