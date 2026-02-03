@@ -246,7 +246,54 @@ export function enableHumanTemporarily(userId: string | number, chatId: string) 
   chatHumanTimer.set(key, timer);
 }
 
+// ===========================
+// 🧹 LIMPAR TOKENS INATIVOS
+// ===========================
+export async function cleanupInactiveTokens() {
+  const tokensRoot = path.join(process.cwd(), "tokens");
+  ensureDir(tokensRoot);
 
+  const db = await getDB();
+
+  // 🔎 sessões válidas no banco
+  const sessions = await db.all<{
+    user_id: number;
+    session_name: string;
+  }>(`SELECT user_id, session_name FROM sessions`);
+
+  // transforma em Set para lookup rápido
+  const validSessions = new Set(
+    sessions.map(s => `USER${s.user_id}_${s.session_name}`)
+  );
+
+  const dirs = fs.readdirSync(tokensRoot, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => d.name);
+
+  let removed = 0;
+
+  for (const dir of dirs) {
+    if (!validSessions.has(dir)) {
+      const fullPath = path.join(tokensRoot, dir);
+
+      console.log("🧹 Token inativo encontrado:", dir);
+
+      try {
+        const ok = await safeRmDir(fullPath);
+        if (ok) {
+          removed++;
+          console.log("✅ Token removido:", dir);
+        } else {
+          console.warn("⚠️ Falha ao remover token:", dir);
+        }
+      } catch (err) {
+        console.error("❌ Erro ao remover token:", dir, err);
+      }
+    }
+  }
+
+  console.log(`🧹 Limpeza concluída. Tokens removidos: ${removed}`);
+}
 
 // ===========================
 // REMOVER PASTA DA SESSÃO (SAFE)

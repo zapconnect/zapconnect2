@@ -1343,9 +1343,12 @@ app.post("/user/toggle-ia", authMiddleware, async (req, res) => {
 // =======================================
 export async function restoreSessionsOnStartup() {
   const db = getDB();
-  const sessions = await db.all(`SELECT * FROM sessions WHERE status != 'deleted'`);
 
-  console.log(`🔄 Restaurando ${sessions.length} sessões...`);
+  const sessions = await db.all(
+    `SELECT * FROM sessions WHERE status = 'connected'`
+  );
+
+  console.log(`🔄 Restaurando ${sessions.length} sessões conectadas...`);
 
   for (const s of sessions) {
     try {
