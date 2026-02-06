@@ -1367,6 +1367,35 @@ export async function restoreSessionsOnStartup() {
 
   console.log("✅ Restauração concluída.");
 }
+// =======================================================
+// ⏱️ WATCHDOG — EXPIRAÇÃO AUTOMÁTICA DO MODO HUMANO
+// =======================================================
+// ⚠️ ESSENCIAL: garante que o chat volte pro bot
+// mesmo se o painel estiver fechado
+// =======================================================
+
+setInterval(() => {
+  const now = Date.now();
+
+  for (const [key, expire] of chatHumanExpire.entries()) {
+    if (expire <= now) {
+      // 🔓 remove bloqueio humano
+      chatHumanExpire.delete(key);
+      chatHumanLock.set(key, false);
+
+      // key formato: USER{userId}_{chatId}
+      const chatId = key.replace(/^USER\d+_/, "");
+
+      // 🔥 sincroniza TODOS os painéis conectados
+      io.emit("human_state_changed", {
+        chatId,
+        state: false
+      });
+
+      console.log("🤖 Modo humano expirado automaticamente:", chatId);
+    }
+  }
+}, 5000); // verifica a cada 5 segundos
 
 
 // =======================================
