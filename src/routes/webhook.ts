@@ -17,7 +17,6 @@ type InvoiceWithExtras = Stripe.Invoice & {
 
 router.post(
   "/stripe",
-  express.raw({ type: "application/json" }),
   async (req, res) => {
     const sig = req.headers["stripe-signature"] as string;
     let event: Stripe.Event;

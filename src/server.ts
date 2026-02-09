@@ -10,7 +10,6 @@ import { Server } from "socket.io";
 import bcrypt from "bcrypt";
 import { ensureChat } from "./wppManager";
 import subscriptionRoutes from "./routes/subscription";
-
 import webhookRoutes from "./routes/webhook";
 import { subscriptionGuard } from "./middlewares/subscriptionGuard";
 
@@ -60,10 +59,12 @@ app.use(
   })
 );
 // ⚠️ WEBHOOK STRIPE — RAW BODY (OBRIGATÓRIO)
+// ⚠️ WEBHOOK STRIPE — RAW BODY (OBRIGATÓRIO)
 app.use(
   "/webhook/stripe",
   express.raw({ type: "application/json" })
 );
+
 
 
 
@@ -74,9 +75,9 @@ app.use(
 app.use(cookieParser());
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+app.use("/webhook", webhookRoutes);
 
 // ⚠️ OBRIGATÓRIO: antes das rotas normais
-app.use("/webhook", webhookRoutes);
 app.use("/subscription", subscriptionRoutes);
 app.use("/admin", authMiddleware, adminRoutes);
 
