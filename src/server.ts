@@ -72,7 +72,9 @@ app.use(
 // 🌐 Middlewares globais
 // =======================================
 app.use(cookieParser());
-app.use(express.json());
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+
 // ⚠️ OBRIGATÓRIO: antes das rotas normais
 app.use("/webhook", webhookRoutes);
 app.use("/subscription", subscriptionRoutes);
@@ -660,61 +662,95 @@ app.get("/agendamentos", authMiddleware, (req, res) => {
 // ===================================================
 // 📣 API de DISPARO EM MASSA
 // ===================================================
-app.post("/api/disparo", authMiddleware, subscriptionGuard, async (req: Request, res: Response) => {
-  const { number, message, file, filename } = req.body;
-  const user = (req as any).user as User;
+// ===================================================
+// 📣 API de DISPARO EM MASSA (CORRIGIDO)
+// ===================================================
+app.post(
+  "/api/disparo",
+  authMiddleware,
+  subscriptionGuard,
+  async (req: Request, res: Response) => {
 
-  if (!number || !message) {
-    return res.status(400).json({ error: "Número e mensagem são obrigatórios" });
-  }
+    const { number, message, file, filename } = req.body;
+    const user = (req as any).user as User;
 
-  try {
-    const db = getDB();
-    const sessions = await db.all(
-      `SELECT session_name FROM sessions WHERE user_id = ? AND status = 'connected'`,
-      [user.id]
-    );
-
-    if (!sessions.length) {
-      return res.status(400).json({ error: "Nenhuma sessão ativa para este usuário." });
+    // ===============================
+    // ✅ Validações corretas
+    // ===============================
+    if (!number) {
+      return res.status(400).json({ error: "Número é obrigatório" });
     }
 
-    // 🎯 Pega apenas a 1ª sessão conectada
-    const full = `USER${user.id}_${sessions[0].session_name}`;
-    const client = getClient(full);
-
-    if (!client) {
-      return res.status(400).json({ error: "Sessão não encontrada/indisponível." });
+    if (!message && !file) {
+      return res.status(400).json({
+        error: "Mensagem ou imagem é obrigatória"
+      });
     }
 
-    // ======================================
-    // 📤 ENVIO SEM MÍDIA
-    // ======================================
-    if (!file) {
-      await client.sendText(`${number}@c.us`, message);
+    try {
+      const db = getDB();
+
+      // 🔎 Buscar sessão conectada
+      const session = await db.get(
+        `SELECT session_name
+         FROM sessions
+         WHERE user_id = ? AND status = 'connected'
+         LIMIT 1`,
+        [user.id]
+      );
+
+      if (!session) {
+        return res.status(400).json({
+          error: "Nenhuma sessão ativa para este usuário"
+        });
+      }
+
+      const full = `USER${user.id}_${session.session_name}`;
+      const client = getClient(full);
+
+      if (!client) {
+        return res.status(400).json({
+          error: "Sessão não encontrada ou desconectada"
+        });
+      }
+
+      const chatId = `${number}@c.us`;
+
+      // ===============================
+      // 📤 TEXTO PURO
+      // ===============================
+      if (!file) {
+        await client.sendText(chatId, message);
+        return res.json({ ok: true });
+      }
+
+      // ===============================
+      // 📤 MÍDIA (imagem / arquivo)
+      // ===============================
+      const base64 = file.split("base64,")[1];
+      const mime = file.substring(
+        file.indexOf(":") + 1,
+        file.indexOf(";")
+      );
+
+      await client.sendFile(
+        chatId,
+        `data:${mime};base64,${base64}`,
+        filename || "arquivo",
+        message || "" // legenda opcional
+      );
+
       return res.json({ ok: true });
+
+    } catch (err) {
+      console.error("⚠️ Erro no disparo:", err);
+      return res.status(500).json({
+        error: "Erro ao enviar mensagem"
+      });
     }
-
-    // ======================================
-    // 📤 ENVIO COM MÍDIA
-    // ======================================
-    const base64 = file.split("base64,")[1];
-    const mime = file.substring(file.indexOf(":") + 1, file.indexOf(";"));
-
-    await client.sendFile(
-      `${number}@c.us`,
-      `data:${mime};base64,${base64}`,
-      filename || "arquivo",
-      message
-    );
-
-    res.json({ ok: true });
-
-  } catch (err) {
-    console.error("⚠️ Erro no disparo:", err);
-    res.status(500).json({ error: "Erro ao enviar mensagem." });
   }
-});
+);
+
 // ===============================
 // 📅 API — AGENDAMENTOS
 // ===============================

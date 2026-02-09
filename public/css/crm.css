@@ -614,6 +614,59 @@ body {
   opacity: 0.5;
   transform: rotate(2deg) scale(0.97);
 }
+/* =====================================
+   🧾 SCROLL PREMIUM — MODAL CRM
+===================================== */
+
+/* Firefox */
+.modal {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.35) transparent;
+}
+
+/* Chrome / Edge / Safari */
+.modal::-webkit-scrollbar {
+  width: 8px;
+}
+
+.modal::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(255,255,255,0.35),
+    rgba(255,255,255,0.15)
+  );
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.modal::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(255,255,255,0.6),
+    rgba(255,255,255,0.3)
+  );
+}
+
+/* =====================================
+   📌 SCROLL NÃO VAZA PRO BODY
+===================================== */
+body.modal-open {
+  overflow: hidden;
+}
+
+/* =====================================
+   📱 MOBILE — SCROLL NATIVO LIMPO
+===================================== */
+@media (max-width: 600px) {
+  .modal::-webkit-scrollbar {
+    width: 0;
+  }
+}
 
 
 /* Responsivo */

@@ -65,19 +65,23 @@ async function logout() {
     try {
         await fetch(API + "/auth/logout", {
             method: "POST",
-            credentials: "include" // 🔥 OBRIGATÓRIO
+            credentials: "include"
         });
 
-        // limpeza extra (opcional, mas recomendado)
         localStorage.clear();
         sessionStorage.clear();
 
-        window.location.href = "/login";
+        notify("Logout realizado com sucesso", "success");
+        setTimeout(() => {
+            window.location.href = "/login";
+        }, 800);
+
     } catch (err) {
         console.error("Erro ao sair:", err);
-        alert("Erro ao sair da conta");
+        notify("Erro ao sair da conta", "error");
     }
 }
+
 
 // ===============================
 // 📝 PROMPT
@@ -92,15 +96,20 @@ async function updatePrompt() {
         body: JSON.stringify({ prompt })
     });
 
-    alert("Prompt atualizado!");
+    notify("Prompt atualizado com sucesso", "success");
 }
+
 
 // ===============================
 // 📱 CRIAR SESSÃO
 // ===============================
 async function createSession() {
     const name = document.getElementById("session-name").value.trim();
-    if (!name) return alert("Informe o nome!");
+
+    if (!name) {
+        notify("Informe o nome da sessão", "warning");
+        return;
+    }
 
     showQrLoading();
 
@@ -115,11 +124,14 @@ async function createSession() {
 
     if (data.error) {
         hideQrLoading();
-        return alert(data.error);
+        notify(data.error, "error");
+        return;
     }
 
+    notify("Sessão criada. Escaneie o QR Code", "success");
     listSessions();
 }
+
 
 
 // ===============================
@@ -250,14 +262,20 @@ async function toggleIA() {
     const data = await res.json();
 
     if (!data.ok) {
-        alert("Erro ao alterar IA");
+        notify("Erro ao alterar o estado da IA", "error");
         checkbox.checked = !enabled;
         return;
     }
 
     document.getElementById("ia-status").innerText =
         enabled ? "Ativada" : "Desativada";
+
+    notify(
+        enabled ? "IA ativada com sucesso" : "IA desativada",
+        "success"
+    );
 }
+
 
 // ===============================
 // 🌐 STATUS AUTOMÁTICO (CORRETO)
@@ -321,4 +339,42 @@ function showQrImage(src) {
 function hideQrLoading() {
     const loading = document.getElementById("qr-loading");
     if (loading) loading.style.display = "none";
+}
+/* ===============================
+   🔔 NOTIFICAÇÕES (TOAST)
+================================ */
+
+(function createToastContainer() {
+  if (document.getElementById("toast-container")) return;
+  const div = document.createElement("div");
+  div.id = "toast-container";
+  div.className = "toast-container";
+  document.body.appendChild(div);
+})();
+
+function notify(message, type = "success", timeout = 3500) {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+
+  const toast = document.createElement("div");
+  toast.className = `toast ${type}`;
+
+  const icon =
+    type === "success" ? "fa-circle-check" :
+    type === "error"   ? "fa-circle-xmark" :
+    type === "warning" ? "fa-triangle-exclamation" :
+    "fa-circle-info";
+
+  toast.innerHTML = `
+    <i class="fa-solid ${icon}"></i>
+    <div class="content">${message}</div>
+  `;
+
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(-6px)";
+    setTimeout(() => toast.remove(), 300);
+  }, timeout);
 }
