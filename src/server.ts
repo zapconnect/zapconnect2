@@ -448,20 +448,19 @@ app.get("/user", authMiddleware, async (req, res) => {
   const db = getDB();
 
   // 🔹 Últimos pagamentos do usuário
-  const payments = await db.all(
-    `
-    SELECT
-      amount,
-      status,
-      payment_method,
-      created_at
-    FROM payments
-    WHERE user_id = ?
-    ORDER BY created_at DESC
-    LIMIT 5
-    `,
-    [user.id]
-  );
+  const paymentsRaw = await db.all(`
+  SELECT amount, status, payment_method, created_at
+  FROM payments
+  WHERE user_id = ?
+  ORDER BY created_at DESC
+  LIMIT 5
+`, [user.id]);
+
+const payments = paymentsRaw.map((p: any) => ({
+  ...p,
+  amount: Number(p.amount || 0) // 🔥 GARANTE NUMBER
+}));
+
 
   // 🔹 Último pagamento aprovado
   const lastPayment = await db.get(
