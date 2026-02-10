@@ -456,10 +456,10 @@ app.get("/user", authMiddleware, async (req, res) => {
   LIMIT 5
 `, [user.id]);
 
-const payments = paymentsRaw.map((p: any) => ({
-  ...p,
-  amount: Number(p.amount || 0) // 🔥 GARANTE NUMBER
-}));
+  const payments = paymentsRaw.map((p: any) => ({
+    ...p,
+    amount: Number(p.amount || 0) // 🔥 GARANTE NUMBER
+  }));
 
 
   // 🔹 Último pagamento aprovado
