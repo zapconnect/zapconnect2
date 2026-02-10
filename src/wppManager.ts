@@ -417,196 +417,214 @@ function attachEvents(
   eventsAttached.add(full);
 
   client.onMessage(async (msg) => {
+    // =================================================
+    // 🚫 BLOQUEIO TOTAL DE STATUS / STORY (100% SAFE)
+    // =================================================
+    const chatId = String(msg.chatId || msg.from || "");
+
+    if (chatId === "status@broadcast") {
+      return;
+    }
+
+    // =================================================
+    // 🚫 IGNORAR GRUPOS
+    // =================================================
+    if (msg.isGroupMsg || chatId.endsWith("@g.us")) {
+      return;
+    }
+
+    // =================================================
+    // 🚫 MENSAGEM INVÁLIDA
+    // =================================================
+    if (!chatId) return;
+
+    const body = msg.body?.trim() || "";
+
+    // =================================================
+    // 🧾 SALVAR / ATUALIZAR CRM
+    // =================================================
     try {
-      // =================================================
-      // 🚫 BLOQUEIO TOTAL DE STATUS / STORY (100% SAFE)
-      // =================================================
-      const chatId = String(msg.chatId || msg.from || "");
+      await saveCRMClient(userId, msg);
+    } catch { }
 
-      if (chatId === "status@broadcast") {
-        return;
-      }
+    // =================================================
+    // 🔑 CHAVES DE CONTROLE
+    // =================================================
+    const fullKey = `USER${userId}_${shortName}`;
+    const chatKey = `${fullKey}::${chatId}`;
+    const aiKey = `USER${userId}_${chatId}`;
 
-      // =================================================
-      // 🚫 IGNORAR GRUPOS
-      // =================================================
-      if (msg.isGroupMsg || chatId.endsWith("@g.us")) {
-        return;
-      }
+    // =================================================
+    // 📡 ENVIAR PARA O PAINEL (REALTIME)
+    // =================================================
+    try {
+      const { io } = await import("./server");
+      io.emit("newMessage", {
+        chatId,
+        name:
+          msg.sender?.pushname ||
+          msg.sender?.name ||
+          msg.sender?.shortName ||
+          chatId.replace("@c.us", ""),
+        body: msg.body,
+        mimetype: msg.mimetype,
+        isMedia: !!msg.mimetype,
+        timestamp: (msg.timestamp || Date.now()) * 1000,
+        fromMe: msg.fromMe === true,
+        _isFromMe: msg.fromMe === true
+      });
+    } catch { }
 
-      // =================================================
-      // 🚫 MENSAGEM INVÁLIDA
-      // =================================================
-      if (!chatId) return;
+    // =================================================
+    // 👤 MODO HUMANO ATIVO → NÃO RESPONDER
+    // =================================================
+    if (chatHumanLock.get(aiKey) === true) {
+      messageBuffer.delete(chatKey);
 
-      const body = msg.body?.trim() || "";
+      // 🔴 GARANTE que não fica digitando
+      try { await client.stopTyping(chatId); } catch { }
 
-      // =================================================
-      // 🧾 SALVAR / ATUALIZAR CRM
-      // =================================================
+      return;
+    }
+
+    // =================================================
+    // 🤖 IA DESLIGADA PARA ESTE CHAT
+    // =================================================
+    const aiEnabledForChat = await getChatAI(userId, chatId);
+    if (!aiEnabledForChat) {
+      messageBuffer.delete(chatKey);
+
+      // 🔴 GARANTE que não fica digitando
+      try { await client.stopTyping(chatId); } catch { }
+
+      return;
+    }
+
+    // =================================================
+    // 🔐 LIMITE DE PLANO IA
+    // =================================================
+    if (!(await canUseIA(userId))) {
+      // 🔴 GARANTE que não fica digitando
+      try { await client.stopTyping(chatId); } catch { }
+
+      await client.sendText(
+        chatId,
+        "⚠️ Você atingiu o limite de mensagens IA do seu plano.\n\nFaça upgrade para continuar 🚀"
+      );
+      return;
+    }
+
+    // =================================================
+    // 🔁 EXECUTAR FLOWS INTELIGENTES
+    // =================================================
+    try {
+      await executeUserFlows(userId, chatId, body, client);
+    } catch { }
+
+    // =================================================
+    // 💬 BUFFER DE MENSAGENS
+    // =================================================
+    if (!messageBuffer.has(chatKey)) {
+      messageBuffer.set(chatKey, []);
+    }
+    messageBuffer.get(chatKey)!.push(body);
+
+    // =================================================
+    // ⏳ DEBOUNCE DA RESPOSTA
+    // =================================================
+    if (messageTimeouts.has(chatKey)) {
+      clearTimeout(messageTimeouts.get(chatKey)!);
+      messageTimeouts.delete(chatKey);
+    }
+
+    const timeout = setTimeout(async () => {
+      let typingTimeout: NodeJS.Timeout | null = null;
+
       try {
-        await saveCRMClient(userId, msg);
-      } catch { }
+        const db = await getDB();
 
-      // =================================================
-      // 🔑 CHAVES DE CONTROLE
-      // =================================================
-      const fullKey = `USER${userId}_${shortName}`;
-      const chatKey = `${fullKey}::${chatId}`;
-      const aiKey = `USER${userId}_${chatId}`;
-
-      // =================================================
-      // 📡 ENVIAR PARA O PAINEL (REALTIME)
-      // =================================================
-      try {
-        const { io } = await import("./server");
-        io.emit("newMessage", {
-          chatId,
-          name:
-            msg.sender?.pushname ||
-            msg.sender?.name ||
-            msg.sender?.shortName ||
-            chatId.replace("@c.us", ""),
-          body: msg.body,
-          mimetype: msg.mimetype,
-          isMedia: !!msg.mimetype,
-          timestamp: (msg.timestamp || Date.now()) * 1000,
-          fromMe: msg.fromMe === true,
-          _isFromMe: msg.fromMe === true
-        });
-      } catch { }
-
-      // =================================================
-      // 👤 MODO HUMANO ATIVO → NÃO RESPONDER
-      // =================================================
-      if (chatHumanLock.get(aiKey) === true) {
-        messageBuffer.delete(chatKey);
-        return;
-      }
-
-      // =================================================
-      // 🤖 IA DESLIGADA PARA ESTE CHAT
-      // =================================================
-      const aiEnabledForChat = await getChatAI(userId, chatId);
-      if (!aiEnabledForChat) {
-        messageBuffer.delete(chatKey);
-        return;
-      }
-
-      // =================================================
-      // 🔐 LIMITE DE PLANO IA
-      // =================================================
-      if (!(await canUseIA(userId))) {
-        await client.sendText(
-          chatId,
-          "⚠️ Você atingiu o limite de mensagens IA do seu plano.\n\nFaça upgrade para continuar 🚀"
+        const userConfig = await db.get(
+          `SELECT prompt, ia_enabled FROM users WHERE id = ?`,
+          [userId]
         );
-        return;
-      }
 
-      // =================================================
-      // 🔁 EXECUTAR FLOWS INTELIGENTES
-      // =================================================
-      try {
-        await executeUserFlows(userId, chatId, body, client);
-      } catch { }
+        // ❌ IA GLOBAL DESLIGADA
+        if (!userConfig?.ia_enabled) {
+          messageBuffer.delete(chatKey);
 
-      // =================================================
-      // 💬 BUFFER DE MENSAGENS
-      // =================================================
-      if (!messageBuffer.has(chatKey)) {
-        messageBuffer.set(chatKey, []);
-      }
-      messageBuffer.get(chatKey)!.push(body);
+          // 🔴 GARANTE que não fica digitando
+          try { await client.stopTyping(chatId); } catch { }
 
-      // =================================================
-      // ✍️ DIGITANDO
-      // =================================================
-      try {
-        await client.startTyping(chatId);
-      } catch { }
+          return;
+        }
 
-      const typingTimeout = setTimeout(() => {
+        // =================================================
+        // ✍️ DIGITANDO (SÓ AQUI! DEPOIS DE CONFIRMAR QUE VAI RESPONDER)
+        // =================================================
         try {
-          client.stopTyping(chatId);
+          await client.startTyping(chatId);
         } catch { }
-      }, 8000);
 
-      // =================================================
-      // ⏳ DEBOUNCE DA RESPOSTA
-      // =================================================
-      if (messageTimeouts.has(chatKey)) {
-        clearTimeout(messageTimeouts.get(chatKey)!);
-        messageTimeouts.delete(chatKey);
-      }
+        typingTimeout = setTimeout(() => {
+          try {
+            client.stopTyping(chatId);
+          } catch { }
+        }, 8000);
 
-      const timeout = setTimeout(async () => {
-        try {
-          const db = await getDB();
+        const prompt = userConfig?.prompt || "";
+        const buffer = messageBuffer.get(chatKey) || [];
 
-          const userConfig = await db.get(
-            `SELECT prompt, ia_enabled FROM users WHERE id = ?`,
-            [userId]
-          );
+        const finalMessage = `${prompt}\n\n${buffer.join("\n")}`;
 
-          // ❌ IA GLOBAL DESLIGADA
-          if (!userConfig?.ia_enabled) {
-            messageBuffer.delete(chatKey);
-            return;
-          }
+        let response = "";
 
-          const prompt = userConfig?.prompt || "";
-          const buffer = messageBuffer.get(chatKey) || [];
-
-          const finalMessage = `${prompt}\n\n${buffer.join("\n")}`;
-
-          let response = "";
-
-          for (let i = 1; i <= MAX_RETRIES; i++) {
-            try {
-              response =
-                AI_SELECTED === "GPT"
-                  ? await mainOpenAI({ currentMessage: finalMessage, chatId })
-                  : await mainGoogle({
-                    currentMessage: finalMessage,
-                    chatId,
-                    userId,
-                    sessionName: shortName,
-                    promptUsuario: prompt
-                  });
-              break;
-            } catch (err) {
-              if (i === MAX_RETRIES) {
-                response = "❌ Erro ao responder no momento.";
-              }
+        for (let i = 1; i <= MAX_RETRIES; i++) {
+          try {
+            response =
+              AI_SELECTED === "GPT"
+                ? await mainOpenAI({ currentMessage: finalMessage, chatId })
+                : await mainGoogle({
+                  currentMessage: finalMessage,
+                  chatId,
+                  userId,
+                  sessionName: shortName,
+                  promptUsuario: prompt
+                });
+            break;
+          } catch (err) {
+            if (i === MAX_RETRIES) {
+              response = "❌ Erro ao responder no momento.";
             }
           }
-
-          try {
-            await client.stopTyping(chatId);
-          } catch { }
-
-          const messages = splitMessages(response);
-
-          await sendMessagesWithDelay({
-            client,
-            messages,
-            targetNumber: msg.from
-          });
-
-          // ✅ CONSUMIR 1 MENSAGEM IA
-          await consumeIaMessage(userId);
-        } finally {
-          messageBuffer.delete(chatKey);
-          clearTimeout(typingTimeout);
         }
-      }, 1000);
 
-      messageTimeouts.set(chatKey, timeout);
-    } catch (err) {
-      console.error("❌ Erro no onMessage:", err);
-    }
+        const messages = splitMessages(response);
+
+        await sendMessagesWithDelay({
+          client,
+          messages,
+          targetNumber: msg.from
+        });
+
+        // ✅ CONSUMIR 1 MENSAGEM IA
+        await consumeIaMessage(userId);
+
+      } catch (err) {
+        console.error("❌ Erro no debounce IA:", err);
+      } finally {
+        // 🧹 limpar tudo
+        messageBuffer.delete(chatKey);
+
+        if (typingTimeout) clearTimeout(typingTimeout);
+
+        // 🔴 GARANTE que para SEMPRE
+        try { await client.stopTyping(chatId); } catch { }
+      }
+    }, 1000);
+
+    messageTimeouts.set(chatKey, timeout);
   });
+
 
 
 
