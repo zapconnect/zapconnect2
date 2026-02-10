@@ -417,35 +417,77 @@ function attachEvents(
   eventsAttached.add(full);
 
   client.onMessage(async (msg) => {
-    // =================================================
-    // 🚫 BLOQUEIO TOTAL DE STATUS / STORY (100% SAFE)
-    // =================================================
-    const chatId = String(msg.chatId || msg.from || "");
+  let typingTimeout: NodeJS.Timeout | null = null;
 
-    if (chatId === "status@broadcast") {
-      return;
-    }
+  // =================================================
+  // 🚫 BLOQUEIO TOTAL DE STATUS / STORY (100% SAFE)
+  // =================================================
+  const chatId = String(msg.chatId || msg.from || "");
+  if (chatId === "status@broadcast") return;
 
-    // =================================================
-    // 🚫 IGNORAR GRUPOS
-    // =================================================
-    if (msg.isGroupMsg || chatId.endsWith("@g.us")) {
-      return;
-    }
+  // =================================================
+  // 🚫 IGNORAR GRUPOS
+  // =================================================
+  if (msg.isGroupMsg || chatId.endsWith("@g.us")) return;
 
-    // =================================================
-    // 🚫 MENSAGEM INVÁLIDA
-    // =================================================
-    if (!chatId) return;
+  // =================================================
+  // 🚫 NÃO RESPONDER MENSAGEM DO PRÓPRIO BOT (ANTI-LOOP)
+  // =================================================
+  if (msg.fromMe === true) return;
 
-    const body = msg.body?.trim() || "";
+  // =================================================
+  // 🚫 MENSAGEM INVÁLIDA
+  // =================================================
+  if (!chatId) return;
 
+  // =================================================
+  // 🎧 DETECTAR ÁUDIO
+  // =================================================
+  const isAudio =
+    msg.type === "ptt" ||
+    msg.type === "audio" ||
+    (msg.mimetype && String(msg.mimetype).includes("audio"));
+
+  // =================================================
+  // 🧾 BODY / TEXTO (inclui transcrição do WhatsApp)
+  // =================================================
+  const rawBody = String(msg.body || "").trim();
+  const rawCaption = String((msg as any).caption || "").trim();
+  const rawText = String((msg as any).text || "").trim();
+
+  // =================================================
+  // 🧠 PEGAR TEXTO FINAL
+  // - Se for áudio: tenta usar transcrição do WhatsApp
+  // - Se for texto normal: usa body normal
+  // =================================================
+  let body = "";
+
+  // Texto normal
+  if (!isAudio) {
+    body = rawBody || rawText || rawCaption;
+  }
+
+  // Áudio -> só responde se tiver transcrição
+  if (isAudio) {
+    body = rawBody || rawCaption || rawText;
+
+    // ❌ áudio sem transcrição -> ignora
+    if (!body) return;
+  }
+
+  // =================================================
+  // 🚫 NÃO RESPONDER MENSAGEM VAZIA
+  // =================================================
+  body = body.trim();
+  if (!body) return;
+
+  try {
     // =================================================
     // 🧾 SALVAR / ATUALIZAR CRM
     // =================================================
     try {
       await saveCRMClient(userId, msg);
-    } catch { }
+    } catch {}
 
     // =================================================
     // 🔑 CHAVES DE CONTROLE
@@ -470,20 +512,19 @@ function attachEvents(
         mimetype: msg.mimetype,
         isMedia: !!msg.mimetype,
         timestamp: (msg.timestamp || Date.now()) * 1000,
-        fromMe: msg.fromMe === true,
-        _isFromMe: msg.fromMe === true
+        fromMe: !!msg.fromMe,
+        _isFromMe: !!msg.fromMe,
       });
-    } catch { }
+    } catch {}
 
     // =================================================
     // 👤 MODO HUMANO ATIVO → NÃO RESPONDER
     // =================================================
     if (chatHumanLock.get(aiKey) === true) {
       messageBuffer.delete(chatKey);
-
-      // 🔴 GARANTE que não fica digitando
-      try { await client.stopTyping(chatId); } catch { }
-
+      try {
+        await client.stopTyping(chatId);
+      } catch {}
       return;
     }
 
@@ -493,10 +534,9 @@ function attachEvents(
     const aiEnabledForChat = await getChatAI(userId, chatId);
     if (!aiEnabledForChat) {
       messageBuffer.delete(chatKey);
-
-      // 🔴 GARANTE que não fica digitando
-      try { await client.stopTyping(chatId); } catch { }
-
+      try {
+        await client.stopTyping(chatId);
+      } catch {}
       return;
     }
 
@@ -504,8 +544,9 @@ function attachEvents(
     // 🔐 LIMITE DE PLANO IA
     // =================================================
     if (!(await canUseIA(userId))) {
-      // 🔴 GARANTE que não fica digitando
-      try { await client.stopTyping(chatId); } catch { }
+      try {
+        await client.stopTyping(chatId);
+      } catch {}
 
       await client.sendText(
         chatId,
@@ -519,7 +560,7 @@ function attachEvents(
     // =================================================
     try {
       await executeUserFlows(userId, chatId, body, client);
-    } catch { }
+    } catch {}
 
     // =================================================
     // 💬 BUFFER DE MENSAGENS
@@ -538,8 +579,6 @@ function attachEvents(
     }
 
     const timeout = setTimeout(async () => {
-      let typingTimeout: NodeJS.Timeout | null = null;
-
       try {
         const db = await getDB();
 
@@ -551,10 +590,20 @@ function attachEvents(
         // ❌ IA GLOBAL DESLIGADA
         if (!userConfig?.ia_enabled) {
           messageBuffer.delete(chatKey);
+          try {
+            await client.stopTyping(chatId);
+          } catch {}
+          return;
+        }
 
-          // 🔴 GARANTE que não fica digitando
-          try { await client.stopTyping(chatId); } catch { }
+        const prompt = userConfig?.prompt || "";
+        const buffer = messageBuffer.get(chatKey) || [];
 
+        // Segurança extra
+        if (!buffer.length) {
+          try {
+            await client.stopTyping(chatId);
+          } catch {}
           return;
         }
 
@@ -563,16 +612,13 @@ function attachEvents(
         // =================================================
         try {
           await client.startTyping(chatId);
-        } catch { }
+        } catch {}
 
         typingTimeout = setTimeout(() => {
           try {
             client.stopTyping(chatId);
-          } catch { }
+          } catch {}
         }, 8000);
-
-        const prompt = userConfig?.prompt || "";
-        const buffer = messageBuffer.get(chatKey) || [];
 
         const finalMessage = `${prompt}\n\n${buffer.join("\n")}`;
 
@@ -584,12 +630,12 @@ function attachEvents(
               AI_SELECTED === "GPT"
                 ? await mainOpenAI({ currentMessage: finalMessage, chatId })
                 : await mainGoogle({
-                  currentMessage: finalMessage,
-                  chatId,
-                  userId,
-                  sessionName: shortName,
-                  promptUsuario: prompt
-                });
+                    currentMessage: finalMessage,
+                    chatId,
+                    userId,
+                    sessionName: shortName,
+                    promptUsuario: prompt,
+                  });
             break;
           } catch (err) {
             if (i === MAX_RETRIES) {
@@ -603,12 +649,11 @@ function attachEvents(
         await sendMessagesWithDelay({
           client,
           messages,
-          targetNumber: msg.from
+          targetNumber: msg.from,
         });
 
         // ✅ CONSUMIR 1 MENSAGEM IA
         await consumeIaMessage(userId);
-
       } catch (err) {
         console.error("❌ Erro no debounce IA:", err);
       } finally {
@@ -618,20 +663,24 @@ function attachEvents(
         if (typingTimeout) clearTimeout(typingTimeout);
 
         // 🔴 GARANTE que para SEMPRE
-        try { await client.stopTyping(chatId); } catch { }
+        try {
+          await client.stopTyping(chatId);
+        } catch {}
       }
     }, 1000);
 
     messageTimeouts.set(chatKey, timeout);
-  });
+  } catch (err) {
+    console.error("❌ Erro no onMessage:", err);
 
-
-
+    // 🔴 GARANTE stopTyping em erro também
+    try {
+      await client.stopTyping(chatId);
+    } catch {}
+  }
+});
 
 }
-
-
-
 
 // ===========================
 // CRIAR SESSÃO + STATUS EM TEMPO REAL
