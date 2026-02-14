@@ -32,6 +32,11 @@ async function login() {
   });
 
   const data = await res.json();
+  
+  if (data.redirect) {
+    window.location.href = data.redirect;
+    return;
+  }
   if (data.error) {
     alert(data.error);
     return;

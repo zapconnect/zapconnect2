@@ -36,6 +36,11 @@ export async function initDB() {
       prompt TEXT,
       token VARCHAR(255) UNIQUE NOT NULL,
 
+      -- 🔐 CONFIRMAÇÃO DE EMAIL
+      email_verified TINYINT DEFAULT 0,
+      email_verify_token VARCHAR(255),
+      email_verify_expires BIGINT,
+
       ia_enabled TINYINT DEFAULT 1,
       ia_messages_used INT DEFAULT 0,
       ia_messages_reset_at BIGINT,

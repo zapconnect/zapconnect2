@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Confirme seu e-mail</title>
+
+  <!-- Font Awesome (ícones) -->
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
+  />
+
+  <!-- Fonte Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+
+  <style>
+    :root {
+      --bg: #0D1222;
+      --panel: #161B30;
+      --card: #1A1F3A;
+      --border: #373E59;
+      --text: #FFFFFF;
+      --muted: #AAB0D9;
+      --primary: #6C64EF;
+      --primary-hover: #8B5CF6;
+      --danger: #E54848;
+    }
+
+    * {
+      box-sizing: border-box;
+      font-family: Inter, system-ui, sans-serif;
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #151a3a, var(--bg));
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* HEADER */
+    .topbar {
+      background: rgba(22, 27, 48, 0.9);
+      backdrop-filter: blur(14px);
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-weight: 700;
+    }
+
+    .brand i {
+      color: var(--primary);
+    }
+
+    .back-link {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+    }
+
+    .back-link:hover {
+      color: #fff;
+    }
+
+    /* MAIN */
+    .wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+
+    /* ALERT */
+    .alert {
+      margin: 24px auto 0;
+      padding: 16px 20px;
+      background: linear-gradient(135deg, #2a1020, #3b1425);
+      border: 1px solid var(--danger);
+      border-radius: 14px;
+      display: flex;
+      gap: 14px;
+      align-items: center;
+    }
+
+    .alert i {
+      color: var(--danger);
+      font-size: 18px;
+    }
+
+    .alert .title {
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+
+    .alert .desc {
+      color: #ffd7d7;
+      font-size: 14px;
+    }
+
+    /* CARD */
+    .card {
+      margin: 60px auto;
+      max-width: 560px;
+      background: linear-gradient(180deg, #181f3d, #12172e);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 34px 28px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, .35);
+    }
+
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 22px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .card h2 i {
+      color: var(--primary);
+    }
+
+    .card p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 15px;
+    }
+
+    /* BUTTONS */
+    .btn {
+      width: 100%;
+      margin-top: 18px;
+      padding: 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: #1e2447;
+      color: var(--text);
+      font-size: 15px;
+      cursor: pointer;
+      transition: .2s;
+      text-decoration: none;
+      display: inline-flex;
+      justify-content: center;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+      border: none;
+    }
+
+    .btn:hover:not(:disabled) {
+      filter: brightness(1.15);
+    }
+
+    /* MOBILE */
+    @media (max-width: 600px) {
+      .card {
+        margin-top: 30px;
+        padding: 28px 20px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <i class="fa-solid fa-bolt"></i>
+      <span>Zapconnect</span>
+    </div>
+
+    <a class="back-link" href="/login">
+      <i class="fa-solid fa-arrow-left"></i> Voltar
+    </a>
+  </header>
+
+  <div class="wrap">
+    <div class="alert">
+      <i class="fa-solid fa-triangle-exclamation"></i>
+      <div>
+        <div class="title">Acesso bloqueado</div>
+        <div class="desc">
+          Você precisa confirmar seu e-mail para continuar usando o sistema.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>
+        <i class="fa-solid fa-envelope-circle-check"></i>
+        Confirme seu e-mail
+      </h2>
+
+      <p>
+        Antes de acessar o Zapconnect, você precisa confirmar seu e-mail.
+      </p>
+
+      <p>
+        Verifique sua caixa de entrada (ou spam) e clique no link enviado.
+      </p>
+
+      <a class="btn btn-primary" href="/login">
+        <i class="fa-solid fa-right-from-bracket"></i>
+        Sair
+      </a>
+    </div>
+  </div>
+</body>
+</html>

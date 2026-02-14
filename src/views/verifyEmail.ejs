@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Confirme seu e-mail</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #0b0f19;
+      color: #fff;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      padding: 20px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 520px;
+      background: #121a2b;
+      border-radius: 18px;
+      padding: 28px;
+      box-shadow: 0 0 40px rgba(0,0,0,0.35);
+      text-align: center;
+    }
+
+    h1 {
+      font-size: 22px;
+      margin-bottom: 12px;
+    }
+
+    p {
+      color: #cbd5e1;
+      font-size: 15px;
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+
+    .email {
+      font-weight: bold;
+      color: #60a5fa;
+    }
+
+    a {
+      display: inline-block;
+      padding: 12px 16px;
+      border-radius: 12px;
+      text-decoration: none;
+      background: #2563eb;
+      color: white;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="card">
+    <h1>📩 Confirme seu e-mail</h1>
+    <p>
+      Nós enviamos um link de confirmação para:
+      <br />
+      <span class="email"><%= email %></span>
+    </p>
+
+    <p>
+      Abra sua caixa de entrada e clique no link para ativar sua conta.
+    </p>
+
+    <a href="/login">Voltar para o login</a>
+  </div>
+</body>
+</html>

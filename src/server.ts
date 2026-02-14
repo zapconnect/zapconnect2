@@ -12,10 +12,16 @@ import { ensureChat } from "./wppManager";
 import subscriptionRoutes from "./routes/subscription";
 import webhookRoutes from "./routes/webhook";
 import { subscriptionGuard } from "./middlewares/subscriptionGuard";
+import { emailVerifiedMiddleware } from "./middlewares/emailVerifiedMiddleware";
 
 import adminRoutes from "./routes/admin";
 import { getChatAI, setChatAI } from "./services/chatAiService";
+import emailVerifyRoutes from "./routes/emailVerify";
 
+import { sendVerifyEmail } from "./utils/sendVerifyEmail";
+
+const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
+import "dotenv/config";
 
 
 import { getDB } from "./database";
@@ -73,6 +79,7 @@ app.use(
 // 🌐 Middlewares globais
 // =======================================
 app.use(cookieParser());
+app.use("/", emailVerifyRoutes);
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 app.use("/webhook", webhookRoutes);
@@ -85,6 +92,7 @@ app.get(
   "/painel",
   authMiddleware,
   subscriptionGuard,
+  emailVerifiedMiddleware,
   async (req: Request, res: Response) => {
     const user = (req as any).user as User;
     const db = getDB();
@@ -412,38 +420,67 @@ io.on("connection", (socket) => {
 // 🔐 Middleware de Autenticação do Painel
 // =======================================
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  console.log("🍪 Cookies recebidos:", req.cookies);
-
   const token = req.cookies?.token;
 
+  const isHtml = req.headers.accept?.includes("text/html");
+  const isApi = req.path.startsWith("/api") || req.path.startsWith("/sessions") || req.path.startsWith("/user");
+
   if (!token) {
-    console.log("❌ Sem token");
-    return res.redirect("/login");
+    if (isHtml) return res.redirect("/login");
+    return res.status(401).json({ error: "Não autenticado", redirect: "/login" });
   }
 
   const db = getDB();
-  const user = await db.get(
+  const user = await db.get<any>(
     "SELECT * FROM users WHERE token = ?",
     [token]
   );
 
   if (!user) {
-    console.log("❌ Token inválido");
-    return res.redirect("/login");
+    if (isHtml) return res.redirect("/login");
+    return res.status(401).json({ error: "Token inválido", redirect: "/login" });
   }
 
-  console.log("✅ Usuário autenticado:", user.email);
+  // ✅ deixa abrir a tela sem loop
+  if (req.path === "/verify-email-required") {
+    (req as any).user = user;
+    return next();
+  }
+
+  const emailVerified = Number(user.email_verified) === 1;
+
+  if (!emailVerified) {
+    // 🔥 se for página, redirect normal
+    if (isHtml) {
+      return res.redirect("/verify-email-required");
+    }
+
+    // 🔥 se for fetch/api, manda redirect no JSON
+    return res.status(403).json({
+      redirect: "/verify-email-required"
+    });
+  }
 
   (req as any).user = user;
   next();
 }
 
 
+
+
+app.get("/verify-email-required", (req, res) => {
+  return res.render("verify-email-required");
+});
+
+
+
+
+
 // =======================================
 // 📌 Rotas de Páginas (EJS)
 // =======================================
 // 👤 Página do usuário / assinatura
-app.get("/user", authMiddleware, async (req, res) => {
+app.get("/user", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
   const user = (req as any).user;
   const db = getDB();
 
@@ -484,7 +521,7 @@ app.get("/user", authMiddleware, async (req, res) => {
 
 
 // 💳 Página de Checkout
-app.get("/checkout", authMiddleware, async (req, res) => {
+app.get("/checkout", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
   const user = (req as any).user;
 
   res.render("checkout", {
@@ -492,15 +529,15 @@ app.get("/checkout", authMiddleware, async (req, res) => {
   });
 });
 
-app.get("/checkout/success", authMiddleware, async (req, res) => {
+app.get("/checkout/success", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
   res.render("checkout-success");
 });
 
-app.get("/checkout/failure", authMiddleware, async (req, res) => {
+app.get("/checkout/failure", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
   res.render("checkout-failure");
 });
 
-app.get("/checkout/pending", authMiddleware, async (req, res) => {
+app.get("/checkout/pending", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
   res.render("checkout-pending");
 });
 
@@ -508,7 +545,7 @@ app.get("/login", (_req, res) => {
   res.render("login"); // ⬅️ render EJS
 });
 
-app.get("/painel", authMiddleware, async (req: Request, res: Response) => {
+app.get("/painel", authMiddleware, emailVerifiedMiddleware, async (req: Request, res: Response) => {
   const user = (req as any).user as User;
   const db = getDB();
 
@@ -544,12 +581,12 @@ app.get("/register", (_req, res) => {
 
 app.get("/index.html", (_req, res) => res.redirect("/login"));
 
-app.get("/chat", authMiddleware, (req, res) => {
+app.get("/chat", authMiddleware, emailVerifiedMiddleware, (req, res) => {
   const user = (req as any).user;
   res.render("chat", { user });
 });
 // 📌 Página CRM Kanban
-app.get("/crm", authMiddleware, (req, res) => {
+app.get("/crm", authMiddleware, emailVerifiedMiddleware, (req, res) => {
   const user = (req as any).user;
   res.render("crm", { user });
 });
@@ -656,8 +693,73 @@ app.get("/agendamentos", authMiddleware, (req, res) => {
   const user = (req as any).user;
   res.render("agendamentos", { user });
 });
+app.get("/verify-email", async (req, res) => {
+  try {
+    const token = String(req.query.token || "");
+
+    if (!token) {
+      return res.send("Token inválido.");
+    }
+
+    const db = getDB();
+
+    const user = await db.get<any>(
+      `
+      SELECT id, email_verify_expires
+      FROM users
+      WHERE email_verify_token = ?
+      `,
+      [token]
+    );
+
+    if (!user) {
+      return res.send("Token inválido ou expirado.");
+    }
+
+    // expirado?
+    if (!user.email_verify_expires || Date.now() > Number(user.email_verify_expires)) {
+      return res.send("Token expirado. Solicite outro link.");
+    }
+
+    // confirma
+    await db.run(
+      `
+      UPDATE users
+      SET email_verified = 1,
+          email_verify_token = NULL,
+          email_verify_expires = NULL
+      WHERE id = ?
+      `,
+      [user.id]
+    );
+
+    // manda pra login ou painel
+    return res.redirect("/login?verified=1");
+
+  } catch (err) {
+    console.error("❌ Erro verify-email:", err);
+    return res.status(500).send("Erro interno.");
+  }
+});
 
 
+app.post("/auth/resend-verify-email", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+
+    const result = await sendVerifyEmail(user.id);
+
+    if (result.alreadyVerified) {
+      return res.json({ ok: true, message: "Seu e-mail já está verificado." });
+    }
+
+    return res.json({ ok: true });
+
+  } catch (err) {
+    console.error("❌ Erro resend verify:", err);
+    return res.status(500).json({ error: "Erro ao reenviar e-mail" });
+  }
+});
 
 // ===================================================
 // 📣 API de DISPARO EM MASSA
@@ -1140,6 +1242,7 @@ app.post("/register", async (req, res) => {
     "SELECT id FROM users WHERE email = ?",
     [email]
   );
+
   if (exists) {
     return res.json({ error: "Email já cadastrado" });
   }
@@ -1149,12 +1252,14 @@ app.post("/register", async (req, res) => {
 
   const trialDays = 7;
 
+  // 🔥 cria usuário
   await db.run(
     `INSERT INTO users (
-     name, email, password, prompt, token,
-     plan, subscription_status, plan_expires_at
-   )
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      name, email, password, prompt, token,
+      plan, subscription_status, plan_expires_at,
+      email_verified, email_verify_token, email_verify_expires
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       email,
@@ -1163,20 +1268,45 @@ app.post("/register", async (req, res) => {
       token,
       "free",
       "trial",
-      Date.now() + trialDays * 24 * 60 * 60 * 1000
+      Date.now() + trialDays * 24 * 60 * 60 * 1000,
+
+      0, // email_verified
+      null,
+      null
     ]
   );
 
+  // 🔥 buscar o usuário recém criado (pra pegar id)
+  const newUser = await db.get<any>(
+    `SELECT id FROM users WHERE email = ?`,
+    [email]
+  );
 
-  res.json({ ok: true });
+  if (!newUser) {
+    return res.status(500).json({ error: "Erro ao criar usuário" });
+  }
+
+  // 🔥 enviar email com token + salvar no banco
+  try {
+    await sendVerifyEmail(newUser.id);
+  } catch (err) {
+    console.error("❌ Erro ao enviar email:", err);
+  }
+
+  return res.json({
+    ok: true,
+    message: "Cadastro realizado! Verifique seu e-mail para ativar a conta."
+  });
 });
+
+
 
 
 
 // Login
 
 app.post("/auth/login", async (req, res) => {
-  const { email, password } = req.body; // ✅ ESTA LINHA É OBRIGATÓRIA
+  const { email, password } = req.body;
 
   if (requireFields(res, { email, password })) return;
 
@@ -1187,25 +1317,37 @@ app.post("/auth/login", async (req, res) => {
     [email]
   );
 
+  // 🔒 nunca diga se o email existe ou não
   if (!user) {
-    return res.json({ error: "Usuário não encontrado" });
+    return res.status(401).json({ error: "E-mail ou senha inválidos" });
   }
 
   const ok = await bcrypt.compare(password, user.password);
+
   if (!ok) {
-    return res.json({ error: "Senha inválida" });
+    return res.status(401).json({ error: "E-mail ou senha inválidos" });
+  }
+
+  const emailVerified = Number(user.email_verified) === 1;
+
+  // 🔒 só chega aqui se senha estiver certa
+  if (!emailVerified) {
+    return res.status(403).json({
+      error: "Confirme seu e-mail antes de acessar.",
+      redirect: "/verify-email-required"
+    });
   }
 
   res.cookie("token", user.token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: false,   // localhost
-    path: "/",       // 🔥 OBRIGATÓRIO
+    secure: false, // localhost (no Railway você muda pra true)
+    path: "/",
   });
 
-
-  res.json({ ok: true });
+  return res.json({ ok: true });
 });
+
 
 // =======================================
 // 🚪 LOGOUT
