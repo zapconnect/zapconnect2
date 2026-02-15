@@ -12,12 +12,11 @@ export async function sendVerifyEmail(userId: number) {
 
   if (!user) throw new Error("Usuário não encontrado");
 
-  // Se já está verificado, não envia
   if (Number(user.email_verified) === 1) {
     return { ok: true, alreadyVerified: true };
   }
 
-  // 🔥 token seguro
+  // 🔥 token
   const token = crypto.randomBytes(32).toString("hex");
 
   // 🔥 expira em 1 hora
@@ -36,149 +35,128 @@ export async function sendVerifyEmail(userId: number) {
   const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
   const link = `${BASE_URL}/verify-email?token=${token}`;
 
-  const safeName = user.name ? String(user.name).trim() : "usuário";
+  const name = user.name?.trim() || "usuário";
 
-  // ✅ HTML SaaS Zapconnect
+  const year = new Date().getFullYear();
+
+  // Preheader (aparece no Gmail)
+  const preheader =
+    "Confirme seu e-mail para liberar seu acesso ao Zapconnect.";
+
   const html = `
-  <!DOCTYPE html>
-  <html lang="pt-br">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Confirme seu e-mail - Zapconnect</title>
-    </head>
+  <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+    ${preheader}
+  </div>
 
-    <body style="margin:0; padding:0; background:#0D1222; font-family: Inter, Arial, sans-serif;">
+  <div style="background:#f6f7fb;padding:34px 0;font-family:Arial,sans-serif;">
+    <div style="max-width:600px;margin:0 auto;padding:0 14px;">
+      <div style="background:#ffffff;border-radius:18px;overflow:hidden;box-shadow:0 10px 35px rgba(0,0,0,0.08);">
 
-      <!-- Fundo -->
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#0D1222; padding: 40px 14px;">
-        <tr>
-          <td align="center">
+        <!-- Header -->
+        <div style="background:linear-gradient(135deg,#6C64EF,#4F46E5);padding:26px 28px;color:#fff;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="
+              width:40px;height:40px;border-radius:12px;
+              background:rgba(255,255,255,0.18);
+              display:flex;align-items:center;justify-content:center;
+              font-weight:900;font-size:18px;
+            ">
+              Z
+            </div>
 
-            <!-- Container -->
-            <table width="100%" cellpadding="0" cellspacing="0" border="0"
+            <div>
+              <div style="font-size:18px;font-weight:800;letter-spacing:0.2px;">
+                Zapconnect
+              </div>
+              <div style="font-size:13px;opacity:0.92;margin-top:2px;">
+                Confirmação de e-mail
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Body -->
+        <div style="padding:28px;">
+          <h2 style="margin:0 0 10px 0;font-size:20px;color:#111827;">
+            Olá, ${name} 👋
+          </h2>
+
+          <p style="margin:0 0 18px 0;font-size:14px;color:#374151;line-height:1.7;">
+            Você está a 1 passo de liberar seu acesso ao <b>Zapconnect</b>.
+            Para confirmar sua conta, clique no botão abaixo:
+          </p>
+
+          <!-- CTA -->
+          <div style="margin:22px 0;text-align:center;">
+            <a href="${link}"
               style="
-                max-width: 620px;
-                background: #161B30;
-                border: 1px solid #373E59;
-                border-radius: 18px;
-                overflow:hidden;
+                background:#6C64EF;
+                color:#ffffff;
+                padding:14px 22px;
+                border-radius:14px;
+                text-decoration:none;
+                font-weight:800;
+                display:inline-block;
+                font-size:14px;
+                box-shadow:0 10px 18px rgba(108,100,239,0.28);
               ">
+              Confirmar meu e-mail
+            </a>
+          </div>
 
-              <!-- Topo -->
-              <tr>
-                <td style="padding: 22px 26px; background: rgba(22,27,48,0.95); border-bottom: 1px solid #373E59;">
-                  <div style="display:flex; align-items:center; gap:12px;">
-                    <div style="width: 12px; height: 12px; border-radius: 999px; background: #6C64EF;"></div>
-                    <div style="color:#fff; font-size: 16px; font-weight: 800; letter-spacing: .2px;">
-                      Zapconnect
-                    </div>
-                  </div>
-                </td>
-              </tr>
+          <div style="
+            background:#F9FAFB;
+            border:1px solid #E5E7EB;
+            padding:14px;
+            border-radius:14px;
+            margin:18px 0 0 0;
+          ">
+            <p style="margin:0 0 10px 0;font-size:13px;color:#6b7280;line-height:1.6;">
+              Se o botão não funcionar, copie e cole este link no navegador:
+            </p>
 
-              <!-- Corpo -->
-              <tr>
-                <td style="padding: 28px 26px; color: #fff;">
+            <div style="
+              background:#ffffff;
+              padding:12px;
+              border-radius:12px;
+              font-size:12px;
+              color:#111827;
+              word-break:break-all;
+              line-height:1.5;
+              border:1px solid #E5E7EB;
+            ">
+              ${link}
+            </div>
 
-                  <h1 style="margin:0 0 10px 0; font-size: 22px; font-weight: 900;">
-                    📩 Confirme seu e-mail
-                  </h1>
+            <p style="margin:12px 0 0 0;font-size:12px;color:#9ca3af;">
+              ⏳ Este link expira em 1 hora.
+            </p>
+          </div>
 
-                  <p style="margin:0 0 18px 0; color:#AAB0D9; font-size: 15px; line-height: 1.7;">
-                    Olá <b style="color:#fff;">${safeName}</b> 👋
-                    <br />
-                    Para liberar seu acesso ao <b>Zapconnect</b>, confirme seu e-mail clicando no botão abaixo.
-                  </p>
+          <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;"/>
 
-                  <!-- Botão -->
-                  <div style="margin: 22px 0 22px 0;">
-                    <a href="${link}"
-                      style="
-                        display:inline-block;
-                        padding: 14px 18px;
-                        border-radius: 14px;
-                        background: linear-gradient(135deg, #6C64EF, #8B5CF6);
-                        color: #ffffff;
-                        text-decoration: none;
-                        font-weight: 900;
-                        font-size: 15px;
-                        letter-spacing: .2px;
-                      ">
-                      Confirmar e-mail
-                    </a>
-                  </div>
+          <p style="margin:0;font-size:12px;color:#9ca3af;line-height:1.6;">
+            Se você não criou uma conta no Zapconnect, ignore este e-mail com segurança.
+          </p>
+        </div>
 
-                  <!-- Link alternativo -->
-                  <div style="
-                    background: #1A1F3A;
-                    border: 1px solid #373E59;
-                    border-radius: 14px;
-                    padding: 14px 14px;
-                    margin: 10px 0 20px 0;
-                  ">
-                    <p style="margin:0 0 8px 0; color:#AAB0D9; font-size: 13px;">
-                      Se o botão não funcionar, copie e cole este link no navegador:
-                    </p>
+        <!-- Footer -->
+        <div style="background:#0B1220;padding:16px 22px;text-align:center;">
+          <p style="margin:0;color:#9ca3af;font-size:12px;line-height:1.5;">
+            © ${year} Zapconnect — Atendimento, Automação e IA no WhatsApp.
+          </p>
+        </div>
 
-                    <p style="
-                      margin:0;
-                      font-size: 13px;
-                      word-break: break-all;
-                      color: #ffffff;
-                      line-height: 1.6;
-                    ">
-                      ${link}
-                    </p>
-                  </div>
-
-                  <!-- Avisos -->
-                  <div style="
-                    background: linear-gradient(135deg, #2a1020, #3b1425);
-                    border: 1px solid #E54848;
-                    border-radius: 14px;
-                    padding: 14px 14px;
-                  ">
-                    <p style="margin:0; color:#fff; font-size: 13px; line-height: 1.7;">
-                      ⏳ <b>Importante:</b> este link expira em <b>1 hora</b>.
-                      <br />
-                      Se você não solicitou este cadastro, pode ignorar este e-mail.
-                    </p>
-                  </div>
-
-                  <div style="height: 18px;"></div>
-
-                  <p style="margin:0; color:#AAB0D9; font-size: 13px; line-height: 1.7;">
-                    Até já 🚀
-                    <br />
-                    <b style="color:#fff;">Equipe Zapconnect</b>
-                  </p>
-
-                </td>
-              </tr>
-
-              <!-- Rodapé -->
-              <tr>
-                <td style="padding: 18px 26px; border-top: 1px solid #373E59; background: #12172e;">
-                  <p style="margin:0; color:#AAB0D9; font-size: 12px; line-height: 1.7;">
-                    Este e-mail foi enviado automaticamente pelo Zapconnect.
-                    <br />
-                    Se precisar de ajuda, responda este e-mail ou fale com o suporte.
-                  </p>
-                </td>
-              </tr>
-
-            </table>
-
-          </td>
-        </tr>
-      </table>
-
-    </body>
-  </html>
+      </div>
+    </div>
+  </div>
   `;
 
-  await sendEmail(user.email, "Confirme seu e-mail - Zapconnect", html);
+  await sendEmail(
+    user.email,
+    "🔐 Confirme seu e-mail para liberar o Zapconnect",
+    html
+  );
 
   return { ok: true };
 }

@@ -1,55 +1,42 @@
+// src/utils/sendEmail.ts
 import nodemailer from "nodemailer";
 
 export async function sendEmail(to: string, subject: string, html: string) {
-  console.log("📩 Tentando enviar email para:", to);
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
 
-  console.log("SMTP CONFIG:", {
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS ? "OK" : "MISSING",
+  if (!host || !user || !pass) {
+    console.error("❌ SMTP não configurado corretamente no .env");
+    throw new Error("SMTP não configurado corretamente");
+  }
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465, // true se 465
+    auth: { user, pass },
   });
 
+  console.log("📩 Enviando e-mail via Gmail SMTP...");
+  console.log("➡️ Para:", to);
+  console.log("➡️ Assunto:", subject);
+
   try {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT || 587),
-      secure: false, // true só se for 465
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-
-      // 🔥 resolve muitos casos no Railway (IPv6 quebrado)
-      family: 4,
-
-      // 🔥 evita travar
-      connectionTimeout: 15000,
-      greetingTimeout: 15000,
-      socketTimeout: 20000,
-    });
-
-    // 🔥 valida config antes de enviar (bom pra debug)
-    await transporter.verify();
-
     const info = await transporter.sendMail({
-      from: `"Zapconnect" <${process.env.SMTP_USER}>`,
+      from: `"Zapconnect" <${user}>`,
       to,
       subject,
       html,
     });
 
     console.log("✅ Email enviado:", info.messageId);
-    return { ok: true, messageId: info.messageId };
+    return info;
 
   } catch (err: any) {
-    console.error("❌ ERRO AO ENVIAR EMAIL:", err?.message || err);
-
-    // 🔥 log mais útil
-    if (err?.code) console.error("CODE:", err.code);
-    if (err?.command) console.error("COMMAND:", err.command);
-    if (err?.response) console.error("RESPONSE:", err.response);
-
+    console.error("❌ ERRO AO ENVIAR EMAIL (GMAIL SMTP):", err?.message || err);
+    console.error(err);
     throw err;
   }
 }
