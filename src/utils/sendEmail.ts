@@ -1,41 +1,33 @@
-// src/utils/sendEmail.ts
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 export async function sendEmail(to: string, subject: string, html: string) {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_FROM || "Zapconnect <onboarding@resend.dev>";
 
-  if (!host || !user || !pass) {
-    console.error("❌ SMTP não configurado corretamente no .env");
-    throw new Error("SMTP não configurado corretamente");
+  if (!apiKey) {
+    console.error("❌ RESEND_API_KEY não configurada");
+    throw new Error("RESEND_API_KEY não configurada");
   }
 
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465, // true se 465
-    auth: { user, pass },
-  });
-
-  console.log("📩 Enviando e-mail via Gmail SMTP...");
+  console.log("📩 Enviando e-mail via Resend...");
   console.log("➡️ Para:", to);
   console.log("➡️ Assunto:", subject);
 
   try {
-    const info = await transporter.sendMail({
-      from: `"Zapconnect" <${user}>`,
-      to,
+    const result = await resend.emails.send({
+      from,
+      to: [to],
       subject,
       html,
     });
 
-    console.log("✅ Email enviado:", info.messageId);
-    return info;
+    console.log("✅ Email enviado:", result?.data?.id || result);
+    return result;
 
   } catch (err: any) {
-    console.error("❌ ERRO AO ENVIAR EMAIL (GMAIL SMTP):", err?.message || err);
+    console.error("❌ ERRO AO ENVIAR EMAIL (RESEND):", err?.message || err);
     console.error(err);
     throw err;
   }
