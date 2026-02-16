@@ -183,3 +183,21 @@ label {
 .login-footer a:hover {
   text-decoration: underline;
 }
+.forgot-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+  margin-bottom: 18px;
+}
+
+.forgot-link {
+  font-size: 13px;
+  color: #AAB0D9;
+  text-decoration: none;
+  transition: 0.2s;
+}
+
+.forgot-link:hover {
+  color: #fff;
+  text-decoration: underline;
+}

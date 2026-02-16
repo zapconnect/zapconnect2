@@ -13,6 +13,7 @@ import subscriptionRoutes from "./routes/subscription";
 import webhookRoutes from "./routes/webhook";
 import { subscriptionGuard } from "./middlewares/subscriptionGuard";
 import { emailVerifiedMiddleware } from "./middlewares/emailVerifiedMiddleware";
+import { sendResetPasswordEmail } from "./utils/sendResetPasswordEmail";
 
 import adminRoutes from "./routes/admin";
 import { getChatAI, setChatAI } from "./services/chatAiService";
@@ -739,6 +740,128 @@ app.get("/verify-email", async (req, res) => {
   } catch (err) {
     console.error("❌ Erro verify-email:", err);
     return res.status(500).send("Erro interno.");
+  }
+});
+
+app.get("/reset-password", async (req, res) => {
+  try {
+    const token = String(req.query.token || "");
+
+    if (!token) {
+      return res.render("reset-password-invalid");
+    }
+
+    const db = getDB();
+
+    const user = await db.get<any>(
+      `
+      SELECT id, reset_password_expires
+      FROM users
+      WHERE reset_password_token = ?
+      LIMIT 1
+      `,
+      [token]
+    );
+
+    if (!user) {
+      return res.render("reset-password-invalid");
+    }
+
+    const expires = Number(user.reset_password_expires || 0);
+
+    if (!expires || Date.now() > expires) {
+      return res.render("reset-password-expired");
+    }
+
+    return res.render("reset-password", { token });
+
+  } catch (err) {
+    console.error("❌ GET /reset-password:", err);
+    return res.render("reset-password-invalid");
+  }
+});
+app.get("/forgot-password", (req, res) => {
+  return res.render("forgot-password");
+});
+
+app.post("/auth/reset-password", async (req, res) => {
+  try {
+    const { token, password } = req.body;
+
+    if (!token || !password) {
+      return res.json({ error: "Token e senha são obrigatórios" });
+    }
+
+    if (password.length < 6) {
+      return res.json({ error: "A senha deve ter pelo menos 6 caracteres" });
+    }
+
+    const db = getDB();
+
+    const user = await db.get<any>(
+      `
+      SELECT id, reset_password_expires
+      FROM users
+      WHERE reset_password_token = ?
+      LIMIT 1
+      `,
+      [token]
+    );
+
+    if (!user) {
+      return res.json({ error: "Token inválido" });
+    }
+
+    const expires = Number(user.reset_password_expires || 0);
+
+    if (!expires || Date.now() > expires) {
+      return res.json({ error: "Token expirado" });
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+
+    await db.run(
+      `
+      UPDATE users
+      SET password = ?,
+          reset_password_token = NULL,
+          reset_password_expires = NULL
+      WHERE id = ?
+      `,
+      [hashed, user.id]
+    );
+
+    return res.json({ ok: true });
+
+  } catch (err) {
+    console.error("❌ POST /auth/reset-password:", err);
+    return res.json({ error: "Erro ao redefinir senha" });
+  }
+});
+
+
+app.post("/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.json({ error: "Digite seu e-mail" });
+    }
+
+    await sendResetPasswordEmail(email);
+
+    // sempre responde ok por segurança
+    return res.json({
+      ok: true,
+      message: "Se esse e-mail existir, enviamos o link de recuperação."
+    });
+
+  } catch (err) {
+    console.error("❌ forgot-password:", err);
+    return res.json({
+      ok: true,
+      message: "Se esse e-mail existir, enviamos o link de recuperação."
+    });
   }
 });
 
