@@ -186,10 +186,10 @@ function isDisconnectedState(state: string) {
     s.includes("browserclose") ||
     s.includes("conflict") ||
     s.includes("timeout") ||
-    s.includes("pairing") ||
     s.includes("logout")
   );
 }
+
 
 
 // 🔑 Agora todos os mapas são por sessão+chat (full::chatId)
@@ -793,7 +793,6 @@ export async function createWppSession(
         "--disable-gpu",
         "--no-zygote",
         "--single-process",
-        `--user-data-dir=${sessionDir}`,
       ],
     },
     catchQR: async (base64Qrimg, asciiQR, attempts, urlCode) => {
