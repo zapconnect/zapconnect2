@@ -24,23 +24,38 @@ async function login() {
     return;
   }
 
-  const res = await fetch(API + "/auth/login", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password })
-  });
+  let res;
+  try {
+    res = await fetch(API + "/auth/login", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
+    });
+  } catch (err) {
+    alert("Erro de conexão. Tente novamente.");
+    return;
+  }
 
-  const data = await res.json();
-  
+  let data = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+
+  // ✅ se backend mandou redirect, vai SEMPRE
   if (data.redirect) {
     window.location.href = data.redirect;
     return;
   }
-  if (data.error) {
-    alert(data.error);
+
+  // ❌ erro normal
+  if (!res.ok || data.error) {
+    alert(data.error || "Erro ao fazer login");
     return;
   }
 
+  // ✅ login ok
   window.location.href = "/painel";
 }

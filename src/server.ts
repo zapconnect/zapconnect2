@@ -93,7 +93,6 @@ app.get(
   "/painel",
   authMiddleware,
   subscriptionGuard,
-  emailVerifiedMiddleware,
   async (req: Request, res: Response) => {
     const user = (req as any).user as User;
     const db = getDB();
@@ -421,57 +420,72 @@ io.on("connection", (socket) => {
 // 🔐 Middleware de Autenticação do Painel
 // =======================================
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  const token = req.cookies?.token;
+  try {
+    const token = req.cookies?.token;
 
-  const isHtml = req.headers.accept?.includes("text/html");
-  const isApi = req.path.startsWith("/api") || req.path.startsWith("/sessions") || req.path.startsWith("/user");
+    const isHtml = req.headers.accept?.includes("text/html");
 
-  if (!token) {
-    if (isHtml) return res.redirect("/login");
-    return res.status(401).json({ error: "Não autenticado", redirect: "/login" });
-  }
-
-  const db = getDB();
-  const user = await db.get<any>(
-    "SELECT * FROM users WHERE token = ?",
-    [token]
-  );
-
-  if (!user) {
-    if (isHtml) return res.redirect("/login");
-    return res.status(401).json({ error: "Token inválido", redirect: "/login" });
-  }
-
-  // ✅ deixa abrir a tela sem loop
-  if (req.path === "/verify-email-required") {
-    (req as any).user = user;
-    return next();
-  }
-
-  const emailVerified = Number(user.email_verified) === 1;
-
-  if (!emailVerified) {
-    // 🔥 se for página, redirect normal
-    if (isHtml) {
-      return res.redirect("/verify-email-required");
+    if (!token) {
+      if (isHtml) return res.redirect("/login");
+      return res.status(401).json({ error: "Não autenticado", redirect: "/login" });
     }
 
-    // 🔥 se for fetch/api, manda redirect no JSON
-    return res.status(403).json({
-      redirect: "/verify-email-required"
-    });
-  }
+    const db = getDB();
+    const user = await db.get<any>("SELECT * FROM users WHERE token = ?", [token]);
 
-  (req as any).user = user;
-  next();
+    if (!user) {
+      if (isHtml) return res.redirect("/login");
+      return res.status(401).json({ error: "Token inválido", redirect: "/login" });
+    }
+
+    // ✅ SALVA O USER SEMPRE
+    (req as any).user = user;
+
+    // ✅ libera rotas mesmo sem verificação
+    const ALLOW_NOT_VERIFIED = [
+      "/verify-email-required",
+      "/auth/resend-verify-email",
+      "/auth/logout",
+      "/auth/me",
+    ];
+
+    if (ALLOW_NOT_VERIFIED.includes(req.path)) {
+      return next();
+    }
+
+    const emailVerified = Number(user.email_verified) === 1;
+
+    if (!emailVerified) {
+      if (isHtml) return res.redirect("/verify-email-required");
+
+      return res.status(403).json({
+        error: "Confirme seu e-mail antes de acessar.",
+        redirect: "/verify-email-required",
+      });
+    }
+
+    return next();
+  } catch (err) {
+    console.error("❌ authMiddleware error:", err);
+    const isHtml = req.headers.accept?.includes("text/html");
+    if (isHtml) return res.redirect("/login");
+    return res.status(500).json({ error: "Erro de autenticação" });
+  }
 }
 
 
 
 
-app.get("/verify-email-required", (req, res) => {
-  return res.render("verify-email-required");
+
+app.get("/verify-email-required", authMiddleware, (req, res) => {
+  const user = (req as any).user;
+
+  return res.render("verify-email-required", {
+    email: user.email,
+  });
 });
+
+
 
 
 
@@ -481,7 +495,7 @@ app.get("/verify-email-required", (req, res) => {
 // 📌 Rotas de Páginas (EJS)
 // =======================================
 // 👤 Página do usuário / assinatura
-app.get("/user", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
+app.get("/user", authMiddleware,  async (req, res) => {
   const user = (req as any).user;
   const db = getDB();
 
@@ -522,7 +536,7 @@ app.get("/user", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
 
 
 // 💳 Página de Checkout
-app.get("/checkout", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
+app.get("/checkout", authMiddleware, async (req, res) => {
   const user = (req as any).user;
 
   res.render("checkout", {
@@ -530,15 +544,15 @@ app.get("/checkout", authMiddleware, emailVerifiedMiddleware, async (req, res) =
   });
 });
 
-app.get("/checkout/success", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
+app.get("/checkout/success", authMiddleware, async (req, res) => {
   res.render("checkout-success");
 });
 
-app.get("/checkout/failure", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
+app.get("/checkout/failure", authMiddleware, async (req, res) => {
   res.render("checkout-failure");
 });
 
-app.get("/checkout/pending", authMiddleware, emailVerifiedMiddleware, async (req, res) => {
+app.get("/checkout/pending", authMiddleware, async (req, res) => {
   res.render("checkout-pending");
 });
 
@@ -546,31 +560,6 @@ app.get("/login", (_req, res) => {
   res.render("login"); // ⬅️ render EJS
 });
 
-app.get("/painel", authMiddleware, emailVerifiedMiddleware, async (req: Request, res: Response) => {
-  const user = (req as any).user as User;
-  const db = getDB();
-
-  const sessions = await db.all(
-    `SELECT * FROM sessions WHERE user_id = ? ORDER BY id DESC`,
-    [user.id]
-  );
-
-  const API_URL =
-    process.env.API_URL || `${req.protocol}://${req.get("host")}`;
-
-  // 🔥 Salvar cookie automaticamente
-  res.cookie("token", user.token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: false,   // localhost
-    path: "/",       // 🔥 OBRIGATÓRIO
-  });
-
-
-
-  // 🔥 Renderiza já enviando token para JS colocar no localStorage
-  res.render("painel", { user, sessions, API_URL });
-});
 app.get("/auth/me", authMiddleware, (req, res) => {
   res.json({ user: (req as any).user });
 });
@@ -582,12 +571,12 @@ app.get("/register", (_req, res) => {
 
 app.get("/index.html", (_req, res) => res.redirect("/login"));
 
-app.get("/chat", authMiddleware, emailVerifiedMiddleware, (req, res) => {
+app.get("/chat", authMiddleware, (req, res) => {
   const user = (req as any).user;
   res.render("chat", { user });
 });
 // 📌 Página CRM Kanban
-app.get("/crm", authMiddleware, emailVerifiedMiddleware, (req, res) => {
+app.get("/crm", authMiddleware, (req, res) => {
   const user = (req as any).user;
   res.render("crm", { user });
 });
@@ -870,17 +859,25 @@ app.post("/auth/resend-verify-email", authMiddleware, async (req, res) => {
   try {
     const user = (req as any).user;
 
-    const result = await sendVerifyEmail(user.id);
-
-    if (result.alreadyVerified) {
-      return res.json({ ok: true, message: "Seu e-mail já está verificado." });
+    if (Number(user.email_verified) === 1) {
+      return res.json({
+        ok: true,
+        message: "Seu e-mail já está verificado."
+      });
     }
 
-    return res.json({ ok: true });
+    await sendVerifyEmail(user.id);
+
+    return res.json({
+      ok: true,
+      message: "E-mail reenviado com sucesso!"
+    });
 
   } catch (err) {
-    console.error("❌ Erro resend verify:", err);
-    return res.status(500).json({ error: "Erro ao reenviar e-mail" });
+    console.error("❌ Erro ao reenviar confirmação:", err);
+    return res.status(500).json({
+      error: "Erro ao reenviar e-mail."
+    });
   }
 });
 
@@ -1451,9 +1448,17 @@ app.post("/auth/login", async (req, res) => {
     return res.status(401).json({ error: "E-mail ou senha inválidos" });
   }
 
+  // ✅ SEMPRE cria o cookie quando login estiver correto
+  res.cookie("token", user.token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production", // Railway => true
+    path: "/",
+  });
+
   const emailVerified = Number(user.email_verified) === 1;
 
-  // 🔒 só chega aqui se senha estiver certa
+  // 🔥 se não verificou, redireciona mas mantém login ativo
   if (!emailVerified) {
     return res.status(403).json({
       error: "Confirme seu e-mail antes de acessar.",
@@ -1461,15 +1466,9 @@ app.post("/auth/login", async (req, res) => {
     });
   }
 
-  res.cookie("token", user.token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: false, // localhost (no Railway você muda pra true)
-    path: "/",
-  });
-
   return res.json({ ok: true });
 });
+
 
 
 // =======================================

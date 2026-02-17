@@ -7,24 +7,21 @@ export function emailVerifiedMiddleware(
 ) {
   const user = (req as any).user;
 
-  // se não tem user, authMiddleware não rodou
   if (!user) {
     return res.status(401).json({ error: "Não autenticado" });
   }
 
-  // já verificado? libera
-  if (user.email_verified) return next();
+  // garante boolean real
+  const emailVerified = Number(user.email_verified) === 1;
 
-  // ===========================
-  // 🔥 SE FOR PÁGINA (HTML)
-  // ===========================
+  if (emailVerified) return next();
+
+  // HTML
   if (req.headers.accept?.includes("text/html")) {
     return res.redirect("/verify-email-required");
   }
 
-  // ===========================
-  // 🔥 SE FOR API (FETCH)
-  // ===========================
+  // API
   return res.status(403).json({
     error: "Confirme seu e-mail antes de acessar.",
     redirect: "/verify-email-required",

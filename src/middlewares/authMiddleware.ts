@@ -1,6 +1,12 @@
 import { Request, Response, NextFunction } from "express";
 import { getDB } from "../database";
 
+const ALLOW_NOT_VERIFIED = [
+  "/verify-email-required",
+  "/auth/resend-verify-email",
+  "/auth/logout",
+];
+
 export async function authMiddleware(
   req: Request,
   res: Response,
@@ -18,10 +24,9 @@ export async function authMiddleware(
 
     const db = getDB();
 
-    const user = await db.get<any>(
-      `SELECT * FROM users WHERE token = ?`,
-      [token]
-    );
+    const user = await db.get<any>(`SELECT * FROM users WHERE token = ?`, [
+      token,
+    ]);
 
     if (!user) {
       if (req.headers.accept?.includes("text/html")) {
@@ -30,16 +35,16 @@ export async function authMiddleware(
       return res.status(401).json({ error: "Token inválido" });
     }
 
-    // ✅ deixa passar a rota de aviso SEM LOOP
-    if (req.path === "/verify-email-required") {
+    // ✅ salva o user no req ANTES de qualquer bloqueio
+    (req as any).user = user;
+
+    // ✅ libera algumas rotas mesmo sem verificação
+    if (ALLOW_NOT_VERIFIED.includes(req.path)) {
       return next();
     }
 
-
-    // 🔥 CORRETO: garante boolean real
     const emailVerified = Number(user.email_verified) === 1;
 
-    // 🔒 BLOQUEAR SE EMAIL NÃO VERIFICADO
     if (!emailVerified) {
       if (req.headers.accept?.includes("text/html")) {
         return res.redirect("/verify-email-required");
@@ -47,11 +52,11 @@ export async function authMiddleware(
 
       return res.status(403).json({
         error: "Confirme seu e-mail para acessar o sistema",
+        redirect: "/verify-email-required",
       });
     }
 
-    (req as any).user = user;
-    next();
+    return next();
   } catch (err) {
     console.error("❌ Erro authMiddleware:", err);
 

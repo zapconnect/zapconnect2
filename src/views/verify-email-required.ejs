@@ -1,15 +1,13 @@
 <!DOCTYPE html>
 <html lang="pt-br">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Confirme seu e-mail</title>
 
   <!-- Font Awesome (ícones) -->
-  <link
-    rel="stylesheet"
-    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
-  />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 
   <!-- Fonte Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -27,6 +25,7 @@
       --primary: #6C64EF;
       --primary-hover: #8B5CF6;
       --danger: #E54848;
+      --success: #22c55e;
     }
 
     * {
@@ -137,10 +136,23 @@
       font-size: 15px;
     }
 
+    .email-box {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      font-size: 14px;
+      color: #fff;
+      text-align: center;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+    }
+
     /* BUTTONS */
     .btn {
       width: 100%;
-      margin-top: 18px;
+      margin-top: 14px;
       padding: 14px;
       border-radius: 14px;
       border: 1px solid var(--border);
@@ -161,8 +173,24 @@
       border: none;
     }
 
+    .btn-secondary {
+      background: transparent;
+    }
+
     .btn:hover:not(:disabled) {
       filter: brightness(1.15);
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .status {
+      margin-top: 16px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: center;
     }
 
     /* MOBILE */
@@ -182,8 +210,8 @@
       <span>Zapconnect</span>
     </div>
 
-    <a class="back-link" href="/login">
-      <i class="fa-solid fa-arrow-left"></i> Voltar
+    <a class="back-link" href="#" onclick="logout()">
+      <i class="fa-solid fa-right-from-bracket"></i> Sair
     </a>
   </header>
 
@@ -205,18 +233,90 @@
       </h2>
 
       <p>
-        Antes de acessar o Zapconnect, você precisa confirmar seu e-mail.
+        Você está logado como:
       </p>
 
-      <p>
-        Verifique sua caixa de entrada (ou spam) e clique no link enviado.
+      <div class="email-box">
+        <%= email %>
+      </div>
+
+      <p style="margin-top: 16px;">
+        Enviamos um link de confirmação para esse e-mail.
+        Verifique sua caixa de entrada e também o spam.
       </p>
 
-      <a class="btn btn-primary" href="/login">
+      <button class="btn btn-primary" id="btnResend" onclick="resendEmail()">
+        <i class="fa-solid fa-paper-plane"></i>
+        Reenviar e-mail de confirmação
+      </button>
+
+      <button class="btn btn-secondary" onclick="logout()">
         <i class="fa-solid fa-right-from-bracket"></i>
-        Sair
-      </a>
+        Sair da conta
+      </button>
+
+      <div class="status" id="status"></div>
     </div>
   </div>
+
+  <script>
+    async function resendEmail() {
+      const btn = document.getElementById("btnResend");
+      const status = document.getElementById("status");
+
+      btn.disabled = true;
+      status.innerText = "Enviando e-mail...";
+
+      try {
+        const res = await fetch("/auth/resend-verify-email", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" }
+        });
+
+        let data = null;
+        try {
+          data = await res.json();
+        } catch (e) { }
+
+        console.log("HTTP:", res.status);
+        console.log("DATA:", data);
+
+        if (!res.ok) {
+          status.innerText =
+            (data && (data.error || data.message)) ||
+            `Erro ao reenviar e-mail (HTTP ${res.status})`;
+
+          btn.disabled = false;
+          return;
+        }
+
+
+        status.innerText = data.message || "E-mail reenviado com sucesso!";
+
+        setTimeout(() => {
+          btn.disabled = false;
+          status.innerText = "";
+        }, 4000);
+
+      } catch (err) {
+        status.innerText = "Erro de conexão. Tente novamente.";
+        btn.disabled = false;
+      }
+    }
+
+    async function logout() {
+      try {
+        await fetch("/auth/logout", {
+          method: "POST",
+          credentials: "include"
+        });
+      } catch (e) { }
+
+      window.location.href = "/login";
+    }
+  </script>
+
 </body>
+
 </html>
