@@ -43,37 +43,63 @@ export async function ensureChat(
 
 
 // ... dentro do mesmo arquivo:
-async function executeUserFlows(userId: number, chatId: string, messageBody: string, client: any) {
+async function executeUserFlows(
+  userId: number,
+  sessionName: string,
+  chatId: string,
+  messageBody: string,
+  client: any
+) {
   try {
     const db = await getDB();
     const rows = await db.all(`SELECT * FROM flows WHERE user_id = ?`, [userId]);
     if (!rows || !rows.length) return;
 
-    // busca flows cujo trigger esteja contido (case-insensitive)
-    const matched = rows.filter(r => {
+    const matched = rows.filter((r) => {
       const trig = (r.trigger || "").toLowerCase();
       return trig && messageBody.toLowerCase().includes(trig);
     });
 
     if (!matched.length) return;
 
-    // executar cada flow (cada um sequencialmente)
     for (const f of matched) {
       const actions = JSON.parse(f.actions || "[]");
+
       for (const a of actions) {
         if (a.type === "send_text") {
-          try { await client.sendText(chatId, String(a.payload || "")); } catch { }
-        } else if (a.type === "delay") {
+          try {
+            await client.sendText(chatId, String(a.payload || ""));
+          } catch { }
+        }
+
+        else if (a.type === "delay") {
           const s = Number(a.payload) || 1;
-          await new Promise(r => setTimeout(r, s * 1000));
-        } else if (a.type === "send_media") {
-          // espera que payload seja dataURL "data:mime;base64,AAA..."
-          try { await client.sendFile(chatId, String(a.payload), "arquivo", ""); } catch { }
-        } else if (a.type === "handover_human") {
-          // emule envio de mensagem e marque para humano (a lógica de handover você pode integrar aqui)
-          try { await client.sendText(chatId, "🔔 Vou transferir você para um atendente humano. Aguarde..."); } catch { }
-          // Pode disparar evento para o painel:
-          try { (global as any).io?.emit("human_request", { chatId, userId }); } catch { }
+          await new Promise((r) => setTimeout(r, s * 1000));
+        }
+
+        else if (a.type === "send_media") {
+          try {
+            await client.sendFile(chatId, String(a.payload), "arquivo", "");
+          } catch { }
+        }
+
+        else if (a.type === "handover_human") {
+          try {
+            await client.sendText(
+              chatId,
+              "🔔 Vou transferir você para um atendente humano. Aguarde..."
+            );
+          } catch { }
+
+          // ✅ ATIVA MODO HUMANO (DESLIGA IA)
+          try {
+            enableHumanTemporarily(userId, sessionName, chatId);
+          } catch { }
+
+          // painel
+          try {
+            global.io?.emit("human_request", { chatId, userId, sessionName });
+          } catch { }
         }
       }
     }
@@ -81,6 +107,7 @@ async function executeUserFlows(userId: number, chatId: string, messageBody: str
     console.error("Erro executar flows:", err);
   }
 }
+
 
 
 // ===========================
@@ -147,8 +174,7 @@ async function saveCRMClient(userId: number, msg: any) {
 // chave = USER{userId}_{chatId}
 export const chatAILock = new Map<string, boolean>();
 // ⏱ Controle de humano / tempo
-export const chatHumanLock = new Map<string, boolean>();
-export const chatHumanTimer = new Map<string, NodeJS.Timeout>();
+
 
 
 
@@ -193,10 +219,23 @@ function isDisconnectedState(state: string) {
 
 
 // 🔑 Agora todos os mapas são por sessão+chat (full::chatId)
-const messageBuffer = new Map<string, string[]>();
-const messageTimeouts = new Map<string, NodeJS.Timeout>();
+export const messageBuffer = new Map<string, string[]>();
+export const messageTimeouts = new Map<string, NodeJS.Timeout>();
 const pausedChats = new Map<string, boolean>();
 const humanTimeouts = new Map<string, NodeJS.Timeout>();
+
+export function cancelAIDebounce(chatKey: string) {
+  // cancela timeout
+  const t = messageTimeouts.get(chatKey);
+  if (t) clearTimeout(t);
+
+  // remove tudo
+  messageTimeouts.delete(chatKey);
+  messageBuffer.delete(chatKey);
+
+  console.log("🧹 IA debounce cancelado:", chatKey);
+}
+
 
 // ===========================
 // HELPERS
@@ -246,30 +285,184 @@ function clearSessionMemory(full: string) {
   }
 }
 
-/** ⏱ Ativa atendimento humano e desativa após 5 min */
-export const chatHumanExpire = new Map<string, number>(); // 🆕 <---
+// ===========================
+// 👤 MODO HUMANO POR INATIVIDADE (5 MIN) — MULTI-SESSÃO
+// ===========================
+const HUMAN_INACTIVITY_MS = 5 * 60 * 1000;
 
-export function enableHumanTemporarily(userId: string | number, chatId: string) {
-  const key = `USER${userId}_${chatId}`;
+// true = humano ativo (IA bloqueada)
+export const chatHumanLock = new Map<string, boolean>();
+
+// timer por chat
+export const chatHumanTimer = new Map<string, NodeJS.Timeout>();
+
+// último timestamp de atividade do cliente
+export const chatHumanLastActivity = new Map<string, number>();
+
+function getHumanKey(
+  userId: string | number,
+  sessionName: string,
+  chatId: string
+) {
+  return `USER${userId}_${sessionName}::${chatId}`;
+}
+
+/**
+ * 🔥 Ativa modo humano
+ * Expira quando ficar 5 min sem mensagem do cliente.
+ */
+export function enableHumanTemporarily(
+  userId: string | number,
+  sessionName: string,
+  chatId: string
+) {
+  const key = getHumanKey(userId, sessionName, chatId);
 
   chatHumanLock.set(key, true);
+  chatHumanLastActivity.set(key, Date.now());
 
-
-  // 🕒 salva timestamp de expiração
-  const expire = Date.now() + 5 * 60 * 1000;
-  chatHumanExpire.set(key, expire);
-
-  if (chatHumanTimer.has(key)) clearTimeout(chatHumanTimer.get(key));
+  if (chatHumanTimer.has(key)) {
+    clearTimeout(chatHumanTimer.get(key)!);
+    chatHumanTimer.delete(key);
+  }
 
   const timer = setTimeout(() => {
-    chatHumanLock.set(key, false);
-    chatHumanExpire.delete(key);
-    chatHumanTimer.delete(key);
-    if (global.io) global.io.emit("human_state_changed", { chatId, state: false });
-  }, 5 * 60 * 1000);
+    tryDisableHumanByInactivity(userId, sessionName, chatId);
+  }, HUMAN_INACTIVITY_MS);
 
   chatHumanTimer.set(key, timer);
+
+  // ✅ MENSAGEM AUTOMÁTICA NO WHATSAPP
+  sendSystemMessage(
+    userId,
+    sessionName,
+    chatId,
+    "👤 Conversa transferida para um atendente humano."
+  );
+
+  try {
+    global.io?.emit("human_state_changed", {
+      chatId,
+      userId,
+      sessionName,
+      state: true,
+      expireAt: Date.now() + HUMAN_INACTIVITY_MS
+    });
+
+  } catch { }
+
+  console.log(`👤 MODO HUMANO ATIVADO: ${key}`);
 }
+
+
+/**
+ * Sempre que chegar mensagem do cliente, chama isso.
+ * Zera o contador de inatividade.
+ */
+export function registerHumanActivity(
+  userId: string | number,
+  sessionName: string,
+  chatId: string
+) {
+  const key = getHumanKey(userId, sessionName, chatId);
+
+  if (chatHumanLock.get(key) !== true) return;
+
+  chatHumanLastActivity.set(key, Date.now());
+
+  if (chatHumanTimer.has(key)) {
+    clearTimeout(chatHumanTimer.get(key)!);
+    chatHumanTimer.delete(key);
+  }
+
+  const timer = setTimeout(() => {
+    tryDisableHumanByInactivity(userId, sessionName, chatId);
+  }, HUMAN_INACTIVITY_MS);
+
+  chatHumanTimer.set(key, timer);
+
+  // ✅ ATUALIZA PAINEL AO VIVO (sem F5)
+  try {
+    global.io?.emit("human_state_changed", {
+      chatId,
+      userId,
+      sessionName,
+      state: true,
+      expireAt: Date.now() + HUMAN_INACTIVITY_MS,
+    });
+  } catch {}
+}
+
+
+function tryDisableHumanByInactivity(
+  userId: string | number,
+  sessionName: string,
+  chatId: string
+) {
+  const key = getHumanKey(userId, sessionName, chatId);
+
+  // se nem está em modo humano, sai
+  if (chatHumanLock.get(key) !== true) return;
+
+  const last = chatHumanLastActivity.get(key) || Date.now();
+  const inactiveFor = Date.now() - last;
+
+  // ainda não bateu 5 min -> recalcula tempo restante
+  if (inactiveFor < HUMAN_INACTIVITY_MS) {
+    const remaining = HUMAN_INACTIVITY_MS - inactiveFor;
+
+    if (chatHumanTimer.has(key)) {
+      clearTimeout(chatHumanTimer.get(key)!);
+      chatHumanTimer.delete(key);
+    }
+
+    const timer = setTimeout(() => {
+      tryDisableHumanByInactivity(userId, sessionName, chatId);
+    }, remaining);
+
+    chatHumanTimer.set(key, timer);
+    return;
+  }
+
+  // ===========================
+  // ✅ DESATIVOU MODO HUMANO
+  // ===========================
+  chatHumanLock.set(key, false);
+  chatHumanLastActivity.delete(key);
+
+  if (chatHumanTimer.has(key)) {
+    clearTimeout(chatHumanTimer.get(key)!);
+    chatHumanTimer.delete(key);
+  }
+
+  // ===========================
+  // ✅ AVISA NO WHATSAPP (VOLTOU PRO BOT)
+  // ===========================
+  sendSystemMessage(
+    userId,
+    sessionName,
+    chatId,
+    "🤖 Conversa transferida para o assistente automático."
+  );
+
+  // ===========================
+  // ✅ AVISA O PAINEL
+  // ===========================
+  try {
+    global.io?.emit("human_state_changed", {
+      chatId,
+      userId,
+      sessionName,
+      state: false,
+      expireAt: null,
+    });
+  } catch { }
+
+  console.log(`🤖 BOT reassumiu por inatividade: ${key}`);
+}
+
+
+
 
 // ===========================
 // 🧹 LIMPAR TOKENS INATIVOS
@@ -517,7 +710,9 @@ function attachEvents(
       // =================================================
       const fullKey = `USER${userId}_${shortName}`;
       const chatKey = `${fullKey}::${chatId}`;
-      const aiKey = `USER${userId}_${chatId}`;
+      const humanKey = getHumanKey(userId, shortName, chatId);
+
+
 
       // =================================================
       // 📡 ENVIAR PARA O PAINEL (REALTIME)
@@ -542,14 +737,24 @@ function attachEvents(
 
       // =================================================
       // 👤 MODO HUMANO ATIVO → NÃO RESPONDER
+      // MAS: atualiza atividade para expirar por INATIVIDADE
       // =================================================
-      if (chatHumanLock.get(aiKey) === true) {
+      if (chatHumanLock.get(humanKey) === true) {
+        // 🔥 zera timer de inatividade (cliente falou)
+        try {
+          registerHumanActivity(userId, shortName, chatId);
+        } catch { }
+
         messageBuffer.delete(chatKey);
+
         try {
           await client.stopTyping(chatId);
         } catch { }
+
         return;
       }
+
+
 
       // =================================================
       // 🤖 IA DESLIGADA PARA ESTE CHAT
@@ -582,7 +787,8 @@ function attachEvents(
       // 🔁 EXECUTAR FLOWS INTELIGENTES
       // =================================================
       try {
-        await executeUserFlows(userId, chatId, body, client);
+        await executeUserFlows(userId, shortName, chatId, body, client)
+
       } catch { }
 
       // =================================================
@@ -603,6 +809,13 @@ function attachEvents(
 
       const timeout = setTimeout(async () => {
         try {
+          if (chatHumanLock.get(humanKey) === true) {
+            messageBuffer.delete(chatKey);
+            try {
+              await client.stopTyping(chatId);
+            } catch { }
+            return;
+          }
           const db = await getDB();
 
           const userConfig = await db.get(
@@ -913,4 +1126,25 @@ export async function createWppSession(
 // ===========================
 export function getClient(full: string) {
   return clients.get(full);
+}
+
+async function sendSystemMessage(
+  userId: string | number,
+  sessionName: string,
+  chatId: string,
+  text: string
+) {
+  try {
+    const full = `USER${userId}_${sessionName}`;
+    const client = clients.get(full);
+
+    if (!client) {
+      console.log("⚠️ Não achei client pra enviar mensagem:", full);
+      return;
+    }
+
+    await client.sendText(chatId, text);
+  } catch (err) {
+    console.log("❌ Erro ao enviar mensagem do sistema:", err);
+  }
 }

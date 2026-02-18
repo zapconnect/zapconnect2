@@ -114,6 +114,14 @@
   <!-- SOCKET.IO + CHAT SCRIPT FINAL -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/chat.js"></script>
+  <script>
+    window.USER_ID = "<%= user.id %>";
+    window.USER_TOKEN = "<%= user.token %>";
+    window.SESSION_NAME = "<%= typeof sessionName !== 'undefined' ? sessionName : '' %>";
+  </script>
+
+
+
 
 </body>
 

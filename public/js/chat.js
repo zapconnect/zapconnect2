@@ -248,7 +248,12 @@ function renderMessages(chatId) {
 btnHumanOn.addEventListener("click", () => {
     if (!currentChat) return;
 
-    socket.emit("chat_human_state", { chatId: currentChat, state: true });
+    socket.emit("chat_human_state", {
+        chatId: currentChat,
+        state: true,
+        sessionName: window.SESSION_NAME
+    });
+
 
     chats[currentChat].human = true;
     btnHumanOn.disabled = true;
@@ -263,7 +268,12 @@ btnHumanOn.addEventListener("click", () => {
 btnHumanOff.addEventListener("click", () => {
     if (!currentChat) return;
 
-    socket.emit("chat_human_state", { chatId: currentChat, state: false });
+    socket.emit("chat_human_state", {
+        chatId: currentChat,
+        state: false,
+        sessionName: window.SESSION_NAME
+    });
+
 
     chats[currentChat].human = false;
     btnHumanOn.disabled = false;
@@ -278,9 +288,13 @@ btnHumanOff.addEventListener("click", () => {
 
 
 
-socket.on("human_state_changed", ({ chatId, state }) => {
+socket.on("human_state_changed", ({ chatId, state, expireAt }) => {
     if (!chats[chatId]) return;
+
     chats[chatId].human = state;
+
+    // 🔥 salva expiração real
+    chats[chatId].expire = expireAt || null;
 
     if (currentChat === chatId) {
         btnHumanOn.disabled = state;
@@ -288,15 +302,18 @@ socket.on("human_state_changed", ({ chatId, state }) => {
         tagHuman.style.display = state ? "inline-flex" : "none";
         humanAlert.style.display = state ? "block" : "none";
 
-        if (state) {
-            startHumanTimer(); // ⏱ Inicia quando voltar automático
+        if (state && expireAt) {
+            const diff = expireAt - Date.now();
+            if (diff > 0) startHumanTimer(diff);
+            else stopHumanTimer();
         } else {
-            stopHumanTimer(); // ⛔ Para quando volta pro bot
+            stopHumanTimer();
         }
     }
 
     renderChatList();
 });
+
 
 
 /* ==========================================================

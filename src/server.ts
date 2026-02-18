@@ -1,4 +1,5 @@
 // src/server.ts
+import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -8,7 +9,7 @@ import http from "http";
 import cookieParser from "cookie-parser";
 import { Server } from "socket.io";
 import bcrypt from "bcrypt";
-import { ensureChat } from "./wppManager";
+
 import subscriptionRoutes from "./routes/subscription";
 import webhookRoutes from "./routes/webhook";
 import { subscriptionGuard } from "./middlewares/subscriptionGuard";
@@ -22,7 +23,7 @@ import emailVerifyRoutes from "./routes/emailVerify";
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
-import "dotenv/config";
+
 
 
 import { getDB } from "./database";
@@ -42,15 +43,19 @@ interface ScheduleRow {
 }
 
 import {
-  chatHumanExpire,
+  ensureChat,
   createWppSession,
   getQRPathFor,
   deleteWppSession,
   getClient,
   chatAILock,
   enableHumanTemporarily,
-  chatHumanLock, // 👈 importa o mesmo Map usado no bot
+  chatHumanLock,
+  cancelAIDebounce,
+  chatHumanLastActivity,
 } from "./wppManager";
+
+
 import { User } from "./database/types";
 
 
@@ -215,35 +220,40 @@ io.on("connection", (socket) => {
       console.error("❌ Erro ao enviar mensagem do admin:", err);
     }
   });
-  socket.on("chat_human_state", ({ chatId, state }) => {
-    const userId = socket.handshake.auth?.userId;
-    if (!userId || !chatId) return;
 
-    const key = `USER${userId}_${chatId}`;
+
+  socket.on("chat_human_state", ({ chatId, state, sessionName }) => {
+    const userId = socket.handshake.auth?.userId;
+    if (!userId || !chatId || !sessionName) return;
+
+    const fullKey = `USER${userId}_${sessionName}`;
+    const chatKey = `${fullKey}::${chatId}`;
 
     if (state === true) {
-      // 👤 Ativar modo humano por 5 minutos
-      chatHumanLock.set(key, true);
+      // 👤 ativa humano (já cria timer + emite evento)
+      enableHumanTemporarily(userId, sessionName, chatId);
 
-      const expire = Date.now() + 5 * 60 * 1000;
-      chatHumanExpire.set(key, expire);
+      // 🔥 cancela IA já armada
+      cancelAIDebounce(chatKey);
 
-      io.emit("human_state_changed", {
-        chatId,
-        state: true,
-        expire
-      });
     } else {
-      // 🤖 Voltar para o bot
-      chatHumanLock.set(key, false);
-      chatHumanExpire.delete(key);
+      const humanKey = `${fullKey}::${chatId}`;
+
+      chatHumanLock.set(humanKey, false);
+      chatHumanLastActivity.delete(humanKey);
+
+      cancelAIDebounce(chatKey);
 
       io.emit("human_state_changed", {
         chatId,
-        state: false
+        userId,
+        sessionName,
+        state: false,
       });
     }
+
   });
+
 
 
 
@@ -293,7 +303,13 @@ io.on("connection", (socket) => {
         .filter((c: any) => c.id?._serialized) // só garante id válido
         .map((c: any) => {
           const chatId = c.id._serialized;
-          const key = `USER${userId}_${chatId}`;
+
+          const fullKey = `USER${userId}_${session.session_name}`;
+          const key = `${fullKey}::${chatId}`;
+
+          const isHuman = chatHumanLock.get(key) === true;
+
+          const last = Number(chatHumanLastActivity.get(key) || 0);
 
           return {
             id: chatId,
@@ -307,15 +323,18 @@ io.on("connection", (socket) => {
             isGroup: chatId.endsWith("@g.us"),
 
             // 👤 modo humano real
-            human: chatHumanLock.get(key) === true,
+            human: isHuman,
 
-            // 🤖 estado real da IA vindo do banco
+            // 🤖 IA por chat (você pode melhorar depois)
             ai: true,
 
-            // ⏱ expiração real
-            expire: chatHumanExpire.get(key) || null
+            // ⏱ expire real (timestamp final)
+            expire: isHuman
+              ? ((last || Date.now()) + 5 * 60 * 1000)
+              : null,
           };
         });
+
 
       socket.emit("lista_chats", chats);
 
@@ -495,7 +514,7 @@ app.get("/verify-email-required", authMiddleware, (req, res) => {
 // 📌 Rotas de Páginas (EJS)
 // =======================================
 // 👤 Página do usuário / assinatura
-app.get("/user", authMiddleware,  async (req, res) => {
+app.get("/user", authMiddleware, async (req, res) => {
   const user = (req as any).user;
   const db = getDB();
 
@@ -571,10 +590,39 @@ app.get("/register", (_req, res) => {
 
 app.get("/index.html", (_req, res) => res.redirect("/login"));
 
-app.get("/chat", authMiddleware, (req, res) => {
+app.get("/chat", authMiddleware, subscriptionGuard, async (req, res) => {
   const user = (req as any).user;
-  res.render("chat", { user });
+  const db = getDB();
+
+  let sessionName = String(req.query.session || "").trim();
+
+  // ✅ Se não vier na URL, pega a sessão conectada
+  if (!sessionName) {
+    const session = await db.get(
+      `SELECT session_name
+       FROM sessions
+       WHERE user_id = ? AND status = 'connected'
+       ORDER BY id DESC
+       LIMIT 1`,
+      [user.id]
+    );
+
+    sessionName = session?.session_name || "";
+  }
+
+  // 🔥 Se mesmo assim não existir sessão conectada
+  if (!sessionName) {
+    return res.redirect("/painel");
+  }
+
+  return res.render("chat", {
+    user,
+    sessionName,
+  });
 });
+
+
+
 // 📌 Página CRM Kanban
 app.get("/crm", authMiddleware, (req, res) => {
   const user = (req as any).user;
@@ -1676,26 +1724,40 @@ export async function restoreSessionsOnStartup() {
 
 setInterval(() => {
   const now = Date.now();
+  const LIMIT = 5 * 60 * 1000; // 5 minutos sem cliente falar
 
-  for (const [key, expire] of chatHumanExpire.entries()) {
-    if (expire <= now) {
-      // 🔓 remove bloqueio humano
-      chatHumanExpire.delete(key);
+  for (const [key, last] of chatHumanLastActivity.entries()) {
+    const isHuman = chatHumanLock.get(key) === true;
+
+    if (!isHuman) {
+      chatHumanLastActivity.delete(key);
+      continue;
+    }
+
+    const lastActivity = Number(last || 0);
+
+    if (!lastActivity) {
+      chatHumanLastActivity.set(key, now);
+      continue;
+    }
+
+    if (now - lastActivity >= LIMIT) {
       chatHumanLock.set(key, false);
+      chatHumanLastActivity.delete(key);
 
-      // key formato: USER{userId}_{chatId}
-      const chatId = key.replace(/^USER\d+_/, "");
+      const parts = key.split("::");
+      const chatId = parts[1];
 
-      // 🔥 sincroniza TODOS os painéis conectados
       io.emit("human_state_changed", {
         chatId,
-        state: false
+        state: false,
       });
 
-      console.log("🤖 Modo humano expirado automaticamente:", chatId);
+      console.log("🤖 Modo humano desativado por inatividade:", chatId);
     }
   }
-}, 5000); // verifica a cada 5 segundos
+}, 5000);
+
 
 
 // =======================================
