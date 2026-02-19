@@ -62,7 +62,7 @@ router.post(
         },
 
         success_url: `${process.env.APP_URL}/checkout/success`,
-        cancel_url: `${process.env.APP_URL}/checkout?status=cancelled`,
+        cancel_url: `${process.env.APP_URL}/checkout`,
 
         custom_text: {
           submit: {
