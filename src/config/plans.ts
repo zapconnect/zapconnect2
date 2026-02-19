@@ -9,7 +9,7 @@ export const PLANS = {
 
   starter: {
     name: "starter",
-    price: 1, // R$ 1,00
+    price: 97, // R$ 97
     maxSessions: 1,
     maxIaMessages: 500,
     mpPlanId: "starter"
@@ -17,7 +17,7 @@ export const PLANS = {
 
   pro: {
     name: "pro",
-    price: 197, // R$ 1,00
+    price: 197, // R$ 197
     maxSessions: 3,
     maxIaMessages: "unlimited",
     mpPlanId: "pro"
