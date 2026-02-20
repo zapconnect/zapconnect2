@@ -390,7 +390,7 @@ export function registerHumanActivity(
       state: true,
       expireAt: Date.now() + HUMAN_INACTIVITY_MS,
     });
-  } catch {}
+  } catch { }
 }
 
 
@@ -564,7 +564,8 @@ async function safeRmDir(dir: string) {
 // ===========================
 export async function deleteWppSession(userId: number, sessionName: string) {
   const full = `USER${userId}_${sessionName}`;
-  const sessionDir = path.join(process.cwd(), "tokens", full);
+  const TOKENS_DIR = process.env.TOKENS_DIR || "/app/tokens";
+  const sessionDir = path.join(TOKENS_DIR, full);
 
   console.log("🗑 Apagando sessão COMPLETA:", full);
 
@@ -982,7 +983,8 @@ export async function createWppSession(
   shortName: string
 ): Promise<{ sessionName: string; exists?: boolean }> {
   const full = `USER${userId}_${shortName}`;
-  const sessionDir = path.join(process.cwd(), "tokens", full);
+  const TOKENS_DIR = process.env.TOKENS_DIR || "/app/tokens";
+  const sessionDir = path.join(TOKENS_DIR, full);
 
   if (clients.has(full)) {
     console.log("⚠️ Sessão já está carregada:", full);
