@@ -983,7 +983,7 @@ export async function createWppSession(
   shortName: string
 ): Promise<{ sessionName: string; exists?: boolean }> {
   const full = `USER${userId}_${shortName}`;
-  const TOKENS_DIR = process.env.TOKENS_DIR || "/app/tokens";
+  const TOKENS_DIR = process.env.TOKENS_DIR || "tokens";
   const sessionDir = path.join(TOKENS_DIR, full);
 
   if (clients.has(full)) {
