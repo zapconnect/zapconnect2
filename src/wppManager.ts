@@ -974,6 +974,23 @@ async function reconnectSession(userId: number, shortName: string) {
     reconnecting.delete(full);
   }
 }
+function clearChromiumLocks(sessionDir: string) {
+  const lockFiles = [
+    "SingletonLock",
+    "SingletonSocket",
+    "SingletonCookie"
+  ];
+
+  for (const file of lockFiles) {
+    const filePath = path.join(sessionDir, file);
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.rmSync(filePath, { force: true });
+        console.log("🧹 Lock removido:", file);
+      } catch {}
+    }
+  }
+}
 
 // ===========================
 // CRIAR SESSÃO + STATUS EM TEMPO REAL
@@ -993,7 +1010,7 @@ export async function createWppSession(
 
   ensureDir(path.join(process.cwd(), "qr"));
   ensureDir(path.join(process.cwd(), "tokens"));
-
+  clearChromiumLocks(sessionDir);
   console.log("📱 Criando sessão:", full);
 
   const client = await wppconnect.create({
