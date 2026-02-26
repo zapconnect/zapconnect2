@@ -17,6 +17,41 @@ import { getChatAI } from "./services/chatAiService";
 
 
 
+function killChromeProcesses() {
+  try {
+    if (process.platform === "win32") {
+      execSync("taskkill /F /IM chrome.exe", { stdio: "ignore" });
+    } else {
+      execSync("pkill -f chrome", { stdio: "ignore" });
+      execSync("pkill -f chromium", { stdio: "ignore" });
+    }
+    console.log("💀 Processos Chrome finalizados");
+  } catch {}
+}
+
+function clearChromiumLocks(sessionDir: string) {
+  const lockFiles = [
+    "SingletonLock",
+    "SingletonCookie",
+    "SingletonSocket",
+  ];
+
+  lockFiles.forEach((file) => {
+    const filePath = path.join(sessionDir, file);
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+        console.log("🧹 Lock removido:", file);
+      } catch {}
+    }
+  });
+}
+
+function ensureDir(dir: string) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+}
 /**
  * Compatível com versões antigas do WPPConnect
  * Não tenta forçar LID manualmente
@@ -240,9 +275,7 @@ export function cancelAIDebounce(chatKey: string) {
 // ===========================
 // HELPERS
 // ===========================
-function ensureDir(p: string) {
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-}
+
 
 export function getQRPathFor(full: string) {
   const qrFolder = path.join(process.cwd(), "qr");
@@ -974,23 +1007,6 @@ async function reconnectSession(userId: number, shortName: string) {
     reconnecting.delete(full);
   }
 }
-function clearChromiumLocks(sessionDir: string) {
-  const lockFiles = [
-    "SingletonLock",
-    "SingletonSocket",
-    "SingletonCookie"
-  ];
-
-  for (const file of lockFiles) {
-    const filePath = path.join(sessionDir, file);
-    if (fs.existsSync(filePath)) {
-      try {
-        fs.rmSync(filePath, { force: true });
-        console.log("🧹 Lock removido:", file);
-      } catch {}
-    }
-  }
-}
 
 // ===========================
 // CRIAR SESSÃO + STATUS EM TEMPO REAL
@@ -999,8 +1015,11 @@ export async function createWppSession(
   userId: number,
   shortName: string
 ): Promise<{ sessionName: string; exists?: boolean }> {
+
   const full = `USER${userId}_${shortName}`;
-  const TOKENS_DIR = process.env.TOKENS_DIR || "tokens";
+
+  // 🔥 IMPORTANTE PARA RAILWAY
+  const TOKENS_DIR = process.env.TOKENS_DIR || "/tokens";
   const sessionDir = path.join(TOKENS_DIR, full);
 
   if (clients.has(full)) {
@@ -1010,8 +1029,13 @@ export async function createWppSession(
 
   ensureDir(TOKENS_DIR);
   ensureDir(sessionDir);
-  
+
+  // 🛑 PASSO 1 — matar chrome preso
+  killChromeProcesses();
+
+  // 🧹 PASSO 2 — limpar locks
   clearChromiumLocks(sessionDir);
+
   console.log("📱 Criando sessão:", full);
 
   const client = await wppconnect.create({
@@ -1028,45 +1052,49 @@ export async function createWppSession(
         "--single-process",
       ],
     },
+
     catchQR: async (base64Qrimg, asciiQR, attempts, urlCode) => {
       console.log(`📡 QR (${full}) tentativa ${attempts}`);
-      console.log("📸 QR salvo em:", getQRPathFor(full));
+
       if (base64Qrimg) {
         const base64 = base64Qrimg.split("base64,")[1];
-        fs.writeFileSync(getQRPathFor(full), Buffer.from(base64, "base64"));
+        fs.writeFileSync(
+          path.join(sessionDir, "qr.png"),
+          Buffer.from(base64, "base64")
+        );
       }
 
       try {
         const { io } = await import("./server");
         io.emit("session:qr", { userId, sessionName: shortName, full });
-      } catch { }
+      } catch {}
 
-      if (urlCode) term(await qrcode.toString(urlCode, { type: "terminal" }));
+      if (urlCode) {
+        console.log(await require("qrcode-terminal").generate(urlCode, { small: true }));
+      }
     },
+
     statusFind: async (status) => {
-      console.log("🧠 STATUS FIND DISPAROU:", status);
+      console.log("🧠 STATUS FIND:", status);
 
       const db = await getDB();
 
       if (["inChat", "qrReadSuccess", "connected"].includes(status)) {
-        console.log("🟢 WHATSAPP CONECTADO — EMITINDO server:online");
 
         await db.run(
           `UPDATE sessions SET status = 'connected' WHERE user_id = ? AND session_name = ?`,
           [userId, shortName]
         );
 
+        reconnectAttempts.delete(full);
+
         try {
           const { io } = await import("./server");
-          console.log("📡 io existe?", !!io);
           io.emit("server:online", { userId });
-        } catch (err) {
-          console.error("❌ ERRO AO EMITIR server:online", err);
-        }
+        } catch {}
       }
 
       if (["browserClose", "disconnectedMobile", "serverClose"].includes(status)) {
-        console.log("🔴 WHATSAPP DESCONECTADO — EMITINDO server:offline");
 
         await db.run(
           `UPDATE sessions SET status = 'disconnected' WHERE user_id = ? AND session_name = ?`,
@@ -1076,21 +1104,17 @@ export async function createWppSession(
         try {
           const { io } = await import("./server");
           io.emit("server:offline", { userId });
-        } catch (err) {
-          console.error("❌ ERRO AO EMITIR server:offline", err);
-        }
+        } catch {}
       }
-    }
-
-
+    },
   });
 
-  attachEvents(client, userId, shortName);
-
+  // =========================
+  // 📡 STATE CHANGE
+  // =========================
   client.onStateChange(async (state) => {
-    console.log(`🌐 Estado da sessão ${full}:`, state);
+    console.log(`🌐 Estado ${full}:`, state);
 
-    // 📡 Emitir estado exato (conexão, reconexão, etc.)
     try {
       const { io } = await import("./server");
       io.emit("session:stateChange", {
@@ -1099,43 +1123,38 @@ export async function createWppSession(
         full,
         state,
       });
-    } catch { }
+    } catch {}
 
-    // ===========================
-    // 🔁 AUTO RECONNECT
-    // ===========================
-    try {
-      if (isDisconnectedState(state)) {
-        console.log("🔴 Estado indica desconexão -> auto-reconnect:", full);
+    if (isDisconnectedState(state)) {
+      console.log("🔁 Auto-reconnect acionado:", full);
 
-        // marca offline
-        try {
-          const db = await getDB();
-          await db.run(
-            `UPDATE sessions SET status = 'disconnected' WHERE user_id = ? AND session_name = ?`,
-            [userId, shortName]
-          );
-        } catch { }
+      try {
+        const db = await getDB();
+        await db.run(
+          `UPDATE sessions SET status = 'disconnected' WHERE user_id = ? AND session_name = ?`,
+          [userId, shortName]
+        );
+      } catch {}
 
-        // emite offline
-        try {
-          const { io } = await import("./server");
-          io.emit("server:offline", { userId });
-        } catch { }
+      try {
+        const { io } = await import("./server");
+        io.emit("server:offline", { userId });
+      } catch {}
 
-        // tenta reconectar
-        reconnectSession(userId, shortName);
-      }
+      reconnectSession(userId, shortName);
+    }
 
-      // reset tentativas quando conectar
-      if (String(state).toLowerCase().includes("connected")) {
-        reconnectAttempts.delete(full);
-      }
-    } catch { }
+    if (String(state).toLowerCase().includes("connected")) {
+      reconnectAttempts.delete(full);
+    }
   });
 
+  attachEvents(client, userId, shortName);
 
   clients.set(full, client);
+
+  console.log("✅ Sessão criada com sucesso:", full);
+
   return { sessionName: full };
 }
 
