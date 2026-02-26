@@ -1008,8 +1008,9 @@ export async function createWppSession(
     return { sessionName: full, exists: true };
   }
 
-  ensureDir(path.join(process.cwd(), "qr"));
-  ensureDir(path.join(process.cwd(), "tokens"));
+  ensureDir(TOKENS_DIR);
+  ensureDir(sessionDir);
+  
   clearChromiumLocks(sessionDir);
   console.log("📱 Criando sessão:", full);
 
