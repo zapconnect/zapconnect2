@@ -1027,6 +1027,9 @@ export async function createWppSession(
   ensureDir(TOKENS_DIR);
   ensureDir(sessionDir);
 
+  killChromeProcesses();
+  await wait(1000);
+
   clearChromiumLocks(sessionDir);
   console.log("📱 Criando sessão:", full);
 
@@ -1042,6 +1045,7 @@ export async function createWppSession(
         "--disable-gpu",
         "--no-zygote",
         "--single-process",
+        "--disable-features=site-per-process",
       ],
     },
     catchQR: async (base64Qrimg, asciiQR, attempts, urlCode) => {
