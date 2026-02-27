@@ -26,7 +26,7 @@ function killChromeProcesses() {
       execSync("pkill -f chromium", { stdio: "ignore" });
     }
     console.log("💀 Processos Chrome finalizados");
-  } catch {}
+  } catch { }
 }
 
 function clearChromiumLocks(sessionDir: string) {
@@ -42,7 +42,7 @@ function clearChromiumLocks(sessionDir: string) {
       try {
         fs.unlinkSync(filePath);
         console.log("🧹 Lock removido:", file);
-      } catch {}
+      } catch { }
     }
   });
 }
@@ -1028,7 +1028,14 @@ export async function createWppSession(
   ensureDir(sessionDir);
 
   killChromeProcesses();
-  await wait(1000);
+  await wait(1500);
+
+  // remove locks extras que o Chromium cria
+  try {
+    fs.rmSync(path.join(sessionDir, "SingletonLock"), { force: true });
+    fs.rmSync(path.join(sessionDir, "SingletonCookie"), { force: true });
+    fs.rmSync(path.join(sessionDir, "SingletonSocket"), { force: true });
+  } catch { }
 
   clearChromiumLocks(sessionDir);
   console.log("📱 Criando sessão:", full);
@@ -1045,7 +1052,11 @@ export async function createWppSession(
         "--disable-gpu",
         "--no-zygote",
         "--single-process",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-session-crashed-bubble",
         "--disable-features=site-per-process",
+        "--remote-debugging-port=0",
       ],
     },
     catchQR: async (base64Qrimg, asciiQR, attempts, urlCode) => {
