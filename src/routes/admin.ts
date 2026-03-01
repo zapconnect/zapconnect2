@@ -22,7 +22,9 @@ router.get("/dashboard-data", async (req, res) => {
 
   const db = getDB();
 
-  const totalUsers = (await db.get(`SELECT COUNT(*) t FROM users`)).t;
+  const totalUsers = (await db.get<{ t: number }>(
+    `SELECT COUNT(*) t FROM users`
+  ))?.t ?? 0;
   const active = (await db.get(`SELECT COUNT(*) t FROM users WHERE subscription_status='active'`)).t;
   const cancelled = (await db.get(`SELECT COUNT(*) t FROM users WHERE subscription_status='cancelled'`)).t;
   const pastDue = (await db.get(`SELECT COUNT(*) t FROM users WHERE subscription_status='past_due'`)).t;
