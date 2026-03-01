@@ -108,7 +108,7 @@ router.get("/dashboard-data", async (req, res) => {
         FROM checkout_leads cl
         WHERE cl.user_id = u.id
           AND cl.event_type = 'preapproval_created'
-          AND cl.created_at < (strftime('%s','now') * 1000 - 30 * 60 * 1000)
+          AND cl.created_at < (UNIX_TIMESTAMP() * 1000 - 30 * 60 * 1000)
           AND NOT EXISTS (
             SELECT 1
             FROM payments p2
