@@ -743,7 +743,7 @@ app.get("/verify-email", async (req, res) => {
 
     const user = await db.get<any>(
       `
-      SELECT id, email_verify_expires
+      SELECT id, token, email_verify_expires
       FROM users
       WHERE email_verify_token = ?
       `,
@@ -754,12 +754,11 @@ app.get("/verify-email", async (req, res) => {
       return res.send("Token inválido ou expirado.");
     }
 
-    // expirado?
     if (!user.email_verify_expires || Date.now() > Number(user.email_verify_expires)) {
       return res.send("Token expirado. Solicite outro link.");
     }
 
-    // confirma
+    // ✅ CONFIRMA EMAIL
     await db.run(
       `
       UPDATE users
@@ -771,8 +770,16 @@ app.get("/verify-email", async (req, res) => {
       [user.id]
     );
 
-    // manda pra login ou painel
-    return res.redirect("/login?verified=1");
+    // ✅ CRIA COOKIE AUTOMÁTICO
+    res.cookie("token", user.token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+    });
+
+    // 🚀 REDIRECIONA DIRETO PRO PAINEL
+    return res.redirect("/painel");
 
   } catch (err) {
     console.error("❌ Erro verify-email:", err);

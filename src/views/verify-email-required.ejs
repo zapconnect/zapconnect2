@@ -260,6 +260,45 @@
   </div>
 
   <script>
+    document.addEventListener("DOMContentLoaded", checkEmailStatus);
+
+    /* =========================
+       🔎 Verifica se já confirmou
+    ========================= */
+    async function checkEmailStatus() {
+      try {
+        const res = await fetch("/auth/me", {
+          credentials: "include"
+        });
+
+        if (!res.ok) return;
+
+        const data = await res.json();
+
+        if (data.email_verified === true) {
+
+          const card = document.querySelector(".card");
+          card.innerHTML = `
+        <div style="text-align:center; padding:30px 10px;">
+          <i class="fa-solid fa-circle-check" 
+             style="font-size:48px; color:#22c55e; margin-bottom:15px;"></i>
+          <h2 style="margin-bottom:10px;">E-mail confirmado com sucesso!</h2>
+          <p style="color:#AAB0D9;">Redirecionando para o painel...</p>
+        </div>
+      `;
+
+          setTimeout(() => {
+            window.location.href = "/painel";
+          }, 1500);
+        }
+
+      } catch (e) {
+        console.error("Erro ao verificar status:", e);
+      }
+    }
+    /* =========================
+       📩 Reenviar e-mail
+    ========================= */
     async function resendEmail() {
       const btn = document.getElementById("btnResend");
       const status = document.getElementById("status");
@@ -279,18 +318,13 @@
           data = await res.json();
         } catch (e) { }
 
-        console.log("HTTP:", res.status);
-        console.log("DATA:", data);
-
         if (!res.ok) {
           status.innerText =
             (data && (data.error || data.message)) ||
             `Erro ao reenviar e-mail (HTTP ${res.status})`;
-
           btn.disabled = false;
           return;
         }
-
 
         status.innerText = data.message || "E-mail reenviado com sucesso!";
 
@@ -305,6 +339,9 @@
       }
     }
 
+    /* =========================
+       🚪 Logout
+    ========================= */
     async function logout() {
       try {
         await fetch("/auth/logout", {
