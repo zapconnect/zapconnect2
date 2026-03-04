@@ -1027,9 +1027,6 @@ export async function createWppSession(
   ensureDir(TOKENS_DIR);
   ensureDir(sessionDir);
 
-  killChromeProcesses();
-  await wait(1500);
-
   // remove locks extras que o Chromium cria
   try {
     fs.rmSync(path.join(sessionDir, "SingletonLock"), { force: true });
