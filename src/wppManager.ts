@@ -17,17 +17,7 @@ import { getChatAI } from "./services/chatAiService";
 
 
 
-function killChromeProcesses() {
-  try {
-    if (process.platform === "win32") {
-      execSync("taskkill /F /IM chrome.exe", { stdio: "ignore" });
-    } else {
-      execSync("pkill -f chrome", { stdio: "ignore" });
-      execSync("pkill -f chromium", { stdio: "ignore" });
-    }
-    console.log("💀 Processos Chrome finalizados");
-  } catch { }
-}
+
 
 function clearChromiumLocks(sessionDir: string) {
   const lockFiles = [
