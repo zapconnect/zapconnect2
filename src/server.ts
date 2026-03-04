@@ -24,8 +24,6 @@ import { sendVerifyEmail } from "./utils/sendVerifyEmail";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
-
-
 import { getDB } from "./database";
 
 // ===============================
@@ -77,10 +75,6 @@ app.use(
   express.raw({ type: "application/json" })
 );
 
-
-
-
-
 // =======================================
 // 🌐 Middlewares globais
 // =======================================
@@ -114,16 +108,10 @@ app.get(
   }
 );
 
-
-
-
-
 // 📦 Servir frontend estático (CSS, JS, imagens)
 app.use(express.static(path.join(process.cwd(), "public")));
 // 📸 Servir QR Codes gerados pelo WPPConnect
 app.use("/qr", express.static(path.join(process.cwd(), "qr")));
-
-
 
 // =======================================
 // 🎨 EJS Configurado
@@ -221,7 +209,6 @@ io.on("connection", (socket) => {
     }
   });
 
-
   socket.on("chat_human_state", ({ chatId, state, sessionName }) => {
     const userId = socket.handshake.auth?.userId;
     if (!userId || !chatId || !sessionName) return;
@@ -253,11 +240,6 @@ io.on("connection", (socket) => {
     }
 
   });
-
-
-
-
-
 
   /**
    * =========================================================
@@ -416,9 +398,6 @@ io.on("connection", (socket) => {
     }
   });
 
-
-
-
   /**
    * =========================================================
    * ❌ DISCONNECT
@@ -428,12 +407,6 @@ io.on("connection", (socket) => {
     console.log("❌ Socket desconectado:", socket.id);
   });
 });
-
-
-
-
-
-
 
 // =======================================
 // 🔐 Middleware de Autenticação do Painel
@@ -492,10 +465,6 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
   }
 }
 
-
-
-
-
 app.get("/verify-email-required", authMiddleware, (req, res) => {
   const user = (req as any).user;
 
@@ -503,12 +472,6 @@ app.get("/verify-email-required", authMiddleware, (req, res) => {
     email: user.email,
   });
 });
-
-
-
-
-
-
 
 // =======================================
 // 📌 Rotas de Páginas (EJS)
@@ -621,8 +584,6 @@ app.get("/chat", authMiddleware, subscriptionGuard, async (req, res) => {
   });
 });
 
-
-
 // 📌 Página CRM Kanban
 app.get("/crm", authMiddleware, (req, res) => {
   const user = (req as any).user;
@@ -681,8 +642,6 @@ app.get("/api/crm/client/:chatId", authMiddleware, async (req, res) => {
   }
 });
 
-
-
 // =======================================
 // 🧠 Auxiliares
 // =======================================
@@ -716,12 +675,8 @@ app.get("/auth/auto-login", async (req, res) => {
     secure: false,   // localhost
     path: "/",       // 🔥 OBRIGATÓRIO
   });
-
-
-
   res.json({ ok: true });
 });
-
 
 app.get("/disparo", authMiddleware, (req, res) => {
   const user = (req as any).user;
@@ -741,6 +696,7 @@ app.get("/verify-email", async (req, res) => {
 
     const db = getDB();
 
+    // 🔥 BUSCAR TAMBÉM O TOKEN DO USUÁRIO
     const user = await db.get<any>(
       `
       SELECT id, token, email_verify_expires
@@ -754,7 +710,10 @@ app.get("/verify-email", async (req, res) => {
       return res.send("Token inválido ou expirado.");
     }
 
-    if (!user.email_verify_expires || Date.now() > Number(user.email_verify_expires)) {
+    if (
+      !user.email_verify_expires ||
+      Date.now() > Number(user.email_verify_expires)
+    ) {
       return res.send("Token expirado. Solicite outro link.");
     }
 
@@ -770,7 +729,7 @@ app.get("/verify-email", async (req, res) => {
       [user.id]
     );
 
-    // ✅ CRIA COOKIE AUTOMÁTICO
+    // 🔥 AGORA O TOKEN EXISTE CORRETAMENTE
     res.cookie("token", user.token, {
       httpOnly: true,
       sameSite: "lax",
@@ -778,7 +737,6 @@ app.get("/verify-email", async (req, res) => {
       path: "/",
     });
 
-    // 🚀 REDIRECIONA DIRETO PRO PAINEL
     return res.redirect("/painel");
 
   } catch (err) {
@@ -883,7 +841,6 @@ app.post("/auth/reset-password", async (req, res) => {
   }
 });
 
-
 app.post("/auth/forgot-password", async (req, res) => {
   try {
     const { email } = req.body;
@@ -908,7 +865,6 @@ app.post("/auth/forgot-password", async (req, res) => {
     });
   }
 });
-
 
 app.post("/auth/resend-verify-email", authMiddleware, async (req, res) => {
   try {
@@ -1159,15 +1115,6 @@ setInterval(async () => {
   }
 }, 10000);
 
-
-
-
-// ===================================================
-// 🧾 CRM KANBAN
-// ===================================================
-
-
-
 // 🔄 Atualizar pipeline
 // Atualizar estágio do CRM Kanban
 app.post("/api/crm/stage", authMiddleware, subscriptionGuard, async (req, res) => {
@@ -1187,8 +1134,6 @@ app.post("/api/crm/stage", authMiddleware, subscriptionGuard, async (req, res) =
     res.json({ ok: false });
   }
 });
-
-
 
 // =============================
 // ➕ ADICIONAR TAG (CORRIGIDO)
@@ -1224,8 +1169,6 @@ app.post("/api/crm/tag", authMiddleware, subscriptionGuard, async (req, res) => 
     res.status(500).json({ ok: false, error: "Erro ao salvar tag" });
   }
 });
-
-
 
 // =============================
 // 📝 ADICIONAR NOTA
@@ -1474,12 +1417,7 @@ app.post("/register", async (req, res) => {
   });
 });
 
-
-
-
-
 // Login
-
 app.post("/auth/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -1524,8 +1462,6 @@ app.post("/auth/login", async (req, res) => {
   return res.json({ ok: true });
 });
 
-
-
 // =======================================
 // 🚪 LOGOUT
 // =======================================
@@ -1554,8 +1490,6 @@ app.post("/user/update-prompt", authMiddleware, async (req, res) => {
 
   res.json({ ok: true });
 });
-
-
 
 // Criar Sessão
 app.post(
@@ -1603,7 +1537,6 @@ app.post(
 
       return res.status(403).json({ error: message });
     }
-
 
     // ===============================
     // 💾 CRIAR SESSÃO

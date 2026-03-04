@@ -260,7 +260,12 @@
   </div>
 
   <script>
-    document.addEventListener("DOMContentLoaded", checkEmailStatus);
+    document.addEventListener("DOMContentLoaded", () => {
+      checkEmailStatus();
+
+      // 🔄 verifica a cada 5 segundos
+      setInterval(checkEmailStatus, 5000);
+    });
 
     /* =========================
        🔎 Verifica se já confirmou
@@ -275,17 +280,17 @@
 
         const data = await res.json();
 
-        if (data.email_verified === true) {
+        if (Number(data.email_verified) === 1) {
 
           const card = document.querySelector(".card");
           card.innerHTML = `
-        <div style="text-align:center; padding:30px 10px;">
-          <i class="fa-solid fa-circle-check" 
-             style="font-size:48px; color:#22c55e; margin-bottom:15px;"></i>
-          <h2 style="margin-bottom:10px;">E-mail confirmado com sucesso!</h2>
-          <p style="color:#AAB0D9;">Redirecionando para o painel...</p>
-        </div>
-      `;
+    <div style="text-align:center; padding:30px 10px;">
+      <i class="fa-solid fa-circle-check" 
+         style="font-size:48px; color:#22c55e; margin-bottom:15px;"></i>
+      <h2 style="margin-bottom:10px;">E-mail confirmado com sucesso!</h2>
+      <p style="color:#AAB0D9;">Redirecionando para o painel...</p>
+    </div>
+  `;
 
           setTimeout(() => {
             window.location.href = "/painel";

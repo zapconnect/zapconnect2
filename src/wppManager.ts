@@ -1042,6 +1042,10 @@ export async function createWppSession(
 
   const client = await wppconnect.create({
     session: full,
+
+    // 🔥 ADICIONE ISSO
+    autoClose: 0, // DESATIVA AUTO CLOSE TOTALMENTE
+
     puppeteerOptions: {
       headless: true,
       userDataDir: sessionDir,
