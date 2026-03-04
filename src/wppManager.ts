@@ -62,11 +62,6 @@ export async function ensureChat(
   return number;
 }
 
-
-
-
-
-
 // ... dentro do mesmo arquivo:
 async function executeUserFlows(
   userId: number,
