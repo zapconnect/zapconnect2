@@ -1038,11 +1038,6 @@ export async function createWppSession(
         "--disable-gpu",
         "--no-zygote",
         "--single-process",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-session-crashed-bubble",
-        "--disable-features=site-per-process",
-        "--remote-debugging-port=0",
       ],
     },
     catchQR: async (base64Qrimg, asciiQR, attempts, urlCode) => {
