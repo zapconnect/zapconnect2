@@ -160,6 +160,7 @@ async function listSessions() {
 
         box.appendChild(div);
     });
+    checkConnectionAlert(sessions);
 }
 
 // ===============================
@@ -345,36 +346,53 @@ function hideQrLoading() {
 ================================ */
 
 (function createToastContainer() {
-  if (document.getElementById("toast-container")) return;
-  const div = document.createElement("div");
-  div.id = "toast-container";
-  div.className = "toast-container";
-  document.body.appendChild(div);
+    if (document.getElementById("toast-container")) return;
+    const div = document.createElement("div");
+    div.id = "toast-container";
+    div.className = "toast-container";
+    document.body.appendChild(div);
 })();
 
 function notify(message, type = "success", timeout = 3500) {
-  const container = document.getElementById("toast-container");
-  if (!container) return;
+    const container = document.getElementById("toast-container");
+    if (!container) return;
 
-  const toast = document.createElement("div");
-  toast.className = `toast ${type}`;
+    const toast = document.createElement("div");
+    toast.className = `toast ${type}`;
 
-  const icon =
-    type === "success" ? "fa-circle-check" :
-    type === "error"   ? "fa-circle-xmark" :
-    type === "warning" ? "fa-triangle-exclamation" :
-    "fa-circle-info";
+    const icon =
+        type === "success" ? "fa-circle-check" :
+            type === "error" ? "fa-circle-xmark" :
+                type === "warning" ? "fa-triangle-exclamation" :
+                    "fa-circle-info";
 
-  toast.innerHTML = `
+    toast.innerHTML = `
     <i class="fa-solid ${icon}"></i>
     <div class="content">${message}</div>
   `;
 
-  container.appendChild(toast);
+    container.appendChild(toast);
 
-  setTimeout(() => {
-    toast.style.opacity = "0";
-    toast.style.transform = "translateY(-6px)";
-    setTimeout(() => toast.remove(), 300);
-  }, timeout);
+    setTimeout(() => {
+        toast.style.opacity = "0";
+        toast.style.transform = "translateY(-6px)";
+        setTimeout(() => toast.remove(), 300);
+    }, timeout);
+}
+function checkConnectionAlert(sessions) {
+
+    const alert = document.getElementById("connect-alert");
+
+    if (!sessions || sessions.length === 0) {
+        alert.classList.remove("hidden");
+        return;
+    }
+
+    const connected = sessions.some(s => s.status === "connected");
+
+    if (!connected) {
+        alert.classList.remove("hidden");
+    } else {
+        alert.classList.add("hidden");
+    }
 }

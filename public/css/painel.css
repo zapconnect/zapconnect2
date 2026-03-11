@@ -1,5 +1,5 @@
 .tag {
-  background: rgba(108,100,239,.15);
+  background: rgba(108, 100, 239, .15);
   color: var(--primary);
   padding: 3px 8px;
   border-radius: 999px;
@@ -62,12 +62,29 @@
 }
 
 /* CORES */
-.purple { background: #6d28d9; }
-.pink { background: #db2777; }
-.red { background: #dc2626; }
-.violet { background: #7c3aed; }
-.green { background: #16a34a; }
-.blue { background: #0284c7; }
+.purple {
+  background: #6d28d9;
+}
+
+.pink {
+  background: #db2777;
+}
+
+.red {
+  background: #dc2626;
+}
+
+.violet {
+  background: #7c3aed;
+}
+
+.green {
+  background: #16a34a;
+}
+
+.blue {
+  background: #0284c7;
+}
 
 /* QR */
 .qr-area {
@@ -80,6 +97,7 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
 /* ==============================
    LOGO TOPO
 ============================== */
@@ -90,10 +108,12 @@
 }
 
 .brand-logo {
-  height: 25px;     /* ajuste se quiser maior */
+  height: 25px;
+  /* ajuste se quiser maior */
   width: auto;
   display: block;
 }
+
 /* =========================
    QR CODE LOADING
 ========================= */
@@ -105,7 +125,7 @@
   gap: 12px;
   padding: 26px;
   border-radius: 14px;
-  background: rgba(255,255,255,.04);
+  background: rgba(255, 255, 255, .04);
   border: 1px dashed var(--border);
   animation: fadeIn .3s ease;
 }
@@ -123,7 +143,9 @@
 
 /* animação */
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ===============================
@@ -147,7 +169,7 @@
   color: #fff;
   padding: 14px 16px;
   border-radius: 12px;
-  box-shadow: 0 12px 30px rgba(0,0,0,.35);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .35);
   display: flex;
   gap: 12px;
   align-items: flex-start;
@@ -155,9 +177,17 @@
   border-left: 4px solid #3b82f6;
 }
 
-.toast.success { border-color: #22c55e; }
-.toast.error   { border-color: #ef4444; }
-.toast.warning { border-color: #f59e0b; }
+.toast.success {
+  border-color: #22c55e;
+}
+
+.toast.error {
+  border-color: #ef4444;
+}
+
+.toast.warning {
+  border-color: #f59e0b;
+}
 
 .toast i {
   font-size: 18px;
@@ -169,9 +199,39 @@
   font-size: 14px;
 }
 
+.alert-connect {
+  background: #fe0537;
+  border: 1px solid #e30000;
+  color: #f2f2f2;
+  padding: 14px 16px;
+  border-radius: 4px;
+  margin-top: 14px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+}
+
+.alert-connect i {
+  font-size: 18px;
+}
+
+.hidden {
+  display: none;
+}
+
 @keyframes toastIn {
-  from { opacity: 0; transform: translateY(-6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 600px) {
