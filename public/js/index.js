@@ -128,7 +128,7 @@ async function createSession() {
         return;
     }
 
-    notify("Sessão criada. Escaneie o QR Code", "success");
+    notify("Sessão criada com sucesso", "success");
     listSessions();
 }
 
