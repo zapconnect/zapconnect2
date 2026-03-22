@@ -53,10 +53,9 @@ router.get("/dashboard-data", async (req, res) => {
   `)).t;
 
   // ── Receita mensal (últimos 7 meses) para o gráfico de barras ──
-  // Agrupa por mês (strftime no SQLite)
   const monthlyRevenue = await db.all(`
     SELECT
-      strftime('%Y-%m', datetime(created_at / 1000, 'unixepoch')) AS month,
+      DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m') AS month,
       SUM(amount) AS total
     FROM payments
     WHERE status = 'approved'
@@ -68,7 +67,7 @@ router.get("/dashboard-data", async (req, res) => {
   // ── Novos usuários por dia (últimos 28 dias) ──
   const dailyNewUsers = await db.all(`
     SELECT
-      strftime('%Y-%m-%d', datetime(created_at / 1000, 'unixepoch')) AS day,
+      DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d') AS day,
       COUNT(*) AS count
     FROM users
     WHERE created_at >= ?
@@ -79,7 +78,7 @@ router.get("/dashboard-data", async (req, res) => {
   // ── Pagamentos por dia (últimos 49 dias — 7 semanas) para o heatmap ──
   const dailyPayments = await db.all(`
     SELECT
-      strftime('%Y-%m-%d', datetime(created_at / 1000, 'unixepoch')) AS day,
+      DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d') AS day,
       COUNT(*) AS count
     FROM payments
     WHERE status = 'approved'
@@ -122,7 +121,7 @@ router.get("/dashboard-data", async (req, res) => {
           SELECT 1 FROM checkout_leads cl
           WHERE cl.user_id = u.id
             AND cl.event_type = 'preapproval_created'
-            AND cl.created_at < (CAST(strftime('%s','now') AS INTEGER) * 1000 - 30 * 60 * 1000)
+            AND cl.created_at < (UNIX_TIMESTAMP() * 1000 - 30 * 60 * 1000)
             AND NOT EXISTS (
               SELECT 1 FROM payments p2
               WHERE p2.user_id = u.id AND p2.status = 'approved'
