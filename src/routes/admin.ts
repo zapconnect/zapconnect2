@@ -69,13 +69,13 @@ router.get("/dashboard-data", async (req, res) => {
   // users não tem created_at — usa primeiro pagamento aprovado como proxy
   const dailyNewUsers = await db.all(`
     SELECT
-      DATE_FORMAT(FROM_UNIXTIME(MIN(created_at) / 1000), '%Y-%m-%d') AS day,
-      COUNT(DISTINCT user_id) AS count
+      DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d') AS day,
+      COUNT(*) AS count
     FROM payments
     WHERE status = 'approved'
       AND created_at >= ?
-    GROUP BY DATE_FORMAT(FROM_UNIXTIME(MIN(created_at) / 1000), '%Y-%m-%d')
-    ORDER BY DATE_FORMAT(FROM_UNIXTIME(MIN(created_at) / 1000), '%Y-%m-%d') ASC
+    GROUP BY DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d')
+    ORDER BY DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d') ASC
   `, [Date.now() - 28 * 24 * 60 * 60 * 1000]);
 
   // ── Pagamentos aprovados por dia (últimas 7 semanas — heatmap) ──
