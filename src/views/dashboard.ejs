@@ -1,94 +1,230 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
   <meta charset="UTF-8" />
   <title>Dashboard Admin • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
-  <!-- Font Awesome -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
-    crossorigin="anonymous" referrerpolicy="no-referrer">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="icon" href="/img/favinco.png" />
   <link rel="stylesheet" href="/css/dashboard.css" />
 </head>
-
 <body>
 
-  <!-- =========================
-🔝 TOPO
-========================= -->
+  <div class="noise"></div>
+
+  <!-- TOPO -->
   <header class="topbar">
-    <div class="title">
-      <h1><i class="fa-solid fa-chart-line"></i> Dashboard Administrativo</h1>
-      <span class="subtitle">Visão geral do sistema</span>
+    <div class="topbar-left">
+      <div class="logo-mark"><i class="fa-solid fa-bolt"></i></div>
+      <div>
+        <h1>Dashboard Admin</h1>
+        <span class="subtitle">ZapConnect · Visão geral do sistema</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <div class="live-dot"></div>
+      <span class="live-label">Ao vivo</span>
+      <button class="btn-refresh" onclick="loadDashboard()" title="Recarregar dados">
+        <i class="fa-solid fa-rotate-right"></i>
+      </button>
     </div>
   </header>
 
-  <!-- =========================
-📊 MÉTRICAS
-========================= -->
+  <!-- MÉTRICAS -->
   <section class="cards" id="stats">
-    <!-- preenchido via JS -->
+    <div class="card-skeleton"></div>
+    <div class="card-skeleton"></div>
+    <div class="card-skeleton"></div>
+    <div class="card-skeleton"></div>
+    <div class="card-skeleton"></div>
+    <div class="card-skeleton"></div>
   </section>
 
-  <!-- =========================
-🔍 FILTROS
-========================= -->
-  <section class="filters">
-    <div class="filter-group">
-      <i class="fa-solid fa-magnifying-glass"></i>
-      <input type="text" id="search" placeholder="Buscar por nome ou email">
+  <!-- GRÁFICOS ROW 1 -->
+  <section class="charts-grid">
+
+    <div class="chart-card span2">
+      <div class="chart-card-header">
+        <div>
+          <h3><i class="fa-solid fa-chart-bar"></i> Receita Mensal</h3>
+          <p class="chart-subtitle">MRR e novos clientes — últimos 7 meses</p>
+        </div>
+        <div class="legend">
+          <span class="leg-item"><span class="leg-dot" style="background:#4f6ef7"></span>Receita aprovada por mês</span>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:190px">
+        <canvas id="chart-revenue"></canvas>
+      </div>
     </div>
 
-    <select id="plan">
-      <option value="">Todos os planos</option>
-      <option value="free">Free</option>
-      <option value="starter">Starter</option>
-      <option value="pro">Pro</option>
-    </select>
+    <div class="chart-card span1">
+      <div class="chart-card-header">
+        <div>
+          <h3><i class="fa-solid fa-chart-pie"></i> Planos</h3>
+          <p class="chart-subtitle">Distribuição atual</p>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+        <div style="position:relative">
+          <div class="chart-wrap" style="height:140px;width:140px">
+            <canvas id="chart-donut"></canvas>
+          </div>
+          <div class="donut-center">
+            <div class="donut-big">67%</div>
+            <div class="donut-sm">Pro+Starter</div>
+          </div>
+        </div>
+        <div class="legend donut-legend" style="justify-content:center;flex-wrap:wrap">
+          <span class="leg-item"><span class="leg-dot" style="background:#a855f7"></span>Pro</span>
+          <span class="leg-item"><span class="leg-dot" style="background:#4f6ef7"></span>Starter</span>
+          <span class="leg-item"><span class="leg-dot" style="background:#64748b"></span>Free</span>
+        </div>
+      </div>
+    </div>
 
-    <select id="status">
-      <option value="">Todos os status</option>
-      <option value="active">Ativo</option>
-      <option value="trial">Trial</option>
-      <option value="past_due">Inadimplente</option>
-      <option value="cancelled">Cancelado</option>
-    </select>
+    <!-- GRÁFICOS ROW 2 -->
+    <div class="chart-card span1">
+      <div class="chart-card-header">
+        <div>
+          <h3><i class="fa-solid fa-filter"></i> Funil de Conversão</h3>
+          <p class="chart-subtitle">Ciclo de vida do usuário</p>
+        </div>
+      </div>
+      <div id="funnel-chart"></div>
+    </div>
 
-    <button id="export" class="btn-export">
-      <i class="fa-solid fa-file-export"></i>
-      Exportar CSV
-    </button>
+    <div class="chart-card span2">
+      <div class="chart-card-header">
+        <div>
+          <h3><i class="fa-solid fa-arrow-trend-up"></i> Novos Usuários / Dia</h3>
+          <p class="chart-subtitle">Últimas 4 semanas</p>
+        </div>
+      </div>
+      <div class="chart-wrap" style="height:145px">
+        <canvas id="chart-daily"></canvas>
+      </div>
+    </div>
+
+    <!-- GRÁFICOS ROW 3 -->
+    <div class="chart-card span2">
+      <div class="chart-card-header">
+        <div>
+          <h3><i class="fa-solid fa-calendar-days"></i> Atividade de Pagamentos</h3>
+          <p class="chart-subtitle">Últimas 7 semanas</p>
+        </div>
+      </div>
+      <div class="heatmap-wrap">
+        <div class="hm-days-col" id="hm-days"></div>
+        <div>
+          <div class="hm-grid" id="heatmap"></div>
+          <div class="hm-legend">
+            <span>Menos</span>
+            <span class="hm-swatch" style="background:rgba(79,110,247,0.1)"></span>
+            <span class="hm-swatch" style="background:rgba(79,110,247,0.3)"></span>
+            <span class="hm-swatch" style="background:rgba(79,110,247,0.6)"></span>
+            <span class="hm-swatch" style="background:#4f6ef7"></span>
+            <span>Mais</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="chart-card span1">
+      <div class="chart-card-header">
+        <div>
+          <h3><i class="fa-solid fa-triangle-exclamation"></i> Top Falhas</h3>
+          <p class="chart-subtitle">Clientes com mais erros</p>
+        </div>
+      </div>
+      <table class="mini-table">
+        <thead>
+          <tr>
+            <th>Cliente</th>
+            <th>Plano</th>
+            <th style="text-align:right">Falhas</th>
+          </tr>
+        </thead>
+        <tbody id="top-fails-table"></tbody>
+      </table>
+    </div>
+
   </section>
 
-  <!-- =========================
-👤 TABELA
-========================= -->
-  <section class="table-box">
-    <h2><i class="fa-solid fa-users"></i> Clientes</h2>
+  <!-- FILTROS -->
+  <section class="filters">
+    <div class="filter-group search-group">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input type="text" id="search" placeholder="Buscar por nome ou email…" autocomplete="off">
+      <button class="clear-search" id="clear-search" title="Limpar">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+    <div class="select-wrapper">
+      <i class="fa-solid fa-layer-group"></i>
+      <select id="plan">
+        <option value="">Todos os planos</option>
+        <option value="free">Free</option>
+        <option value="starter">Starter</option>
+        <option value="pro">Pro</option>
+      </select>
+    </div>
+    <div class="select-wrapper">
+      <i class="fa-solid fa-circle-half-stroke"></i>
+      <select id="status">
+        <option value="">Todos os status</option>
+        <option value="active">Ativo</option>
+        <option value="trial">Trial</option>
+        <option value="past_due">Inadimplente</option>
+        <option value="cancelled">Cancelado</option>
+      </select>
+    </div>
+    <div class="filter-actions">
+      <span class="result-count" id="result-count">— clientes</span>
+      <button id="export" class="btn-export">
+        <i class="fa-solid fa-file-export"></i>
+        Exportar CSV
+      </button>
+    </div>
+  </section>
 
+  <!-- TABELA -->
+  <section class="table-box">
+    <div class="table-header">
+      <h2><i class="fa-solid fa-users"></i> Clientes</h2>
+      <div class="table-meta" id="table-meta"></div>
+    </div>
     <div class="table-wrapper">
       <table>
         <thead>
           <tr>
-            <th>Nome</th>
+            <th data-sort="name">Nome <i class="fa-solid fa-sort"></i></th>
             <th>Email</th>
-            <th>Plano</th>
-            <th>Status</th>
-            <th>Último Pagamento</th>
+            <th data-sort="plan">Plano <i class="fa-solid fa-sort"></i></th>
+            <th data-sort="subscription_status">Status <i class="fa-solid fa-sort"></i></th>
+            <th data-sort="last_payment_at">Último Pagamento <i class="fa-solid fa-sort"></i></th>
             <th>Método</th>
-            <th>Falhas</th>
+            <th data-sort="failures">Falhas <i class="fa-solid fa-sort"></i></th>
           </tr>
         </thead>
         <tbody id="users">
-          <!-- preenchido via JS -->
+          <tr class="loading-row">
+            <td colspan="7">
+              <div class="spinner-wrap">
+                <div class="spinner"></div>
+                <span>Carregando dados…</span>
+              </div>
+            </td>
+          </tr>
         </tbody>
       </table>
     </div>
+    <div class="pagination" id="pagination"></div>
   </section>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <script src="/js/dashboard.js"></script>
 </body>
-
 </html>
