@@ -52,7 +52,8 @@ router.get("/dashboard-data", async (req, res) => {
       )
   `)).t;
 
-  // ── Receita mensal (últimos 7 meses) para o gráfico de barras ──
+  // ── Receita mensal (últimos 7 meses) ──
+  // payments.created_at é BIGINT (ms) — usa FROM_UNIXTIME(created_at / 1000)
   const monthlyRevenue = await db.all(`
     SELECT
       DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m') AS month,
@@ -64,18 +65,20 @@ router.get("/dashboard-data", async (req, res) => {
     ORDER BY month ASC
   `, [Date.now() - 7 * 30 * 24 * 60 * 60 * 1000]);
 
-  // ── Novos usuários por dia (últimos 28 dias) ──
+  // ── Novos pagantes por dia (últimos 28 dias) ──
+  // users não tem created_at — usa primeiro pagamento aprovado como proxy
   const dailyNewUsers = await db.all(`
     SELECT
-      DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d') AS day,
-      COUNT(*) AS count
-    FROM users
-    WHERE created_at >= ?
+      DATE_FORMAT(FROM_UNIXTIME(MIN(created_at) / 1000), '%Y-%m-%d') AS day,
+      COUNT(DISTINCT user_id) AS count
+    FROM payments
+    WHERE status = 'approved'
+      AND created_at >= ?
     GROUP BY day
     ORDER BY day ASC
   `, [Date.now() - 28 * 24 * 60 * 60 * 1000]);
 
-  // ── Pagamentos por dia (últimos 49 dias — 7 semanas) para o heatmap ──
+  // ── Pagamentos aprovados por dia (últimas 7 semanas — heatmap) ──
   const dailyPayments = await db.all(`
     SELECT
       DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d') AS day,
@@ -88,6 +91,7 @@ router.get("/dashboard-data", async (req, res) => {
   `, [Date.now() - 49 * 24 * 60 * 60 * 1000]);
 
   // ── Lista de usuários ──
+  // users não tem created_at — removido da SELECT para evitar erro
   const users = await db.all(`
     SELECT
       u.id,
@@ -95,7 +99,6 @@ router.get("/dashboard-data", async (req, res) => {
       u.email,
       u.plan,
       u.subscription_status,
-      u.created_at,
 
       (SELECT p.amount
        FROM payments p
