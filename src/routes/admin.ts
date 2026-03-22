@@ -61,8 +61,8 @@ router.get("/dashboard-data", async (req, res) => {
     FROM payments
     WHERE status = 'approved'
       AND created_at >= ?
-    GROUP BY month
-    ORDER BY month ASC
+    GROUP BY DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m')
+    ORDER BY DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m') ASC
   `, [Date.now() - 7 * 30 * 24 * 60 * 60 * 1000]);
 
   // ── Novos pagantes por dia (últimos 28 dias) ──
@@ -74,8 +74,8 @@ router.get("/dashboard-data", async (req, res) => {
     FROM payments
     WHERE status = 'approved'
       AND created_at >= ?
-    GROUP BY day
-    ORDER BY day ASC
+    GROUP BY DATE_FORMAT(FROM_UNIXTIME(MIN(created_at) / 1000), '%Y-%m-%d')
+    ORDER BY DATE_FORMAT(FROM_UNIXTIME(MIN(created_at) / 1000), '%Y-%m-%d') ASC
   `, [Date.now() - 28 * 24 * 60 * 60 * 1000]);
 
   // ── Pagamentos aprovados por dia (últimas 7 semanas — heatmap) ──
@@ -86,8 +86,8 @@ router.get("/dashboard-data", async (req, res) => {
     FROM payments
     WHERE status = 'approved'
       AND created_at >= ?
-    GROUP BY day
-    ORDER BY day ASC
+    GROUP BY DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d')
+    ORDER BY DATE_FORMAT(FROM_UNIXTIME(created_at / 1000), '%Y-%m-%d') ASC
   `, [Date.now() - 49 * 24 * 60 * 60 * 1000]);
 
   // ── Lista de usuários ──
