@@ -21,6 +21,12 @@ import { getChatAI, setChatAI } from "./services/chatAiService";
 import emailVerifyRoutes from "./routes/emailVerify";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
+import {
+  loginLimiter,
+  registerLimiter,
+  forgotPasswordLimiter,
+  resendEmailLimiter,
+} from "./middlewares/rateLimiter";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
@@ -841,7 +847,7 @@ app.post("/auth/reset-password", async (req, res) => {
   }
 });
 
-app.post("/auth/forgot-password", async (req, res) => {
+app.post("/auth/forgot-password", forgotPasswordLimiter, async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -866,7 +872,7 @@ app.post("/auth/forgot-password", async (req, res) => {
   }
 });
 
-app.post("/auth/resend-verify-email", authMiddleware, async (req, res) => {
+app.post("/auth/resend-verify-email", authMiddleware, resendEmailLimiter, async (req, res) => {
   try {
     const user = (req as any).user;
 
@@ -1350,7 +1356,7 @@ app.delete("/api/flows/delete", authMiddleware, async (req, res) => {
 
 // Registro
 
-app.post("/register", async (req, res) => {
+app.post("/register", registerLimiter, async (req, res) => {
   const { name, email, password, prompt } = req.body;
   if (requireFields(res, { name, email, password })) return;
 
@@ -1418,7 +1424,7 @@ app.post("/register", async (req, res) => {
 });
 
 // Login
-app.post("/auth/login", async (req, res) => {
+app.post("/auth/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   if (requireFields(res, { email, password })) return;
@@ -1706,3 +1712,4 @@ setInterval(() => {
 server.listen(3000, () => {
   console.log("🚀 Server online em http://localhost:3000");
 });
+ 
