@@ -869,6 +869,12 @@ function attachEvents(
             await client.startTyping(chatId);
           } catch { }
 
+          // 📡 Avisar o painel que a IA está digitando
+          try {
+            const { io } = await import("./server");
+            io.emit("typing:start", { chatId, userId, sessionName: shortName });
+          } catch { }
+
           typingTimeout = setTimeout(() => {
             try {
               client.stopTyping(chatId);
@@ -920,6 +926,12 @@ function attachEvents(
           // 🔴 GARANTE que para SEMPRE
           try {
             await client.stopTyping(chatId);
+          } catch { }
+
+          // 📡 Avisar o painel que a IA parou de digitar
+          try {
+            const { io } = await import("./server");
+            io.emit("typing:stop", { chatId, userId, sessionName: shortName });
           } catch { }
         }
       }, 1000);

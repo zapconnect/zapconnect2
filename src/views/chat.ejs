@@ -5,32 +5,29 @@
   <meta charset="UTF-8" />
   <title>Chats • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" href="/img/favinco.png" />
   <link rel="stylesheet" href="/css/chats.css" />
 
-  <!-- 🔒 ENVIA ID E TOKEN PARA O JS -->
+  <!-- ✅ Variáveis definidas ANTES do chat.js carregar -->
   <script>
     window.USER_ID = "<%= user.id %>";
     window.USER_TOKEN = "<%= user.token %>";
+    window.SESSION_NAME = "<%= typeof sessionName !== 'undefined' ? sessionName : '' %>";
   </script>
 </head>
-<link rel="icon" href="/img/favinco.png" />
 
 <body>
   <div class="wrap">
 
     <!-- SIDEBAR -->
     <aside class="sidebar">
-      <div class="sidebar-header" style="display:flex;align-items:center;justify-content:space-between;">
+      <div class="sidebar-header">
         <h1>WhatsApp • Painel</h1>
-
-        <a href="/painel"
-          style="background:#444;color:#fff;text-decoration:none;font-size:14px;padding:6px 12px;border-radius:6px;cursor:pointer;">
-          ← Voltar
-        </a>
+        <a href="/painel" class="btn-voltar">← Voltar</a>
       </div>
 
       <div class="search">
-        <input id="searchBox" placeholder="Pesquisar ou começar uma nova conversa" />
+        <input id="searchBox" placeholder="Pesquisar ou começar uma nova conversa" autocomplete="off" />
       </div>
 
       <div id="chatlist" class="chatlist"></div>
@@ -39,48 +36,26 @@
     <!-- CHAT -->
     <section class="chat">
 
-      <!-- 🚨 ALERTA MODO HUMANO ATIVO -->
-      <div id="humanAlert" style="display:none;background:#ffeb3b;color:#000;padding:10px;
-  font-weight:bold;text-align:center;border-bottom:2px solid #c9b200;">
+      <!-- ALERTA MODO HUMANO ATIVO -->
+      <div id="humanAlert" style="display:none;">
         👤 Atendimento humano ativo — o bot está pausado
         <br>
-        <span id="humanTimer" style="font-size:14px;font-weight:normal;"></span>
+        <span id="humanTimer"></span>
       </div>
-
 
       <header class="chat-header">
         <div class="chat-title">
           <h2 id="chatTitle">Selecione um chat…</h2>
           <span id="tagHuman" class="tag-human" style="display:none;">HUMANO</span>
-
-          <!-- 🔥 TAG IA DESLIGADA -->
-          <span id="tagAiOff" style="display:none;background:#ff4444;color:#fff;
-              padding:4px 8px;border-radius:4px;font-size:12px;margin-left:10px;">
-            IA DESLIGADA
-          </span>
+          <span id="tagAiOff" class="tag-ai-off" style="display:none;">IA DESLIGADA</span>
         </div>
 
-        <div class="header-actions" id="humanButtons" style="display:flex;align-items:center;gap:10px;">
-          <!-- 🔥 status do pipeline -->
+        <div class="header-actions" id="humanButtons" style="display:none;">
           <span id="pipelineStatus" class="pipeline-status"></span>
 
-          <!-- BOTÕES HUMAN -->
-          <button id="btnHumanOn"
-            style="background:#25d366;color:#000;border:none;padding:6px 12px;border-radius:8px;cursor:pointer;">
-            👤 Atender humano
-          </button>
-
-          <!-- OBS: começa DESABILITADO -->
-          <button id="btnHumanOff" disabled
-            style="background:#555;color:#fff;border:none;padding:6px 12px;border-radius:8px;">
-            🤖 Voltar para bot
-          </button>
-
-          <!-- 🔥 INTERRUPTOR IA POR CHAT -->
-          <button id="btnAiToggle" style="background:#0a84ff;color:#fff;border:none;padding:6px 12px;
-          border-radius:8px;cursor:pointer;display:none;">
-            🔵 IA ligada
-          </button>
+          <button id="btnHumanOn">👤 Atender humano</button>
+          <button id="btnHumanOff" disabled>🤖 Voltar para bot</button>
+          <button id="btnAiToggle" style="display:none;">🔵 IA ligada</button>
         </div>
       </header>
 
@@ -89,40 +64,27 @@
       <footer class="chat-footer">
         <div class="input-wrapper">
           <button class="btn-emoji">😊</button>
-          <textarea id="inputMsg" class="inputMsg" placeholder="Digite uma mensagem"></textarea>
+          <textarea id="inputMsg" class="inputMsg" placeholder="Digite uma mensagem" rows="1"></textarea>
           <button id="btnSend" class="btn-send">➤</button>
         </div>
       </footer>
-    </section>
 
+    </section>
   </div>
 
-  <!-- ========================================= -->
   <!-- MODAL DE EMOJIS -->
-  <!-- ========================================= -->
   <div id="emojiModal" class="emoji-modal">
     <div class="emoji-modal-content">
       <div class="emoji-header">
         <span>😀 Emojis</span>
         <button id="closeEmoji" class="close-emoji">✖</button>
       </div>
-
       <div class="emoji-grid" id="emojiGrid"></div>
     </div>
   </div>
 
-  <!-- SOCKET.IO + CHAT SCRIPT FINAL -->
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/chat.js"></script>
-  <script>
-    window.USER_ID = "<%= user.id %>";
-    window.USER_TOKEN = "<%= user.token %>";
-    window.SESSION_NAME = "<%= typeof sessionName !== 'undefined' ? sessionName : '' %>";
-  </script>
-
-
-
-
 </body>
 
 </html>

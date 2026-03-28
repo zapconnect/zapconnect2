@@ -85,9 +85,50 @@ function ensureChat(chatId, name) {
             ai: true,
             msgs: [],
             pic: null,
-            pipeline: "Novo"
+            pipeline: "Novo",
+            lastMsg: null,  // { body, fromMe, timestamp, isMedia, mimetype }
+            unread: 0       // contador de mensagens não lidas
         };
     }
+}
+
+/* ==========================================================
+   🔤 PREVIEW DA ÚLTIMA MENSAGEM
+   ========================================================== */
+function getLastMsgPreview(chat) {
+    const msg = chat.lastMsg;
+    if (!msg) return "";
+
+    const prefix = msg.fromMe ? "Você: " : "";
+
+    if (msg.isMedia) {
+        const icons = {
+            "image": "📷 Foto",
+            "audio": "🎵 Áudio",
+            "video": "🎥 Vídeo"
+        };
+        const type = Object.keys(icons).find(k => (msg.mimetype || "").startsWith(k)) || "document";
+        return prefix + (icons[type] || "📄 Arquivo");
+    }
+
+    const text = (msg.body || "").trim();
+    return prefix + (text.length > 38 ? text.slice(0, 38) + "…" : text);
+}
+
+function fmtLastTime(ts) {
+    if (!ts) return "";
+    const now = new Date();
+    const d = new Date(ts);
+
+    if (d.toDateString() === now.toDateString()) {
+        return d.getHours().toString().padStart(2, "0") + ":" + d.getMinutes().toString().padStart(2, "0");
+    }
+
+    const yesterday = new Date(now);
+    yesterday.setDate(now.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return "Ontem";
+
+    return d.getDate().toString().padStart(2, "0") + "/" + (d.getMonth() + 1).toString().padStart(2, "0");
 }
 
 /* ==========================================================
@@ -110,19 +151,27 @@ function renderChatList(filter = "") {
         div.dataset.chatId = id;
         div.onclick = () => selectChat(id);
 
+        const preview = getLastMsgPreview(chats[id]);
+        const lastTime = fmtLastTime(chats[id].lastMsg?.timestamp);
+        const unread = chats[id].unread || 0;
+
         div.innerHTML = `
             <img class="avatar" src="${chats[id].pic || "/img/no-photo.png"}">
             <div class="chat-infos">
-                <div class="chat-name">${chats[id].name}</div>
+                <div class="chat-name-row">
+                    <div class="chat-name">${chats[id].name}</div>
+                    <div class="chat-time">${lastTime}</div>
+                </div>
+                <div class="chat-preview-row">
+                    <div class="chat-preview">${preview}</div>
+                    ${unread > 0 ? `<div class="chat-unread">${unread > 99 ? "99+" : unread}</div>` : ""}
+                </div>
             </div>
         `;
         cont.appendChild(div);
     });
 }
 
-/* ==========================================================
-   📌 SELECIONAR CHAT
-   ========================================================== */
 /* ==========================================================
    📌 SELECIONAR CHAT + RECARREGAR MODO HUMANO + TIMER
    ========================================================== */
@@ -131,6 +180,12 @@ async function selectChat(chatId) {
 
     // Solicita mensagens ao servidor
     socket.emit("abrir_chat", chatId);
+
+    // Zerar contador de não lidas ao abrir o chat
+    if (chats[chatId]) {
+        chats[chatId].unread = 0;
+        renderChatList();
+    }
 
     // Marca visualmente o chat ativo
     document.querySelectorAll(".chat-item").forEach(n => n.classList.remove("active"));
@@ -155,12 +210,12 @@ async function selectChat(chatId) {
     if (chats[chatId].human && chats[chatId].expire) {
         const diff = chats[chatId].expire - Date.now();
         if (diff > 0) {
-            startHumanTimer(diff);   // retomar tempo restante
+            startHumanTimer(diff);
         } else {
-            stopHumanTimer();        // expirado → não mostra nada
+            stopHumanTimer();
         }
     } else {
-        stopHumanTimer();            // sem modo humano
+        stopHumanTimer();
     }
     // ================================================
 
@@ -185,8 +240,6 @@ async function selectChat(chatId) {
         pipelineStatus.innerHTML = "";
     }
 }
-
-
 
 /* ==========================================================
    💬 RENDERIZAR MENSAGENS + MIDIAS
@@ -254,14 +307,13 @@ btnHumanOn.addEventListener("click", () => {
         sessionName: window.SESSION_NAME
     });
 
-
     chats[currentChat].human = true;
     btnHumanOn.disabled = true;
     btnHumanOff.disabled = false;
     tagHuman.style.display = "inline-flex";
     humanAlert.style.display = "block";
 
-    startHumanTimer(); // ⏱ Inicia contagem aqui
+    startHumanTimer();
     renderChatList();
 });
 
@@ -274,7 +326,6 @@ btnHumanOff.addEventListener("click", () => {
         sessionName: window.SESSION_NAME
     });
 
-
     chats[currentChat].human = false;
     btnHumanOn.disabled = false;
     btnHumanOff.disabled = true;
@@ -282,18 +333,14 @@ btnHumanOff.addEventListener("click", () => {
     humanAlert.style.display = "none";
     btnHumanOff.style.cursor = "pointer";
 
-    stopHumanTimer(); // ⛔ garantir parada
+    stopHumanTimer();
     renderChatList();
 });
-
-
 
 socket.on("human_state_changed", ({ chatId, state, expireAt }) => {
     if (!chats[chatId]) return;
 
     chats[chatId].human = state;
-
-    // 🔥 salva expiração real
     chats[chatId].expire = expireAt || null;
 
     if (currentChat === chatId) {
@@ -313,8 +360,6 @@ socket.on("human_state_changed", ({ chatId, state, expireAt }) => {
 
     renderChatList();
 });
-
-
 
 /* ==========================================================
    💌 ENVIAR MENSAGEM DO ADMIN
@@ -356,7 +401,6 @@ btnAiToggle.addEventListener("click", () => {
     renderChatList();
 });
 
-
 /* ==========================================================
    🛰️ SOCKET EVENTOS
    ========================================================== */
@@ -368,25 +412,33 @@ socket.on("lista_chats", lista => {
         ensureChat(id, extrairNome(chat));
         chats[id].human = chat.human === true;
         chats[id].ai = chat.ai;
-
-        // 🕒 Salva expiração
         chats[id].expire = chat.expire || null;
     });
     renderChatList();
 });
 
-
 socket.on("mensagens_chat", msgs => {
     if (!currentChat) return;
     chats[currentChat].msgs = msgs || [];
 
-    // 🔥 GARANTIR QUE O STATUS DA IA POR CHAT SEJA ATUALIZADO JUNTO
+    // Atualizar preview com a última mensagem do histórico
+    if (msgs && msgs.length > 0) {
+        const last = msgs[msgs.length - 1];
+        chats[currentChat].lastMsg = {
+            body: last.body,
+            fromMe: resolveIsFromMe(last),
+            timestamp: last.timestamp,
+            isMedia: last.isMedia || !!last.mimetype,
+            mimetype: last.mimetype || ""
+        };
+        renderChatList();
+    }
+
+    // Garantir que o status da IA por chat seja atualizado junto
     socket.emit("chat_ai_state_request", currentChat);
 
     renderMessages(currentChat);
 });
-
-
 
 socket.on("profilePic", data => {
     if (!data.chatId) return;
@@ -401,7 +453,25 @@ socket.on("newMessage", msg => {
     msg.timestamp = msg.timestamp || Date.now();
     msg._isFromMe = resolveIsFromMe(msg) || msg.fromBot === true;
     chats[msg.chatId].msgs.push(msg);
-    if (currentChat === msg.chatId) renderMessages(msg.chatId);
+
+    // Atualizar preview da última mensagem
+    chats[msg.chatId].lastMsg = {
+        body: msg.body,
+        fromMe: msg._isFromMe,
+        timestamp: msg.timestamp,
+        isMedia: msg.isMedia,
+        mimetype: msg.mimetype || ""
+    };
+
+    // Incrementar não lidas só se o chat não estiver aberto
+    if (currentChat !== msg.chatId) {
+        chats[msg.chatId].unread = (chats[msg.chatId].unread || 0) + 1;
+    }
+
+    if (currentChat === msg.chatId) {
+        hideTyping(); // remove indicador ao receber resposta real
+        renderMessages(msg.chatId);
+    }
     renderChatList();
 });
 
@@ -412,6 +482,54 @@ socket.on("chat_ai_state", ({ chatId, state }) => {
     renderChatList();
 });
 
+
+/* ==========================================================
+   ✍️ INDICADOR "DIGITANDO..."
+   ========================================================== */
+let typingTimerCleanup = null;
+
+function showTyping(chatId) {
+    if (currentChat !== chatId) return;
+
+    // Remove indicador anterior se existir
+    hideTyping();
+
+    const box = document.getElementById("messages");
+    const row = document.createElement("div");
+    row.className = "msg-row from-bot";
+    row.id = "typing-indicator";
+
+    row.innerHTML = `
+        <div class="msg-bubble typing-bubble">
+            <div class="typing-dots">
+                <span></span><span></span><span></span>
+            </div>
+        </div>
+    `;
+
+    box.appendChild(row);
+    box.scrollTop = box.scrollHeight;
+
+    // Segurança: remove automaticamente após 15s caso o stop não chegue
+    typingTimerCleanup = setTimeout(() => hideTyping(), 15000);
+}
+
+function hideTyping() {
+    if (typingTimerCleanup) {
+        clearTimeout(typingTimerCleanup);
+        typingTimerCleanup = null;
+    }
+    const el = document.getElementById("typing-indicator");
+    if (el) el.remove();
+}
+
+socket.on("typing:start", ({ chatId }) => {
+    showTyping(chatId);
+});
+
+socket.on("typing:stop", ({ chatId }) => {
+    if (currentChat === chatId) hideTyping();
+});
 
 /* ==========================================================
    🔎 PESQUISA
@@ -443,6 +561,7 @@ closeEmoji.addEventListener("click", () => emojiModal.style.display = "none");
 emojiModal.addEventListener("click", e => {
     if (e.target === emojiModal) emojiModal.style.display = "none";
 });
+
 /* ==========================================================
    ⏱️ TIMER DO MODO HUMANO (CONTAGEM REGRESSIVA)
    ========================================================== */
@@ -453,7 +572,6 @@ function startHumanTimer(ms = 5 * 60 * 1000) {
     const span = document.getElementById("humanTimer");
     if (!span) return;
 
-    // Hora que termina
     humanTimeoutDate = Date.now() + ms;
 
     clearInterval(intervalHumanTimer);
