@@ -79,6 +79,7 @@
             <span class="dot dot-novo"></span>
             <span>Novo</span>
             <span class="count" id="count-Novo">0</span>
+            <span class="col-value" id="value-Novo"></span>
           </div>
           <div class="kanban-dropzone" data-stage="Novo"></div>
         </div>
@@ -89,6 +90,7 @@
             <span class="dot dot-qualificando"></span>
             <span>Qualificando</span>
             <span class="count" id="count-Qualificando">0</span>
+            <span class="col-value" id="value-Qualificando"></span>
           </div>
           <div class="kanban-dropzone" data-stage="Qualificando"></div>
         </div>
@@ -99,6 +101,7 @@
             <span class="dot dot-negociacao"></span>
             <span>Negociação</span>
             <span class="count" id="count-Negociação">0</span>
+            <span class="col-value" id="value-Negociação"></span>
           </div>
           <div class="kanban-dropzone" data-stage="Negociação"></div>
         </div>
@@ -109,6 +112,7 @@
             <span class="dot dot-fechado"></span>
             <span>Fechado</span>
             <span class="count" id="count-Fechado">0</span>
+            <span class="col-value" id="value-Fechado"></span>
           </div>
           <div class="kanban-dropzone" data-stage="Fechado"></div>
         </div>
@@ -119,6 +123,7 @@
             <span class="dot dot-perdido"></span>
             <span>Perdido</span>
             <span class="count" id="count-Perdido">0</span>
+            <span class="col-value" id="value-Perdido"></span>
           </div>
           <div class="kanban-dropzone" data-stage="Perdido"></div>
         </div>
@@ -144,6 +149,9 @@
 
           <label>Cidade / Estado</label>
           <input id="modalCity">
+
+          <label>Valor do negócio (R$)</label>
+          <input id="modalValue" type="number" min="0" step="0.01" placeholder="0,00">
 
           <label>Estágio</label>
           <select id="modalStage">

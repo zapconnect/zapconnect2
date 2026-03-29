@@ -23,6 +23,16 @@ export async function initDB() {
   await pool.query("SELECT 1");
   console.log("✅ MySQL conectado");
 
+  // Migração: adicionar deal_value se não existir (seguro rodar múltiplas vezes)
+  try {
+    await pool.query(
+      "ALTER TABLE crm ADD COLUMN deal_value DECIMAL(10,2) DEFAULT 0"
+    );
+    console.log("✅ Coluna deal_value adicionada ao CRM");
+  } catch {
+    // Coluna já existe — ignorar
+  }
+
   // ===============================
   // 🔧 CRIAÇÃO DAS TABELAS (MARIA DB SAFE)
   // ===============================
@@ -100,6 +110,7 @@ export async function initDB() {
       stage VARCHAR(100) DEFAULT 'Novo',
       last_seen BIGINT,
       avatar TEXT,
+      deal_value DECIMAL(10,2) DEFAULT 0,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,

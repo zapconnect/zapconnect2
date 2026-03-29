@@ -53,17 +53,56 @@
         <div class="header-actions" id="humanButtons" style="display:none;">
           <span id="pipelineStatus" class="pipeline-status"></span>
 
-          <button id="btnHumanOn">👤 Atender humano</button>
+          <div class="human-on-group">
+            <button id="btnHumanOn">👤 Atender</button>
+            <select id="humanDuration" class="human-duration-select" title="Duração do atendimento">
+              <option value="300000">5 min</option>
+              <option value="900000">15 min</option>
+              <option value="1800000">30 min</option>
+              <option value="null">Sem limite</option>
+            </select>
+          </div>
           <button id="btnHumanOff" disabled>🤖 Voltar para bot</button>
           <button id="btnAiToggle" style="display:none;">🔵 IA ligada</button>
+          <button id="btnClearAi" title="Limpar histórico da IA" style="display:none;">🧹 Resetar IA</button>
         </div>
+
+        <button id="btnSearch" class="btn-search-toggle" title="Buscar na conversa">🔍</button>
       </header>
+
+      <!-- Barra de busca -->
+      <div id="searchBar" class="search-bar" style="display:none;">
+        <div class="search-bar-inner">
+          <input id="searchInput" class="search-bar-input" placeholder="Buscar na conversa..." autocomplete="off" />
+          <span id="searchCount" class="search-count"></span>
+          <button id="searchPrev" class="search-nav" title="Anterior">↑</button>
+          <button id="searchNext" class="search-nav" title="Próximo">↓</button>
+          <button id="searchClose" class="search-close" title="Fechar">✕</button>
+        </div>
+      </div>
 
       <main id="messages" class="messages"></main>
 
+      <!-- Preview do arquivo selecionado -->
+      <div id="filePreview" class="file-preview" style="display:none;">
+        <div class="file-preview-inner">
+          <img id="filePreviewImg" src="" alt="" style="display:none;" />
+          <div id="filePreviewDoc" class="file-preview-doc" style="display:none;">
+            <span class="file-preview-icon">📄</span>
+            <span id="filePreviewName"></span>
+          </div>
+          <button id="fileClear" class="file-clear" title="Remover arquivo">✕</button>
+        </div>
+      </div>
+
       <footer class="chat-footer">
         <div class="input-wrapper">
-          <button class="btn-emoji">😊</button>
+          <button class="btn-emoji" title="Emojis">😊</button>
+
+          <!-- Input de arquivo oculto -->
+          <input type="file" id="fileInput" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt" style="display:none;" />
+          <button class="btn-attach" id="btnAttach" title="Anexar arquivo">📎</button>
+
           <textarea id="inputMsg" class="inputMsg" placeholder="Digite uma mensagem" rows="1"></textarea>
           <button id="btnSend" class="btn-send">➤</button>
         </div>

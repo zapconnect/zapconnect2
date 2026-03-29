@@ -306,7 +306,7 @@ function clearSessionMemory(full: string) {
 // ===========================
 // 👤 MODO HUMANO POR INATIVIDADE (5 MIN) — MULTI-SESSÃO
 // ===========================
-const HUMAN_INACTIVITY_MS = 5 * 60 * 1000;
+const HUMAN_INACTIVITY_DEFAULT_MS = 5 * 60 * 1000; // padrão: 5 min
 
 // true = humano ativo (IA bloqueada)
 export const chatHumanLock = new Map<string, boolean>();
@@ -316,6 +316,7 @@ export const chatHumanTimer = new Map<string, NodeJS.Timeout>();
 
 // último timestamp de atividade do cliente
 export const chatHumanLastActivity = new Map<string, number>();
+export const chatHumanDuration    = new Map<string, number | null>(); // null = sem limite
 
 function getHumanKey(
   userId: string | number,
@@ -332,23 +333,27 @@ function getHumanKey(
 export function enableHumanTemporarily(
   userId: string | number,
   sessionName: string,
-  chatId: string
+  chatId: string,
+  durationMs: number | null = HUMAN_INACTIVITY_DEFAULT_MS  // null = sem limite
 ) {
   const key = getHumanKey(userId, sessionName, chatId);
 
   chatHumanLock.set(key, true);
   chatHumanLastActivity.set(key, Date.now());
+  chatHumanDuration.set(key, durationMs);
 
   if (chatHumanTimer.has(key)) {
     clearTimeout(chatHumanTimer.get(key)!);
     chatHumanTimer.delete(key);
   }
 
-  const timer = setTimeout(() => {
-    tryDisableHumanByInactivity(userId, sessionName, chatId);
-  }, HUMAN_INACTIVITY_MS);
-
-  chatHumanTimer.set(key, timer);
+  // Só agenda expiração se tiver duração definida
+  if (durationMs !== null) {
+    const timer = setTimeout(() => {
+      tryDisableHumanByInactivity(userId, sessionName, chatId);
+    }, durationMs);
+    chatHumanTimer.set(key, timer);
+  }
 
   // ✅ MENSAGEM AUTOMÁTICA NO WHATSAPP
   sendSystemMessage(
@@ -364,12 +369,12 @@ export function enableHumanTemporarily(
       userId,
       sessionName,
       state: true,
-      expireAt: Date.now() + HUMAN_INACTIVITY_MS
+      expireAt: durationMs !== null ? Date.now() + durationMs : null
     });
 
   } catch { }
 
-  console.log(`👤 MODO HUMANO ATIVADO: ${key}`);
+  console.log(`👤 MODO HUMANO ATIVADO: ${key} | duração: ${durationMs === null ? "sem limite" : durationMs / 60000 + "min"}`);
 }
 
 
@@ -395,7 +400,7 @@ export function registerHumanActivity(
 
   const timer = setTimeout(() => {
     tryDisableHumanByInactivity(userId, sessionName, chatId);
-  }, HUMAN_INACTIVITY_MS);
+  }, HUMAN_INACTIVITY_DEFAULT_MS);
 
   chatHumanTimer.set(key, timer);
 
@@ -406,7 +411,7 @@ export function registerHumanActivity(
       userId,
       sessionName,
       state: true,
-      expireAt: Date.now() + HUMAN_INACTIVITY_MS,
+      expireAt: Date.now() + HUMAN_INACTIVITY_DEFAULT_MS,
     });
   } catch { }
 }
@@ -426,8 +431,8 @@ function tryDisableHumanByInactivity(
   const inactiveFor = Date.now() - last;
 
   // ainda não bateu 5 min -> recalcula tempo restante
-  if (inactiveFor < HUMAN_INACTIVITY_MS) {
-    const remaining = HUMAN_INACTIVITY_MS - inactiveFor;
+  if (inactiveFor < HUMAN_INACTIVITY_DEFAULT_MS) {
+    const remaining = HUMAN_INACTIVITY_DEFAULT_MS - inactiveFor;
 
     if (chatHumanTimer.has(key)) {
       clearTimeout(chatHumanTimer.get(key)!);

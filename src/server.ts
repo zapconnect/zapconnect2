@@ -18,15 +18,10 @@ import { sendResetPasswordEmail } from "./utils/sendResetPasswordEmail";
 
 import adminRoutes from "./routes/admin";
 import { getChatAI, setChatAI } from "./services/chatAiService";
+import { stopChatSession } from "./service/google";
 import emailVerifyRoutes from "./routes/emailVerify";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
-import {
-  loginLimiter,
-  registerLimiter,
-  forgotPasswordLimiter,
-  resendEmailLimiter,
-} from "./middlewares/rateLimiter";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
@@ -57,6 +52,7 @@ import {
   chatHumanLock,
   cancelAIDebounce,
   chatHumanLastActivity,
+  chatHumanDuration,
 } from "./wppManager";
 
 
@@ -131,6 +127,7 @@ app.set("views", path.join(process.cwd(), "src", "views"));
 export const server = http.createServer(app);
 export const io = new Server(server, {
   cors: { origin: true, credentials: true },
+  maxHttpBufferSize: 50 * 1024 * 1024, // 50MB — permite arquivos grandes via socket
 });
 
 io.on("connection", (socket) => {
@@ -169,19 +166,19 @@ io.on("connection", (socket) => {
     io.emit("chat_ai_state", { chatId, state: true });
   });
 
-  socket.on("admin_send_message", async ({ chatId, body }) => {
+  socket.on("admin_send_message", async ({ chatId, body, file, filename, mimetype }) => {
     try {
       const userId = socket.handshake.auth?.userId;
-      if (!userId || !chatId || !body) return;
+      if (!userId || !chatId) return;
+      if (!body && !file) return;
 
       const db = getDB();
 
-      // Buscar sessão conectada do usuário
       const session = await db.get(
         `SELECT session_name
-       FROM sessions
-       WHERE user_id = ? AND status = 'connected'
-       LIMIT 1`,
+         FROM sessions
+         WHERE user_id = ? AND status = 'connected'
+         LIMIT 1`,
         [userId]
       );
 
@@ -198,10 +195,26 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // 🔥 ENVIA PRO WHATSAPP REAL
+      // 📎 ENVIO DE ARQUIVO
+      if (file && mimetype && filename) {
+        const dataUrl = `data:${mimetype};base64,${file}`;
+        await client.sendFile(chatId, dataUrl, filename, body || "");
+
+        io.to(socket.id).emit("newMessage", {
+          chatId,
+          body: file,
+          mimetype,
+          isMedia: true,
+          fromMe: true,
+          _isFromMe: true,
+          timestamp: Date.now()
+        });
+        return;
+      }
+
+      // 💬 ENVIO DE TEXTO
       await client.sendText(chatId, body);
 
-      // 🔄 Envia de volta para o painel como mensagem "fromMe"
       io.to(socket.id).emit("newMessage", {
         chatId,
         body,
@@ -215,7 +228,8 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("chat_human_state", ({ chatId, state, sessionName }) => {
+  socket.on("chat_human_state", (data: any) => {
+    const { chatId, state, sessionName } = data;
     const userId = socket.handshake.auth?.userId;
     if (!userId || !chatId || !sessionName) return;
 
@@ -223,8 +237,13 @@ io.on("connection", (socket) => {
     const chatKey = `${fullKey}::${chatId}`;
 
     if (state === true) {
-      // 👤 ativa humano (já cria timer + emite evento)
-      enableHumanTemporarily(userId, sessionName, chatId);
+      // 👤 ativa humano com duração configurável
+      // durationMs: número em ms ou null (sem limite)
+      const durationMs = (typeof data.durationMs === "number")
+        ? data.durationMs
+        : (data.durationMs === null ? null : 5 * 60 * 1000);
+
+      enableHumanTemporarily(userId, sessionName, chatId, durationMs);
 
       // 🔥 cancela IA já armada
       cancelAIDebounce(chatKey);
@@ -316,10 +335,16 @@ io.on("connection", (socket) => {
             // 🤖 IA por chat (você pode melhorar depois)
             ai: true,
 
-            // ⏱ expire real (timestamp final)
-            expire: isHuman
-              ? ((last || Date.now()) + 5 * 60 * 1000)
-              : null,
+            // ⏱ expire real usando duração configurada pelo operador
+            expire: (() => {
+              if (!isHuman) return null;
+              const fullKey2 = `USER${userId}_${session.session_name}`;
+              const humanKey2 = `${fullKey2}::${chatId}`;
+              const dur = chatHumanDuration.get(humanKey2);
+              if (dur === null) return null; // sem limite
+              const duration = dur ?? 5 * 60 * 1000;
+              return (last || Date.now()) + duration;
+            })(),
           };
         });
 
@@ -409,6 +434,29 @@ io.on("connection", (socket) => {
    * ❌ DISCONNECT
    * =========================================================
    */
+  // 🧹 LIMPAR HISTÓRICO DA IA (GEMINI) POR CHAT
+  socket.on("ai:clear_history", async ({ chatId }) => {
+    try {
+      const userId = socket.handshake.auth?.userId;
+      if (!userId || !chatId) return;
+
+      const db = getDB();
+      const session = await db.get(
+        `SELECT session_name FROM sessions WHERE user_id = ? AND status = 'connected' LIMIT 1`,
+        [userId]
+      );
+
+      if (!session) return;
+
+      stopChatSession(Number(userId), session.session_name, chatId);
+
+      socket.emit("ai:history_cleared", { chatId });
+      console.log(`🧹 Histórico Gemini limpo — user:${userId} chat:${chatId}`);
+    } catch (err) {
+      console.error("❌ Erro ao limpar histórico IA:", err);
+    }
+  });
+
   socket.on("disconnect", () => {
     console.log("❌ Socket desconectado:", socket.id);
   });
@@ -847,7 +895,7 @@ app.post("/auth/reset-password", async (req, res) => {
   }
 });
 
-app.post("/auth/forgot-password", forgotPasswordLimiter, async (req, res) => {
+app.post("/auth/forgot-password", async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -872,7 +920,7 @@ app.post("/auth/forgot-password", forgotPasswordLimiter, async (req, res) => {
   }
 });
 
-app.post("/auth/resend-verify-email", authMiddleware, resendEmailLimiter, async (req, res) => {
+app.post("/auth/resend-verify-email", authMiddleware, async (req, res) => {
   try {
     const user = (req as any).user;
 
@@ -1216,11 +1264,11 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
     const user = (req as any).user;
     const db = getDB();
 
-    const { name, phone, citystate, stage, tags, notes } = req.body;
+    const { name, phone, citystate, stage, tags, notes, deal_value } = req.body;
 
     await db.run(
-      `INSERT INTO crm (user_id, name, phone, citystate, stage, tags, notes)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO crm (user_id, name, phone, citystate, stage, tags, notes, deal_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         user.id,
         name,
@@ -1228,7 +1276,8 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
         citystate || "",
         stage || "Novo",
         tags || "[]",
-        notes || "[]"
+        notes || "[]",
+        Number(deal_value) || 0
       ]
     );
 
@@ -1240,18 +1289,47 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
 });
 
 
+// Deletar cliente
+app.delete("/api/crm/delete/:id", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { id } = req.params;
+
+    if (!id) return res.status(400).json({ ok: false, error: "ID ausente" });
+
+    const db = getDB();
+
+    // Garante que só o dono pode deletar
+    const existing = await db.get(
+      `SELECT id FROM crm WHERE id = ? AND user_id = ?`,
+      [id, user.id]
+    );
+
+    if (!existing) {
+      return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+    }
+
+    await db.run(`DELETE FROM crm WHERE id = ? AND user_id = ?`, [id, user.id]);
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("❌ Erro ao deletar cliente CRM:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
+  }
+});
+
 // Atualizar cliente
 app.put("/api/crm/update", authMiddleware, async (req, res) => {
   try {
     const db = getDB();
 
-    const { id, name, phone, citystate, stage, tags, notes } = req.body;
+    const { id, name, phone, citystate, stage, tags, notes, deal_value } = req.body;
 
     if (!id) return res.json({ ok: false, error: "ID ausente" });
 
     await db.run(
       `UPDATE crm 
-       SET name = ?, phone = ?, citystate = ?, stage = ?, tags = ?, notes = ?
+       SET name = ?, phone = ?, citystate = ?, stage = ?, tags = ?, notes = ?, deal_value = ?
        WHERE id = ?`,
       [
         name,
@@ -1260,6 +1338,7 @@ app.put("/api/crm/update", authMiddleware, async (req, res) => {
         stage || "Novo",
         tags || "[]",
         notes || "[]",
+        Number(deal_value) || 0,
         id
       ]
     );
@@ -1356,7 +1435,7 @@ app.delete("/api/flows/delete", authMiddleware, async (req, res) => {
 
 // Registro
 
-app.post("/register", registerLimiter, async (req, res) => {
+app.post("/register", async (req, res) => {
   const { name, email, password, prompt } = req.body;
   if (requireFields(res, { name, email, password })) return;
 
@@ -1424,7 +1503,7 @@ app.post("/register", registerLimiter, async (req, res) => {
 });
 
 // Login
-app.post("/auth/login", loginLimiter, async (req, res) => {
+app.post("/auth/login", async (req, res) => {
   const { email, password } = req.body;
 
   if (requireFields(res, { email, password })) return;
@@ -1712,4 +1791,3 @@ setInterval(() => {
 server.listen(3000, () => {
   console.log("🚀 Server online em http://localhost:3000");
 });
- 

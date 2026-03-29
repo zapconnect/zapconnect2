@@ -36,7 +36,9 @@ const modalAddTag = document.getElementById("modalAddTag");
 const modalNoteText = document.getElementById("modalNoteText");
 const modalAddNote = document.getElementById("modalAddNote");
 
-const modalSave = document.getElementById("modalSave");
+const modalSave   = document.getElementById("modalSave");
+const modalValue  = document.getElementById("modalValue");
+const modalDelete = document.getElementById("modalDelete");
 const modalCancel = document.getElementById("modalCancel");
 const clientModal = document.getElementById("clientModal");
 const closeModalBtn = document.getElementById("closeClientModal");
@@ -130,6 +132,7 @@ function renderBoard() {
 
     const search = (searchInput?.value || "").toLowerCase();
     const counts = { Novo: 0, Qualificando: 0, "Negociação": 0, Fechado: 0, Perdido: 0 };
+    const values = { Novo: 0, Qualificando: 0, "Negociação": 0, Fechado: 0, Perdido: 0 };
 
     clients.forEach(c => {
         const stage = c.stage || "Novo";
@@ -155,11 +158,15 @@ function renderBoard() {
         const zoneName = stage === "Negociacao" ? "Negociação" : stage;
         const zone = stages[zoneName];
         counts[zoneName]++;
+        values[zoneName] = (values[zoneName] || 0) + (Number(c.deal_value) || 0);
 
         const card = document.createElement("div");
         card.className = "kanban-card";
         card.draggable = true;
         card.dataset.id = c.id;
+
+        // Formatar número para chatId (só dígitos + @c.us)
+        const chatPhone = (c.phone || "").replace(/\D/g, "");
 
         card.innerHTML = `
           <div class="card-name">${c.name || "Sem nome"}</div>
@@ -170,6 +177,11 @@ function renderBoard() {
           <div class="card-tags">
             ${tags.slice(0, 3).map(t => `<span class="tag">${t}</span>`).join("")}
             ${tags.length > 3 ? `<span class="tag more">+${tags.length - 3}</span>` : ""}
+          </div>
+          <div class="card-footer">
+            <a href="/chat?contact=${chatPhone}" class="btn-open-chat" title="Abrir chat" onclick="event.stopPropagation()">
+              <i class="fa-brands fa-whatsapp"></i> Abrir chat
+            </a>
           </div>
        `;
 
@@ -185,10 +197,18 @@ function renderBoard() {
         zone.appendChild(card);
     });
 
-    // contadores
+    // contadores e valores por coluna
     for (const k in counts) {
         const el = document.getElementById("count-" + k);
         if (el) el.innerText = counts[k];
+
+        const valEl = document.getElementById("value-" + k);
+        if (valEl) {
+            const total = values[k] || 0;
+            valEl.textContent = total > 0
+                ? "R$ " + total.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : "";
+        }
     }
 }
 function openClientModal() {
@@ -230,11 +250,15 @@ function selectClient(id) {
     modalCity.value = selectedClient.citystate;
     modalStage.value = selectedClient.stage;
 
+    if (modalValue) modalValue.value = selectedClient.deal_value || "";
     modalTags = Array.isArray(selectedClient.tags) ? selectedClient.tags : [];
     renderModalTags();
 
     modalNotes = Array.isArray(selectedClient.notes) ? selectedClient.notes : [];
     renderModalNotes();
+
+    // Mostrar botão deletar só para clientes existentes
+    if (modalDelete) modalDelete.style.display = "inline-flex";
 }
 
 // ------------------------------------------------------
@@ -265,11 +289,15 @@ document.getElementById("addClientBtn").addEventListener("click", () => {
     modalCity.value = "";
     modalStage.value = "Novo";
 
+    if (modalValue) modalValue.value = "";
     modalTags = [];
     modalNotes = [];
 
     renderModalTags();
     renderModalNotes();
+
+    // Ocultar botão deletar para novo cliente
+    if (modalDelete) modalDelete.style.display = "none";
 
     openClientModal();
 });
@@ -302,6 +330,36 @@ modalAddNote.onclick = () => {
     renderModalNotes();
 };
 
+
+// ------------------------------------------------------
+// DELETAR CLIENTE
+// ------------------------------------------------------
+modalDelete?.addEventListener("click", async () => {
+    if (!selectedClient?.id) return;
+
+    const confirmed = confirm(`Excluir "${selectedClient.name}"?\n\nEsta ação não pode ser desfeita.`);
+    if (!confirmed) return;
+
+    try {
+        const res = await fetch(`/api/crm/delete/${selectedClient.id}`, {
+            method: "DELETE"
+        });
+
+        const data = await res.json();
+
+        if (!data.ok) {
+            return showToast("Erro ao excluir cliente", "error");
+        }
+
+        showToast("Cliente excluído!");
+        closeClientModal();
+        loadClients();
+
+    } catch (err) {
+        showToast("Erro ao excluir cliente", "error");
+    }
+});
+
 // ------------------------------------------------------
 // SALVAR CLIENTE (CRIAR / EDITAR)
 // ------------------------------------------------------
@@ -312,7 +370,8 @@ modalSave.addEventListener("click", async () => {
         citystate: modalCity.value.trim(),
         stage: modalStage.value,
         tags: JSON.stringify(modalTags),
-        notes: JSON.stringify(modalNotes)
+        notes: JSON.stringify(modalNotes),
+        deal_value: parseFloat(modalValue?.value || "0") || 0
     };
 
     if (!body.name || !body.phone) {
@@ -440,6 +499,79 @@ searchInput?.addEventListener("input", renderBoard);
     filterFechado,
     filterPerdido
 ].forEach(f => f?.addEventListener("change", renderBoard));
+
+
+// ------------------------------------------------------
+// EXPORTAR CSV
+// ------------------------------------------------------
+function getFilteredClients() {
+    const search = (searchInput?.value || "").toLowerCase();
+
+    return clients.filter(c => {
+        const stage = c.stage || "Novo";
+
+        // Aplicar mesmos filtros do renderBoard
+        if (stage === "Novo"          && !filterNovo.checked)          return false;
+        if (stage === "Qualificando"  && !filterQualificando.checked)  return false;
+        if ((stage === "Negociação" || stage === "Negociacao") && !filterNegociacao.checked) return false;
+        if (stage === "Fechado"       && !filterFechado.checked)       return false;
+        if (stage === "Perdido"       && !filterPerdido.checked)       return false;
+
+        // Busca
+        if (search) {
+            const tags = Array.isArray(c.tags) ? c.tags : [];
+            const haystack = [c.name, c.phone, c.citystate, ...tags]
+                .join(" ").toLowerCase();
+            if (!haystack.includes(search)) return false;
+        }
+
+        return true;
+    });
+}
+
+function exportCSV() {
+    const data = getFilteredClients();
+
+    if (!data.length) {
+        showToast("Nenhum cliente para exportar", "error");
+        return;
+    }
+
+    const headers = ["Nome", "Telefone", "Cidade/Estado", "Estágio", "Tags", "Notas", "Última atividade"];
+
+    const rows = data.map(c => {
+        const tags  = Array.isArray(c.tags)  ? c.tags.join("; ")  : "";
+        const notes = Array.isArray(c.notes) ? c.notes.map(n => n.text).join("; ") : "";
+        const lastSeen = c.last_seen ? new Date(c.last_seen).toLocaleDateString("pt-BR") : "";
+
+        // Escapar aspas duplas nos campos
+        const escape = v => `"${String(v || "").replace(/"/g, '""')}"`;
+
+        return [
+            escape(c.name),
+            escape(c.phone),
+            escape(c.citystate),
+            escape(c.stage),
+            escape(tags),
+            escape(notes),
+            escape(lastSeen)
+        ].join(",");
+    });
+
+    const csv = [headers.join(","), ...rows].join("");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }); // BOM para Excel
+    const url  = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `crm_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+
+    URL.revokeObjectURL(url);
+    showToast(`${data.length} cliente(s) exportado(s)!`);
+}
+
+document.getElementById("exportBtn")?.addEventListener("click", exportCSV);
 
 // ------------------------------------------------------
 // INIT

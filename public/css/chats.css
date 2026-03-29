@@ -589,3 +589,264 @@ button:disabled {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
   30%            { transform: translateY(-6px); opacity: 1; }
 }
+
+/* ─── Botão de anexar arquivo ───────────────────────────── */
+.btn-attach {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  color: #8696a0;
+  padding: 4px;
+  border-radius: 8px;
+  transition: color .2s, background .2s;
+  flex-shrink: 0;
+}
+.btn-attach:hover {
+  color: #d1d7db;
+  background: rgba(255,255,255,0.06);
+}
+
+/* ─── Preview do arquivo selecionado ────────────────────── */
+.file-preview {
+  padding: 8px 16px 0;
+  background: #0e171c;
+  border-top: 1px solid #1a2a30;
+}
+
+.file-preview-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: #1a2a30;
+  border-radius: 10px;
+  padding: 8px 12px;
+  position: relative;
+  max-width: 320px;
+}
+
+#filePreviewImg {
+  max-height: 80px;
+  max-width: 120px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.file-preview-doc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #e9edef;
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+}
+
+.file-preview-icon { font-size: 22px; flex-shrink: 0; }
+
+#filePreviewName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.file-clear {
+  background: rgba(0,0,0,0.4);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: background .2s;
+}
+.file-clear:hover { background: rgba(0,0,0,0.7); }
+
+/* ─── Botão de busca no header ──────────────────────────── */
+.btn-search-toggle {
+  background: none;
+  border: none;
+  font-size: 18px;
+  cursor: pointer;
+  color: #8696a0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: background .15s, color .15s;
+  flex-shrink: 0;
+}
+.btn-search-toggle:hover {
+  background: rgba(255,255,255,0.07);
+  color: #d1d7db;
+}
+.btn-search-toggle.active {
+  color: var(--accent);
+  background: rgba(108,100,239,0.12);
+}
+
+/* ─── Barra de busca ─────────────────────────────────────── */
+.search-bar {
+  background: #111b21;
+  border-bottom: 1px solid #1a2a30;
+  padding: 8px 16px;
+  animation: slide-down .15s ease;
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.search-bar-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #1a2a30;
+  border-radius: 10px;
+  padding: 6px 12px;
+}
+
+.search-bar-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e9edef;
+  font-size: 14px;
+  font-family: inherit;
+}
+.search-bar-input::placeholder { color: #4a5568; }
+
+.search-count {
+  font-size: 12px;
+  color: #8696a0;
+  white-space: nowrap;
+  min-width: 70px;
+  text-align: right;
+}
+
+.search-nav {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.08);
+  color: #aab0d9;
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s;
+}
+.search-nav:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.search-nav:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.search-close {
+  background: none;
+  border: none;
+  color: #8696a0;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: color .15s;
+}
+.search-close:hover { color: #fff; }
+
+/* ─── Highlight dos resultados ───────────────────────────── */
+mark.search-highlight {
+  background: #f2c94c;
+  color: #1a1200;
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
+/* Bolha com match */
+.msg-row.msg-match .msg-bubble {
+  outline: 1px solid rgba(242,201,76,0.3);
+}
+
+/* Match focado (atual) */
+.msg-row.search-focus .msg-bubble {
+  outline: 2px solid #f2c94c;
+  box-shadow: 0 0 0 3px rgba(242,201,76,0.15);
+}
+
+.msg-row.search-focus mark.search-highlight {
+  background: #e67e22;
+  color: #fff;
+}
+
+/* ─── Botão Resetar IA ───────────────────────────────────── */
+#btnClearAi {
+  background: rgba(229,72,72,0.1);
+  color: #e54848;
+  border: 1px solid rgba(229,72,72,0.25);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  display: none;
+  align-items: center;
+  gap: 5px;
+  transition: background .2s, box-shadow .2s;
+}
+#btnClearAi:hover {
+  background: rgba(229,72,72,0.2);
+  box-shadow: 0 0 10px rgba(229,72,72,0.15);
+}
+#btnClearAi:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ─── Grupo botão + select do modo humano ────────────────── */
+.human-on-group {
+  display: flex;
+  align-items: center;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #1ebe5d40;
+}
+
+.human-on-group #btnHumanOn {
+  background: #25d366;
+  color: #000;
+  border: none;
+  padding: 6px 11px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0;
+  transition: background .15s;
+}
+.human-on-group #btnHumanOn:hover { background: #1ebe5d; }
+.human-on-group #btnHumanOn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.human-duration-select {
+  background: #1a2e22;
+  color: #25d366;
+  border: none;
+  border-left: 1px solid #1ebe5d30;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+  text-align: center;
+}
+.human-duration-select:disabled { opacity: 0.4; cursor: not-allowed; }

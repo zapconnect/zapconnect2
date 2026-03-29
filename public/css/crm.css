@@ -685,3 +685,67 @@ body.modal-open {
     justify-content: center;
   }
 }
+
+/* ─── Botão excluir ─────────────────────────────────────── */
+.btn.btn-danger {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+.btn.btn-danger:hover {
+  background: rgba(229,72,72,0.12);
+}
+
+/* ─── Modal actions com espaço para botão deletar ───────── */
+.modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* ─── Footer do card + botão abrir chat ─────────────────── */
+.card-footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.btn-open-chat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--success);
+  background: rgba(46,230,166,0.08);
+  border: 1px solid rgba(46,230,166,0.2);
+  border-radius: 7px;
+  padding: 4px 10px;
+  text-decoration: none;
+  transition: background .15s, box-shadow .15s;
+}
+
+.btn-open-chat:hover {
+  background: rgba(46,230,166,0.16);
+  box-shadow: 0 0 10px rgba(46,230,166,0.15);
+}
+
+.btn-open-chat i {
+  font-size: 14px;
+}
+
+/* ─── Valor total por coluna ─────────────────────────────── */
+.col-value {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--success);
+  background: rgba(46,230,166,0.1);
+  border: 1px solid rgba(46,230,166,0.2);
+  padding: 1px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
