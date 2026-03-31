@@ -21,7 +21,10 @@ const socket = io(API, {
 // ===============================
 // 🚀 INIT
 // ===============================
-window.onload = loadUser;
+window.onload = () => {
+    loadUser();
+    loadStats();
+};
 
 function hideQrUI() {
     const box = document.getElementById("qr-preview");
@@ -57,6 +60,33 @@ async function loadUser() {
     listSessions();
 }
 
+
+// ===============================
+// 📊 MÉTRICAS DO PAINEL
+// ===============================
+async function loadStats() {
+    try {
+        const res = await fetch(API + "/api/painel/stats", { credentials: "include" });
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const set = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = val ?? "0";
+        };
+
+        set("stat-sessions",     data.sessionsAtivas);
+        set("stat-clientes",     data.totalClientes);
+        set("stat-agendamentos", data.agendamentos);
+        set("stat-ia",           data.iaUsado);
+
+    } catch (err) {
+        console.warn("Erro ao carregar stats:", err);
+        // Mostrar 0 em caso de erro
+        ["stat-sessions","stat-clientes","stat-agendamentos","stat-ia"]
+            .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = "0"; });
+    }
+}
 
 // ===============================
 // 🚪 LOGOUT (CORRETO)
@@ -146,21 +176,86 @@ async function listSessions() {
     const box = document.getElementById("sessions-list");
     box.innerHTML = "";
 
+    if (!sessions.length) {
+        box.innerHTML = `
+            <div class="session-empty">
+                <i class="fa-brands fa-whatsapp"></i>
+                <p>Nenhuma sessão cadastrada ainda</p>
+            </div>`;
+        checkConnectionAlert(sessions);
+        return;
+    }
+
     sessions.forEach(s => {
+        const isConnected    = s.status === "connected";
+        const isReconnecting = s.status === "reconnecting";
+        const isPending      = s.status === "pending";
+
+        const badgeClass = isConnected    ? "badge-connected"
+                         : isReconnecting ? "badge-reconnecting"
+                         : isPending      ? "badge-pending"
+                         : "badge-disconnected";
+
+        const badgeLabel = isConnected    ? "Conectado"
+                         : isReconnecting ? "Reconectando..."
+                         : isPending      ? "Aguardando QR"
+                         : "Desconectado";
+
         const div = document.createElement("div");
-        div.className = "session-row";
+        div.className = "session-card";
 
         div.innerHTML = `
-      <div>
-        <b>${s.session_name}</b> ${s.status === "connected" ? "" : ""}
-        <br><small>${s.status}</small>
-      </div>
-      <button onclick="deleteSession('${s.session_name}')">Apagar</button>
-    `;
+            <div class="session-left">
+                <div class="session-avatar ${isConnected ? "avatar-connected" : "avatar-offline"}">
+                    <i class="fa-brands fa-whatsapp"></i>
+                </div>
+                <div class="session-info">
+                    <div class="session-name">${s.session_name}</div>
+                    <span class="session-badge ${badgeClass}">${badgeLabel}</span>
+                </div>
+            </div>
+            <div class="session-actions">
+                ${!isConnected ? `
+                <button class="btn-session-action btn-reconnect"
+                    onclick="restartSession('${s.session_name}')"
+                    title="Reconectar">
+                    <i class="fa-solid fa-rotate"></i>
+                    Reconectar
+                </button>` : ""}
+                <button class="btn-session-action btn-delete"
+                    onclick="deleteSession('${s.session_name}')"
+                    title="Apagar sessão">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </div>
+        `;
 
         box.appendChild(div);
     });
+
     checkConnectionAlert(sessions);
+}
+
+async function restartSession(name) {
+    if (!confirm(`Reconectar a sessão "${name}"?`)) return;
+
+    try {
+        const res = await fetch(API + "/sessions/restart", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionName: name, token: currentUser?.token })
+        });
+        const data = await res.json();
+        if (data.ok) {
+            notify("Reconectando sessão...", "success");
+            setTimeout(listSessions, 1500);
+        } else {
+            notify(data.error || "Erro ao reconectar", "error");
+        }
+    } catch {
+        notify("Erro ao reconectar sessão", "error");
+    }
 }
 
 // ===============================

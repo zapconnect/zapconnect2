@@ -90,6 +90,71 @@ app.use("/webhook", webhookRoutes);
 app.use("/subscription", subscriptionRoutes);
 app.use("/admin", authMiddleware, adminRoutes);
 
+// ===============================
+// 📊 STATS DO PAINEL
+// ===============================
+app.get("/api/painel/stats", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const db = getDB();
+    const now = Date.now();
+
+    // ✅ Sessões ativas (dado confiável)
+    const sessionsAtivas = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM sessions
+       WHERE user_id = ? AND status = 'connected'`,
+      [user.id]
+    );
+
+    // ✅ Total de sessões (para card "Total de sessões")
+    const totalSessoes = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM sessions WHERE user_id = ?`,
+      [user.id]
+    );
+
+    // ✅ Clientes no CRM
+    const totalClientes = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM crm WHERE user_id = ?`,
+      [user.id]
+    );
+
+    // ✅ Agendamentos pendentes futuros
+    const agendamentos = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM schedules
+       WHERE user_id = ? AND status = 'pending' AND send_at > ?`,
+      [user.id, now]
+    );
+
+    // ✅ Agendamentos enviados (histórico)
+    const agendamentosEnviados = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM schedules
+       WHERE user_id = ? AND status = 'sent'`,
+      [user.id]
+    );
+
+    // ✅ Uso de IA no mês (vem direto do user)
+    const iaUsado = Number(user.ia_messages_used) || 0;
+
+    return res.json({
+      ok: true,
+      sessionsAtivas:      sessionsAtivas?.total      ?? 0,
+      totalSessoes:        totalSessoes?.total         ?? 0,
+      totalClientes:       totalClientes?.total        ?? 0,
+      agendamentos:        agendamentos?.total         ?? 0,
+      agendamentosEnviados: agendamentosEnviados?.total ?? 0,
+      iaUsado,
+    });
+  } catch (err) {
+    console.error("❌ Erro stats painel:", err);
+    return res.json({
+      ok: false,
+      sessionsAtivas: 0, totalSessoes: 0,
+      totalClientes: 0, agendamentos: 0,
+      agendamentosEnviados: 0, iaUsado: 0
+    });
+  }
+});
+
 app.get(
   "/painel",
   authMiddleware,
@@ -1038,6 +1103,72 @@ app.post(
   }
 );
 
+// =======================================
+// 📊 MÉTRICAS DO PAINEL
+// =======================================
+app.get("/api/painel/stats", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const db = getDB();
+    const userId = user.id;
+
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+    const todayTs = startOfDay.getTime();
+
+    // Mensagens recebidas hoje (tabela messages via sessions)
+    const msgsHoje = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total
+       FROM messages m
+       JOIN sessions s ON s.id = m.session_id
+       WHERE s.user_id = ?
+         AND m.sender = 'client'
+         AND m.created_at >= ?`,
+      [userId, new Date(todayTs).toISOString().slice(0, 19).replace('T', ' ')]
+    );
+
+    // Sessões ativas
+    const sessoesAtivas = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM sessions
+       WHERE user_id = ? AND status = 'connected'`,
+      [userId]
+    );
+
+    // Clientes no CRM
+    const clientesCRM = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM crm WHERE user_id = ?`,
+      [userId]
+    );
+
+    // Agendamentos pendentes
+    const agendamentos = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM schedules
+       WHERE user_id = ? AND status = 'pending'`,
+      [userId]
+    );
+
+    // Mensagens IA usadas no mês
+    const iaUsadas = await db.get<{ ia_messages_used: number }>(
+      `SELECT ia_messages_used FROM users WHERE id = ?`,
+      [userId]
+    );
+
+    return res.json({
+      ok: true,
+      stats: {
+        mensagensHoje:      msgsHoje?.total          ?? 0,
+        sessoesAtivas:      sessoesAtivas?.total      ?? 0,
+        clientesCRM:        clientesCRM?.total        ?? 0,
+        agendamentosPendentes: agendamentos?.total    ?? 0,
+        iaUsadas:           iaUsadas?.ia_messages_used ?? 0,
+      }
+    });
+  } catch (err) {
+    console.error("❌ Erro /api/painel/stats:", err);
+    return res.status(500).json({ ok: false });
+  }
+});
+
 // ===============================
 // 📅 API — AGENDAMENTOS
 // ===============================
@@ -1264,11 +1395,11 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
     const user = (req as any).user;
     const db = getDB();
 
-    const { name, phone, citystate, stage, tags, notes, deal_value } = req.body;
+    const { name, phone, citystate, stage, tags, notes, deal_value, follow_up_date } = req.body;
 
     await db.run(
-      `INSERT INTO crm (user_id, name, phone, citystate, stage, tags, notes, deal_value)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO crm (user_id, name, phone, citystate, stage, tags, notes, deal_value, follow_up_date)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         user.id,
         name,
@@ -1277,7 +1408,8 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
         stage || "Novo",
         tags || "[]",
         notes || "[]",
-        Number(deal_value) || 0
+        Number(deal_value) || 0,
+        follow_up_date ? Number(follow_up_date) : null
       ]
     );
 
@@ -1323,13 +1455,13 @@ app.put("/api/crm/update", authMiddleware, async (req, res) => {
   try {
     const db = getDB();
 
-    const { id, name, phone, citystate, stage, tags, notes, deal_value } = req.body;
+    const { id, name, phone, citystate, stage, tags, notes, deal_value, follow_up_date } = req.body;
 
     if (!id) return res.json({ ok: false, error: "ID ausente" });
 
     await db.run(
       `UPDATE crm 
-       SET name = ?, phone = ?, citystate = ?, stage = ?, tags = ?, notes = ?, deal_value = ?
+       SET name = ?, phone = ?, citystate = ?, stage = ?, tags = ?, notes = ?, deal_value = ?, follow_up_date = ?
        WHERE id = ?`,
       [
         name,
@@ -1339,6 +1471,7 @@ app.put("/api/crm/update", authMiddleware, async (req, res) => {
         tags || "[]",
         notes || "[]",
         Number(deal_value) || 0,
+        follow_up_date ? Number(follow_up_date) : null,
         id
       ]
     );

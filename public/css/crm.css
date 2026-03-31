@@ -165,18 +165,125 @@ body {
 }
 
 .kanban-card {
-  background: #131a2b;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
+  background: #0f1525;
+  border: 1px solid #1e2440;
+  border-radius: 14px;
   margin-bottom: 10px;
   cursor: grab;
-  transition: transform .15s, box-shadow .15s;
+  transition: transform .18s, box-shadow .18s, border-color .18s;
+  overflow: hidden;
+  position: relative;
+}
+
+.kanban-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--accent), transparent);
+  opacity: 0;
+  transition: opacity .2s;
 }
 
 .kanban-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  transform: translateY(-3px);
+  box-shadow: 0 12px 32px rgba(0,0,0,.45);
+  border-color: #2a3060;
+}
+
+.kanban-card:hover::before { opacity: 1; }
+
+.card-inner {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Topo: avatar + nome + valor ── */
+.card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.card-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -.2px;
+}
+
+.card-phone {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.card-phone i { font-size: 10px; }
+
+.card-value {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--success);
+  background: rgba(46,230,166,0.08);
+  border: 1px solid rgba(46,230,166,0.18);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* ── Localização ── */
+.card-location {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--muted);
+  opacity: .75;
+}
+
+.card-location i { font-size: 10px; }
+
+/* ── Footer ── */
+.card-footer {
+  padding-top: 8px;
+  border-top: 1px solid #1a2040;
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* ================= MODAL ================= */
@@ -560,13 +667,33 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  
 }
 
 .tags .tag {
-  background: #1c2340;
   border-radius: 999px;
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.tag.more {
+  background: rgba(255,255,255,0.05) !important;
+  color: #7e8099 !important;
+  border: 1px solid rgba(255,255,255,0.08) !important;
+}
+
+
+/* ─── Tags no card ───────────────────────────────────────── */
+.card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
 }
 
 /* Linha nova tag */
@@ -749,3 +876,141 @@ body.modal-open {
   border-radius: 999px;
   white-space: nowrap;
 }
+
+/* ─── Follow-up no card ──────────────────────────────────── */
+.card-followup {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+  margin-top: 8px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  width: fit-content;
+}
+
+.card-followup i { font-size: 10px; }
+
+.card-followup.today {
+  color: #F2C94C;
+  background: rgba(242,201,76,0.1);
+  border: 1px solid rgba(242,201,76,0.2);
+}
+
+.card-followup.overdue {
+  color: #FF5F5F;
+  background: rgba(255,95,95,0.1);
+  border: 1px solid rgba(255,95,95,0.2);
+}
+
+/* Card inteiro destacado quando vencido */
+.kanban-card.card-overdue {
+  border-color: rgba(255,95,95,0.4);
+  box-shadow: 0 0 0 1px rgba(255,95,95,0.2) inset;
+}
+
+/* Card com follow-up hoje */
+.kanban-card.card-today {
+  border-color: rgba(242,201,76,0.35);
+  box-shadow: 0 0 0 1px rgba(242,201,76,0.15) inset;
+}
+
+/* Input de data no modal */
+#modalFollowUp {
+  color-scheme: dark;
+}
+
+/* ─── Controles de ordenação ─────────────────────────────── */
+.sort-controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.sort-select {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 8px 10px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.sort-select option {
+  background: var(--panel);
+  color: var(--text);
+}
+
+.sort-dir {
+  border: none !important;
+  border-left: 1px solid var(--border) !important;
+  border-radius: 0 !important;
+  font-size: 12px !important;
+  padding: 8px 10px !important;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.sort-dir:hover { color: var(--text); }
+
+/* ─── Tags clicáveis nos cards ───────────────────────────── */
+.tag-clickable {
+  cursor: pointer;
+  transition: filter .15s, transform .1s;
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.tag-clickable:hover {
+  filter: brightness(1.25);
+  transform: scale(1.04);
+}
+
+.tag-clickable.tag-active {
+  filter: brightness(1.1);
+  box-shadow: 0 0 10px rgba(108,100,239,0.3);
+}
+
+/* ─── Badge de tag ativa na barra de filtros ─────────────── */
+.active-tag-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(108,100,239,0.15);
+  border: 1px solid rgba(108,100,239,0.35);
+  color: #a89ef5;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  animation: pop-in .15s ease;
+}
+
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(.85); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.active-tag-badge i { font-size: 11px; }
+
+.active-tag-badge button {
+  background: none;
+  border: none;
+  color: #a89ef5;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+  line-height: 1;
+  opacity: .7;
+  transition: opacity .15s;
+}
+.active-tag-badge button:hover { opacity: 1; }

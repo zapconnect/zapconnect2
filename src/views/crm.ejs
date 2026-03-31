@@ -40,8 +40,23 @@
             <input id="q" placeholder="Buscar cliente, telefone ou tag">
           </div>
 
+          <div class="sort-controls">
+            <select id="sortSelect" class="sort-select" title="Ordenar por">
+              <option value="name">Nome</option>
+              <option value="last_seen">Última atividade</option>
+              <option value="follow_up">Follow-up</option>
+              <option value="value">Valor</option>
+            </select>
+            <button id="sortDirBtn" class="btn ghost sort-dir">↑ Asc</button>
+          </div>
+
           <button id="refreshBtn" class="btn ghost" title="Atualizar">
             <i class="fa-solid fa-rotate"></i>
+          </button>
+
+          <button id="exportBtn" class="btn ghost" title="Exportar clientes filtrados como CSV">
+            <i class="fa-solid fa-file-csv"></i>
+            Exportar CSV
           </button>
 
           <button id="addClientBtn" class="btn">
@@ -66,6 +81,13 @@
         <label><input type="checkbox" id="filterNegociacao" checked> Negociação</label>
         <label><input type="checkbox" id="filterFechado" checked> Fechado</label>
         <label><input type="checkbox" id="filterPerdido" checked> Perdido</label>
+
+        <!-- Badge de tag ativa -->
+        <div id="activeTagBadge" class="active-tag-badge" style="display:none;">
+          <i class="fa-solid fa-tag"></i>
+          <span id="activeTagLabel"></span>
+          <button id="clearTagFilter" title="Remover filtro">✕</button>
+        </div>
       </div>
 
       <!-- =============================
@@ -153,6 +175,9 @@
           <label>Valor do negócio (R$)</label>
           <input id="modalValue" type="number" min="0" step="0.01" placeholder="0,00">
 
+          <label>Follow-up — data de retorno</label>
+          <input id="modalFollowUp" type="date">
+
           <label>Estágio</label>
           <select id="modalStage">
             <option>Novo</option>
@@ -177,6 +202,10 @@
           <button class="btn small" id="modalAddNote">Salvar Nota</button>
 
           <div class="modal-actions">
+            <button id="modalDelete" class="btn btn-danger" style="display:none;">
+              <i class="fa-solid fa-trash"></i> Excluir
+            </button>
+            <div style="flex:1"></div>
             <button id="modalCancel" class="btn ghost">Cancelar</button>
             <button id="modalSave" class="btn">Salvar Cliente</button>
           </div>

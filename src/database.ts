@@ -33,6 +33,16 @@ export async function initDB() {
     // Coluna já existe — ignorar
   }
 
+  // Migração: adicionar follow_up_date se não existir
+  try {
+    await pool.query(
+      "ALTER TABLE crm ADD COLUMN follow_up_date BIGINT DEFAULT NULL"
+    );
+    console.log("✅ Coluna follow_up_date adicionada ao CRM");
+  } catch {
+    // Coluna já existe — ignorar
+  }
+
   // ===============================
   // 🔧 CRIAÇÃO DAS TABELAS (MARIA DB SAFE)
   // ===============================
@@ -111,6 +121,7 @@ export async function initDB() {
       last_seen BIGINT,
       avatar TEXT,
       deal_value DECIMAL(10,2) DEFAULT 0,
+      follow_up_date BIGINT DEFAULT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
