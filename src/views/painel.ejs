@@ -106,7 +106,13 @@
 
         <label class="label">Prompt da IA</label>
         <textarea id="user-prompt" class="textarea"
-          placeholder="Defina como a IA deve responder aos clientes..."></textarea>
+          placeholder="Defina como a IA deve responder aos clientes..."
+          oninput="updateCharCount()"></textarea>
+
+        <div class="prompt-meta">
+          <span id="prompt-count" class="prompt-count">0 caracteres</span>
+          <span id="prompt-hint" class="prompt-hint"></span>
+        </div>
 
         <button class="btn btn-primary full" onclick="updatePrompt()">
           <i class="fa-solid fa-floppy-disk"></i>
@@ -168,6 +174,49 @@
             <%= user.ia_enabled ? 'Ativada' : 'Desativada' %>
           </b>
         </p>
+
+        <!-- 🌙 Horário de silêncio -->
+        <div class="silence-wrap">
+          <div class="silence-header">
+            <span class="ia-usage-label">🌙 Horário de silêncio</span>
+            <label class="switch switch-sm">
+              <input type="checkbox" id="silence-toggle" onchange="toggleSilence()">
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div id="silence-config" class="silence-config" style="display:none;">
+            <div class="silence-row">
+              <label>Das</label>
+              <select id="silence-start" class="silence-select">
+                <% for(let h=0; h<24; h++) { %>
+                  <option value="<%= h %>"><%= String(h).padStart(2,'0') %>:00</option>
+                <% } %>
+              </select>
+              <label>até</label>
+              <select id="silence-end" class="silence-select">
+                <% for(let h=0; h<24; h++) { %>
+                  <option value="<%= h %>"><%= String(h).padStart(2,'0') %>:00</option>
+                <% } %>
+              </select>
+              <button class="btn btn-accent btn-sm" onclick="saveSilence()">Salvar</button>
+            </div>
+            <p class="silence-hint">A IA não responderá automaticamente neste intervalo.</p>
+          </div>
+        </div>
+
+        <div class="ia-usage-wrap" id="ia-usage-wrap" style="display:none;">
+          <div class="ia-usage-header">
+            <span class="ia-usage-label">Mensagens IA este mês</span>
+            <span class="ia-usage-count" id="ia-usage-count">—</span>
+          </div>
+          <div class="ia-progress-track">
+            <div class="ia-progress-bar" id="ia-progress-bar"></div>
+          </div>
+          <div class="ia-usage-footer">
+            <span id="ia-usage-remaining"></span>
+          </div>
+        </div>
       </section>
 
       <!-- 📱 Criar Sessão -->
@@ -230,7 +279,26 @@
   <script src="/js/config.js"></script>
 
   <script>
-    function goToChat() { location.href = "/chat"; }
+    function goToChat() {
+        // Verificar se há sessão conectada antes de ir para o chat
+        const sessions = window._cachedSessions || [];
+        const connected = sessions.some(s => s.status === "connected");
+
+        if (!connected) {
+            if (typeof notify === "function") {
+                notify("Nenhum WhatsApp conectado. Crie e escaneie uma sessão primeiro.", "warning");
+            } else {
+                alert("Nenhum WhatsApp conectado. Crie e escaneie uma sessão primeiro.");
+            }
+            // Scroll até a seção de sessões para facilitar
+            document.getElementById("sessions-list")
+                ?.scrollIntoView({ behavior: "smooth" });
+            return;
+        }
+
+        location.href = "/chat";
+    }
+
     function goToDisparo() { location.href = "/disparo"; }
     function goToAgendamentos() { location.href = "/agendamentos"; }
     function goToSessions() {

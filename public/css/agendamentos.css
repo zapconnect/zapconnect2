@@ -77,8 +77,82 @@ body {
   box-shadow: 0 12px 40px var(--shadow);
 }
 
-.card.form { max-width: 500px; }
+.card.form { width: 700px; max-width: 100%; }
 .card.list { flex: 1; }
+.form-grid {
+  display: flex;
+  gap: 16px;
+}
+.form-fields { flex: 1; }
+.preview-card {
+  width: 260px;
+  background: linear-gradient(180deg, #111831, #0d1224);
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.03), 0 12px 30px rgba(0,0,0,.35);
+}
+.preview-header {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.preview-chat {
+  background: radial-gradient(circle at 20% 10%, rgba(108,100,239,.2), rgba(17,24,48,.6));
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat-bubble {
+  align-self: flex-end;
+  max-width: 220px;
+  background: #075e54;
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 12px 12px 2px 12px;
+  box-shadow: 0 10px 20px rgba(0,0,0,.35);
+  position: relative;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.chat-bubble .chat-time {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  color: rgba(255,255,255,.8);
+  text-align: right;
+}
+.chat-file, .chat-image {
+  align-self: flex-end;
+  max-width: 220px;
+  border-radius: 12px;
+  background: rgba(255,255,255,.05);
+  border: 1px solid rgba(255,255,255,.08);
+  padding: 8px 10px;
+  color: var(--text);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.chat-image img {
+  width: 100%;
+  border-radius: 10px;
+  display: block;
+}
+.filters {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  margin-bottom: 12px;
+}
+.filters .field { flex: 1; }
 
 h2 {
   margin-top: 0;
@@ -97,7 +171,14 @@ label {
   font-size: 14px;
 }
 
-input, textarea {
+.inline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+input, textarea, select {
   width: 100%;
   margin-top: 6px;
   padding: 12px;
@@ -114,6 +195,42 @@ textarea { resize: vertical; }
 input:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(108,100,239,.25);
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% - 3px), calc(100% - 12px) calc(50% - 3px);
+  background-size: 8px 8px, 8px 8px;
+  background-repeat: no-repeat;
+}
+
+.btn-secondary {
+  background: transparent;
+  border: 1px solid var(--stroke);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.btn-secondary:hover {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.two-cols {
+  display: flex;
+  gap: 12px;
+}
+
+.two-cols .field {
+  flex: 1;
 }
 
 /* BOTÃO */
@@ -170,6 +287,30 @@ th {
 .status.pending { color: #facc15; font-weight: 700; }
 .status.sent { color: #22c55e; font-weight: 700; }
 
+.recurrence-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(108,100,239,.14);
+  color: #c7c9ff;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(108,100,239,.25);
+}
+
+.recurrence-pill i {
+  color: var(--accent);
+}
+
+.countdown {
+  font-weight: 700;
+  color: #a5f3fc;
+  white-space: nowrap;
+}
+
 .loading {
   text-align: center;
   color: var(--muted);
@@ -211,4 +352,107 @@ th {
   .card.form {
     max-width: 100%;
   }
+
+  .two-cols {
+    flex-direction: column;
+  }
+
+  .filters {
+    flex-direction: column;
+  }
+
+  .form-grid {
+    flex-direction: column;
+  }
+
+  .preview-card {
+    width: 100%;
+  }
+}
+
+/* ─── Upload de arquivo ──────────────────────────────────── */
+.file-upload-area {
+  margin-top: 6px;
+  border: 2px dashed var(--stroke);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: border-color .2s, background .2s;
+  text-align: center;
+  color: var(--muted);
+}
+
+.file-upload-area:hover {
+  border-color: var(--accent);
+  background: rgba(108,100,239,.05);
+  color: var(--text);
+}
+
+.file-upload-area i { font-size: 28px; color: var(--accent); }
+
+.file-upload-hint {
+  font-size: 11px;
+  opacity: .6;
+}
+
+/* ─── Preview do arquivo ─────────────────────────────────── */
+.file-preview-area {
+  margin-top: 8px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255,255,255,.04);
+  border: 1px solid var(--stroke);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.file-preview-area img {
+  max-height: 80px;
+  max-width: 120px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.preview-doc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.preview-doc i { font-size: 22px; color: var(--accent); }
+
+.btn-remove-file {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  background: rgba(229,72,72,.15);
+  border: 1px solid rgba(229,72,72,.3);
+  color: #e54848;
+  border-radius: 6px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background .15s;
+}
+
+.btn-remove-file:hover { background: rgba(229,72,72,.3); }
+
+/* ─── Contador de números ────────────────────────────────── */
+.field-hint {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  text-align: right;
 }

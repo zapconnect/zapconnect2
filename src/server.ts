@@ -38,6 +38,7 @@ interface ScheduleRow {
   file: string | null;
   filename: string | null;
   send_at: number;
+  recurrence: "none" | "daily" | "weekly" | "monthly";
   status: "pending" | "sent";
 }
 
@@ -1177,15 +1178,26 @@ app.get("/api/painel/stats", authMiddleware, async (req, res) => {
 app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (req, res) => {
   const user = (req as any).user;
   const { numbers, message, file, filename, sendAt } = req.body;
+  const recurrenceRaw = (req.body?.recurrence || "none") as string;
+  const recurrenceAllowed = ["none", "daily", "weekly", "monthly"];
+  const recurrence = recurrenceAllowed.includes(recurrenceRaw) ? recurrenceRaw : "none";
 
-  if (!numbers?.length || !sendAt)
+  const sendAtMs = Number(sendAt);
+
+  if (!numbers?.length || !sendAtMs)
     return res.status(400).json({ error: "Dados incompletos" });
+
+  if (!Number.isFinite(sendAtMs))
+    return res.status(400).json({ error: "Data inválida" });
+
+  if (sendAtMs <= Date.now())
+    return res.status(400).json({ error: "Data precisa ser futura" });
 
   const db = getDB();
   await db.run(
-    `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [user.id, JSON.stringify(numbers), message, file, filename, sendAt]
+    `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [user.id, JSON.stringify(numbers), message, file, filename, sendAtMs, recurrence]
   );
 
   res.json({ ok: true });
@@ -1213,6 +1225,36 @@ app.delete("/api/agendamentos/delete/:id", authMiddleware, async (req, res) => {
   ]);
   res.json({ ok: true });
 });
+
+function calculateNextSendAt(current: number, recurrence: string): number | null {
+  const base = new Date(current);
+  const now = Date.now();
+
+  const bump = () => {
+    switch (recurrence) {
+      case "daily":
+        base.setDate(base.getDate() + 1);
+        return true;
+      case "weekly":
+        base.setDate(base.getDate() + 7);
+        return true;
+      case "monthly":
+        base.setMonth(base.getMonth() + 1);
+        return true;
+      default:
+        return false;
+    }
+  };
+
+  if (!bump()) return null;
+
+  while (base.getTime() <= now) {
+    bump();
+  }
+
+  return base.getTime();
+}
+
 // ===============================
 // ⏱️ AGENDADOR — VERSÃO FINAL, ESTÁVEL E SEM "No LID for user"
 // ===============================
@@ -1291,6 +1333,17 @@ setInterval(async () => {
         `UPDATE schedules SET status = 'sent' WHERE id = ?`,
         [row.id]
       );
+
+      const recurrence = (row as any).recurrence || "none";
+      const nextSendAt = calculateNextSendAt(row.send_at, recurrence);
+
+      if (nextSendAt) {
+        await db.run(
+          `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [userId, row.numbers, row.message, row.file, row.filename, nextSendAt, recurrence]
+        );
+      }
 
       console.log("✅ Agendamento enviado:", row.id);
 
@@ -1829,6 +1882,43 @@ app.post("/sessions/restart", async (req, res) => {
 
   io.emit("sessions:changed", { userId: user.id });
   res.json({ ok: true, message: "Sessão reiniciada com sucesso" });
+});
+
+// 🌙 Configurar horário de silêncio da IA
+app.post("/user/ia-silence", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { start, end, enabled } = req.body;
+
+    const db = getDB();
+
+    if (!enabled) {
+      // Desativar silêncio
+      await db.run(
+        `UPDATE users SET ia_silence_start = NULL, ia_silence_end = NULL WHERE id = ?`,
+        [user.id]
+      );
+      return res.json({ ok: true, active: false });
+    }
+
+    // start e end são inteiros 0-23 (hora)
+    const s = Number(start);
+    const e = Number(end);
+
+    if (isNaN(s) || isNaN(e) || s < 0 || s > 23 || e < 0 || e > 23) {
+      return res.status(400).json({ ok: false, error: "Horas inválidas" });
+    }
+
+    await db.run(
+      `UPDATE users SET ia_silence_start = ?, ia_silence_end = ? WHERE id = ?`,
+      [s, e, user.id]
+    );
+
+    return res.json({ ok: true, active: true, start: s, end: e });
+  } catch (err) {
+    console.error("❌ Erro ao salvar silêncio da IA:", err);
+    return res.status(500).json({ ok: false });
+  }
 });
 
 // 🔁 Toggle IA Automática

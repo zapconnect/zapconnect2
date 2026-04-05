@@ -6,81 +6,150 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agendamentos • ZapConnect</title>
 
-  <!-- Font Awesome -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
     crossorigin="anonymous" referrerpolicy="no-referrer">
   <link rel="icon" href="/img/favinco.png" />
-  <!-- CSS -->
   <link rel="stylesheet" href="/css/agendamentos.css">
 </head>
 
 <body>
 
-  <!-- =========================
-🔝 HEADER
-========================= -->
   <header class="topbar">
     <div class="brand">
       <i class="fa-solid fa-calendar-check"></i>
       <h1>Agendamentos</h1>
     </div>
-
     <a href="/painel" class="btn-back">
       <i class="fa-solid fa-arrow-left"></i>
       Voltar
     </a>
   </header>
 
-  <!-- =========================
-📦 CONTEÚDO
-========================= -->
   <main class="container">
 
     <!-- FORM -->
     <section class="card form">
       <h2><i class="fa-solid fa-plus"></i> Novo Agendamento</h2>
 
-      <label>
-        <i class="fa-solid fa-phone"></i>
-        Lista de números
-      </label>
-      <textarea id="nums" rows="4" placeholder="54999999999&#10;55988888888"></textarea>
+      <div class="form-grid">
+        <div class="form-fields">
+          <label>
+            <i class="fa-solid fa-phone"></i>
+            Lista de números
+          </label>
+          <div class="inline-actions">
+            <button class="btn-secondary" onclick="document.getElementById('csvInput').click()">
+              <i class="fa-solid fa-file-csv"></i>
+              Importar CSV
+            </button>
+            <input type="file" id="csvInput" accept=".csv,text/csv" style="display:none" onchange="importarCSV(this)">
+          </div>
+          <textarea id="nums" rows="4" placeholder="54999999999&#10;55988888888" oninput="updateNumCount()"></textarea>
+          <div class="field-hint" id="num-count">0 números</div>
 
-      <label>
-        <i class="fa-solid fa-message"></i>
-        Mensagem
-      </label>
-      <textarea id="msg" rows="3"></textarea>
+          <label>
+            <i class="fa-solid fa-message"></i>
+            Mensagem
+          </label>
+          <textarea id="msg" rows="3" placeholder="Digite a mensagem..." oninput="updatePreview()"></textarea>
 
-      <label>
-        <i class="fa-solid fa-paperclip"></i>
-        Arquivo (base64 opcional)
-      </label>
-      <input type="text" id="file" placeholder="data:...base64">
+          <label>
+            <i class="fa-solid fa-paperclip"></i>
+            Arquivo (opcional)
+          </label>
 
-      <label>
-        <i class="fa-solid fa-file"></i>
-        Nome do arquivo
-      </label>
-      <input type="text" id="filename" placeholder="foto.png">
+          <!-- Input de arquivo real -->
+          <div class="file-upload-area" id="fileUploadArea" onclick="document.getElementById('fileInput').click()">
+            <i class="fa-solid fa-cloud-arrow-up"></i>
+            <span id="fileUploadLabel">Clique para selecionar imagem, vídeo, PDF ou áudio</span>
+            <span class="file-upload-hint">Máximo 15MB</span>
+          </div>
+          <input type="file" id="fileInput"
+            accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt"
+            style="display:none"
+            onchange="handleFileSelect(this)">
 
-      <label>
-        <i class="fa-solid fa-clock"></i>
-        Data e Hora
-      </label>
-      <input type="datetime-local" id="sendAt">
+          <!-- Preview do arquivo -->
+          <div id="filePreview" class="file-preview-area" style="display:none;">
+            <img id="previewImg" style="display:none;" alt="preview">
+            <div id="previewDoc" class="preview-doc" style="display:none;">
+              <i class="fa-solid fa-file"></i>
+              <span id="previewDocName"></span>
+            </div>
+            <button class="btn-remove-file" onclick="clearFile()" title="Remover arquivo">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
 
-      <button class="btn-primary" onclick="agendar()">
-        <i class="fa-solid fa-calendar-plus"></i>
-        Agendar Mensagem
-      </button>
+          <div class="two-cols">
+            <div class="field">
+              <label>
+                <i class="fa-solid fa-clock"></i>
+                Data e Hora
+              </label>
+              <input type="datetime-local" id="sendAt">
+            </div>
+            <div class="field">
+              <label>
+                <i class="fa-solid fa-rotate"></i>
+                Repetição
+              </label>
+              <select id="recurrence">
+                <option value="none">Não repetir (único)</option>
+                <option value="daily">Diario</option>
+                <option value="weekly">Semanal</option>
+                <option value="monthly">Mensal</option>
+              </select>
+            </div>
+          </div>
 
-      <p id="result"></p>
+          <button class="btn-primary" onclick="agendar()">
+            <i class="fa-solid fa-calendar-plus"></i>
+            Agendar Mensagem
+          </button>
+
+          <p id="result"></p>
+        </div>
+
+        <div class="preview-card">
+          <div class="preview-header">
+            <i class="fa-solid fa-eye"></i> Prévia (estilo WhatsApp)
+          </div>
+          <div class="preview-chat">
+            <div id="previewImage" class="chat-image" style="display:none;">
+              <img src="" alt="arquivo de imagem">
+            </div>
+            <div id="previewFile" class="chat-file" style="display:none;">
+              <i class="fa-solid fa-paperclip"></i>
+              <span>Arquivo anexado</span>
+            </div>
+            <div class="chat-bubble">
+              <span id="previewMessage">Sua mensagem aparecerá aqui</span>
+              <span class="chat-time">agora</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- LISTA -->
     <section class="card list">
       <h2><i class="fa-solid fa-list"></i> Agendamentos Criados</h2>
+
+      <div class="filters">
+        <div class="field">
+          <label><i class="fa-solid fa-filter"></i> Status</label>
+          <select id="statusFilter" onchange="carregarAgendamentos()">
+            <option value="all">Todos</option>
+            <option value="pending">Pendentes</option>
+            <option value="sent">Enviados</option>
+          </select>
+        </div>
+        <div class="field">
+          <label><i class="fa-solid fa-magnifying-glass"></i> Buscar número ou mensagem</label>
+          <input type="text" id="searchTerm" placeholder="54999 ou parte da mensagem" oninput="carregarAgendamentos()" />
+        </div>
+      </div>
 
       <div class="table-wrapper">
         <table>
@@ -89,6 +158,7 @@
               <th>Número(s)</th>
               <th>Mensagem</th>
               <th>Data / Hora</th>
+              <th>Falta</th>
               <th>Status</th>
               <th>Ação</th>
             </tr>
@@ -105,46 +175,269 @@
   </main>
 
   <script>
+    // ── Estado do arquivo selecionado ──────────────────────
+    let selectedFileData = null; // { base64, filename, mimetype }
+
+    // ── Contador de números ────────────────────────────────
+    function updateNumCount() {
+      const nums = document.getElementById("nums").value
+        .split("\n").map(n => n.trim()).filter(Boolean);
+      const el = document.getElementById("num-count");
+      if (el) el.textContent = nums.length + " número(s)";
+    }
+
+    // ── Seleção de arquivo ─────────────────────────────────
+    function handleFileSelect(input) {
+      const file = input.files[0];
+      if (!file) return;
+
+      const maxMB = 15;
+      if (file.size > maxMB * 1024 * 1024) {
+        alert("Arquivo muito grande. Máximo: " + maxMB + "MB");
+        input.value = "";
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target.result;
+
+        // Imagem → comprimir via canvas
+        if (file.type.startsWith("image/")) {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            const MAX = 1280;
+            let w = img.width, h = img.height;
+            if (w > MAX || h > MAX) {
+              if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+              else       { w = Math.round(w * MAX / h); h = MAX; }
+            }
+            canvas.width = w; canvas.height = h;
+            canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+            const compressed = canvas.toDataURL("image/jpeg", 0.85);
+            const base64 = compressed.split(",")[1];
+            selectedFileData = {
+              base64,
+              filename: file.name.replace(/\.[^.]+$/, ".jpg"),
+              mimetype: "image/jpeg"
+            };
+            showFilePreview(compressed, null);
+            updatePreview();
+          };
+          img.src = dataUrl;
+        } else {
+          // Outros arquivos — enviar direto
+          const base64 = dataUrl.split(",")[1];
+          selectedFileData = { base64, filename: file.name, mimetype: file.type };
+          showFilePreview(null, file.name);
+          updatePreview();
+        }
+      };
+      reader.readAsDataURL(file);
+      input.value = ""; // resetar para permitir re-seleção
+    }
+
+    function showFilePreview(imgSrc, docName) {
+      const area      = document.getElementById("filePreview");
+      const img       = document.getElementById("previewImg");
+      const doc       = document.getElementById("previewDoc");
+      const docNameEl = document.getElementById("previewDocName");
+      const uploadArea = document.getElementById("fileUploadArea");
+
+      area.style.display = "flex";
+      uploadArea.style.display = "none";
+
+      if (imgSrc) {
+        img.src = imgSrc;
+        img.style.display = "block";
+        doc.style.display = "none";
+      } else {
+        img.style.display = "none";
+        doc.style.display = "flex";
+        docNameEl.textContent = docName;
+      }
+    }
+
+    function clearFile() {
+      selectedFileData = null;
+      document.getElementById("filePreview").style.display = "none";
+      document.getElementById("fileUploadArea").style.display = "flex";
+      document.getElementById("previewImg").src = "";
+      document.getElementById("previewImg").style.display = "none";
+      document.getElementById("previewDoc").style.display = "none";
+      updatePreview();
+    }
+
+    // ── Prévia estilo WhatsApp ─────────────────────────────
+    function updatePreview() {
+      const msg = document.getElementById("msg").value || "";
+      const previewMessage = document.getElementById("previewMessage");
+      const previewImage = document.getElementById("previewImage");
+      const previewFile = document.getElementById("previewFile");
+
+      const safe = msg
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\n/g, "<br>");
+      previewMessage.innerHTML = safe || "Sua mensagem aparecerá aqui";
+
+      if (selectedFileData) {
+        previewFile.style.display = "flex";
+
+        if (selectedFileData.mimetype?.startsWith("image/")) {
+          const imgEl = previewImage.querySelector("img");
+          imgEl.src = `data:${selectedFileData.mimetype};base64,${selectedFileData.base64}`;
+          previewImage.style.display = "block";
+        } else {
+          previewImage.style.display = "none";
+        }
+      } else {
+        previewFile.style.display = "none";
+        previewImage.style.display = "none";
+      }
+    }
+
+    // ── Importar CSV de números ────────────────────────────
+    function importarCSV(input) {
+      const file = input.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const text = (e.target?.result || "").toString();
+
+        // Suporta separadores ; , espaço ou nova linha
+        const tokens = text
+          .replace(/\r/g, "\n")
+          .split(/[\n;,]+/)
+          .map(t => t.trim())
+          .filter(Boolean);
+
+        const numsOnly = tokens.map(t => t.replace(/[^\d+]/g, ""))
+          .filter(Boolean);
+
+        if (!numsOnly.length) {
+          alert("Nenhum número encontrado no CSV.");
+          return;
+        }
+
+        const textarea = document.getElementById("nums");
+        textarea.value = numsOnly.join("\n");
+        updateNumCount();
+      };
+      reader.readAsText(file, "utf-8");
+      input.value = "";
+    }
+
+    // ── Agendar ────────────────────────────────────────────
     async function agendar() {
       const numbers = document.getElementById("nums").value
-        .split("\n")
-        .map(n => n.trim())
-        .filter(Boolean);
+        .split("\n").map(n => n.trim()).filter(Boolean);
+
+      if (!numbers.length) {
+        setResult("Informe pelo menos um número", false);
+        return;
+      }
+
+      const sendAtVal = document.getElementById("sendAt").value;
+      if (!sendAtVal) {
+        setResult("Informe a data e hora do envio", false);
+        return;
+      }
+
+      const sendAt = new Date(sendAtVal).getTime();
+      if (sendAt <= Date.now()) {
+        setResult("A data deve ser no futuro", false);
+        return;
+      }
+
+      const message = document.getElementById("msg").value;
+      if (!message && !selectedFileData) {
+        setResult("Informe uma mensagem ou selecione um arquivo", false);
+        return;
+      }
 
       const payload = {
         numbers,
-        message: document.getElementById("msg").value,
-        file: document.getElementById("file").value,
-        filename: document.getElementById("filename").value,
-        sendAt: new Date(document.getElementById("sendAt").value).getTime()
+        message,
+        sendAt,
+        recurrence: document.getElementById("recurrence").value || "none",
+        file:     selectedFileData ? `data:${selectedFileData.mimetype};base64,${selectedFileData.base64}` : null,
+        filename: selectedFileData?.filename || null
       };
 
-      const res = await fetch("/api/agendamentos/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+      const btnEl = document.querySelector(".btn-primary");
+      btnEl.disabled = true;
+      btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Agendando...';
 
-      const data = await res.json();
-      document.getElementById("result").innerText =
-        data.ok ? "Agendamento criado com sucesso!" : "Erro ao agendar";
+      try {
+        const res = await fetch("/api/agendamentos/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
 
-      carregarAgendamentos();
+        const data = await res.json();
+
+        if (data.ok) {
+          setResult("✅ Agendamento criado com sucesso!", true);
+          // Limpar formulário
+          document.getElementById("nums").value = "";
+          document.getElementById("msg").value = "";
+          document.getElementById("sendAt").value = "";
+          document.getElementById("recurrence").value = "none";
+          clearFile();
+          updateNumCount();
+          updatePreview();
+          carregarAgendamentos();
+        } else {
+          setResult("❌ " + (data.error || "Erro ao agendar"), false);
+        }
+      } catch {
+        setResult("❌ Erro de conexão", false);
+      } finally {
+        btnEl.disabled = false;
+        btnEl.innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
+      }
     }
 
+    function setResult(msg, ok) {
+      const el = document.getElementById("result");
+      el.textContent = msg;
+      el.style.color = ok ? "#2ee6a6" : "#e54848";
+    }
+
+    // ── Excluir ────────────────────────────────────────────
     async function excluir(id) {
       if (!confirm("Excluir este agendamento?")) return;
       await fetch(`/api/agendamentos/delete/${id}`, { method: "DELETE" });
       carregarAgendamentos();
     }
 
+    // ── Listar ─────────────────────────────────────────────
     async function carregarAgendamentos() {
       const tabela = document.getElementById("agendamentosTable");
       tabela.innerHTML = `<tr><td colspan="5" class="loading">Carregando...</td></tr>`;
 
       try {
         const res = await fetch("/api/agendamentos/list");
-        const rows = await res.json();
+        let rows = await res.json();
+
+        const status = document.getElementById("statusFilter")?.value || "all";
+        const term = (document.getElementById("searchTerm")?.value || "").trim().toLowerCase();
+
+        rows = rows.filter(row => {
+          if (status !== "all" && row.status !== status) return false;
+
+          if (term) {
+            const nums = JSON.parse(row.numbers || "[]").join(" ").toLowerCase();
+            const msg = (row.message || "").toLowerCase();
+            if (!nums.includes(term) && !msg.includes(term)) return false;
+          }
+          return true;
+        });
 
         if (!rows.length) {
           tabela.innerHTML = `<tr><td colspan="5" class="loading">Nenhum agendamento encontrado</td></tr>`;
@@ -155,24 +448,34 @@
 
         rows.forEach(row => {
           const nums = JSON.parse(row.numbers || "[]");
-
+          const recurrenceHtml = recurrenceBadge(row.recurrence);
           const tr = document.createElement("tr");
           tr.innerHTML = `
-          <td>${nums.join("<br>")}</td>
-          <td>${row.message || "(com arquivo)"}</td>
-          <td>${formatarData(row.send_at)}</td>
-          <td class="status ${row.status}">
-            ${row.status === "pending" ? "Pendente" : "Enviado"}
-          </td>
-          <td class="action-cell">
-            <button class="btn-del" onclick="excluir(${row.id})">
-              <i class="fa-solid fa-trash"></i>
-              Excluir
-            </button>
-          </td>
-        `;
+            <td>${nums.join("<br>")}</td>
+            <td>${row.message || "<i>(arquivo)</i>"}</td>
+            <td>
+              ${formatarData(row.send_at)}
+              ${recurrenceHtml}
+            </td>
+            <td>
+              <span class="countdown" data-send="${row.send_at}" data-status="${row.status}">
+                ${row.status === "pending" ? formatarCountdown(row.send_at) : "-"}
+              </span>
+            </td>
+            <td class="status ${row.status}">
+              ${row.status === "pending" ? "⏳ Pendente" : "✅ Enviado"}
+            </td>
+            <td class="action-cell">
+              <button class="btn-del" onclick="excluir(${row.id})">
+                <i class="fa-solid fa-trash"></i>
+                Excluir
+              </button>
+            </td>
+          `;
           tabela.appendChild(tr);
         });
+
+        iniciarCountdowns();
 
       } catch {
         tabela.innerHTML = `<tr><td colspan="5" class="error">Erro ao carregar</td></tr>`;
@@ -181,10 +484,63 @@
 
     function formatarData(ts) {
       const d = new Date(ts);
-      return d.toLocaleDateString() + " " +
+      return d.toLocaleDateString("pt-BR") + " " +
         d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
 
+    function formatarCountdown(ts) {
+      const diff = ts - Date.now();
+      if (diff <= 0) return "agora";
+      const sec = Math.floor(diff / 1000);
+      const mins = Math.floor(sec / 60);
+      const hrs = Math.floor(mins / 60);
+      const days = Math.floor(hrs / 24);
+      const rHrs = hrs % 24;
+      const rMins = mins % 60;
+
+      if (days > 0) return `em ${days}d ${rHrs}h`;
+      if (hrs > 0) return `em ${hrs}h ${rMins}m`;
+      const rSecs = sec % 60;
+      if (mins > 0) return `em ${mins}m ${rSecs}s`;
+      return `em ${rSecs}s`;
+    }
+
+    let countdownTimer = null;
+
+    function iniciarCountdowns() {
+      if (countdownTimer) clearInterval(countdownTimer);
+      const update = () => {
+        document.querySelectorAll(".countdown").forEach(el => {
+          const status = el.dataset.status;
+          if (status !== "pending") {
+            el.textContent = "-";
+            return;
+          }
+          const ts = Number(el.dataset.send || 0);
+          el.textContent = formatarCountdown(ts);
+        });
+      };
+      update();
+      countdownTimer = setInterval(update, 1000);
+    }
+
+    function formatarRecorrencia(rec) {
+      switch (rec) {
+        case "daily": return "Diário";
+        case "weekly": return "Semanal";
+        case "monthly": return "Mensal";
+        default: return "Único";
+      }
+    }
+
+    function recurrenceBadge(rec) {
+      if (!rec || rec === "none") return "";
+      return `<div class="recurrence-pill">
+        <i class="fa-solid fa-rotate"></i> ${formatarRecorrencia(rec)}
+      </div>`;
+    }
+
+    updatePreview();
     carregarAgendamentos();
     setInterval(carregarAgendamentos, 10000);
   </script>

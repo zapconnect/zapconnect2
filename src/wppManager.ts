@@ -398,20 +398,25 @@ export function registerHumanActivity(
     chatHumanTimer.delete(key);
   }
 
-  const timer = setTimeout(() => {
-    tryDisableHumanByInactivity(userId, sessionName, chatId);
-  }, HUMAN_INACTIVITY_DEFAULT_MS);
+  // Usar a duração original configurada pelo operador
+  const actualDuration = chatHumanDuration.get(key) ?? HUMAN_INACTIVITY_DEFAULT_MS;
 
-  chatHumanTimer.set(key, timer);
+  // Só agenda timer se tiver duração definida (null = sem limite)
+  if (actualDuration !== null) {
+    const timer = setTimeout(() => {
+      tryDisableHumanByInactivity(userId, sessionName, chatId);
+    }, actualDuration);
+    chatHumanTimer.set(key, timer);
+  }
 
-  // ✅ ATUALIZA PAINEL AO VIVO (sem F5)
+  // ✅ ATUALIZA PAINEL AO VIVO com a duração correta
   try {
     global.io?.emit("human_state_changed", {
       chatId,
       userId,
       sessionName,
       state: true,
-      expireAt: Date.now() + HUMAN_INACTIVITY_DEFAULT_MS,
+      expireAt: actualDuration !== null ? Date.now() + actualDuration : null,
     });
   } catch { }
 }
@@ -429,10 +434,11 @@ function tryDisableHumanByInactivity(
 
   const last = chatHumanLastActivity.get(key) || Date.now();
   const inactiveFor = Date.now() - last;
+  const actualDuration = chatHumanDuration.get(key) ?? HUMAN_INACTIVITY_DEFAULT_MS;
 
-  // ainda não bateu 5 min -> recalcula tempo restante
-  if (inactiveFor < HUMAN_INACTIVITY_DEFAULT_MS) {
-    const remaining = HUMAN_INACTIVITY_DEFAULT_MS - inactiveFor;
+  // ainda não atingiu o tempo -> recalcula tempo restante
+  if (actualDuration !== null && inactiveFor < actualDuration) {
+    const remaining = actualDuration - inactiveFor;
 
     if (chatHumanTimer.has(key)) {
       clearTimeout(chatHumanTimer.get(key)!);
@@ -791,6 +797,34 @@ function attachEvents(
         } catch { }
         return;
       }
+
+      // =================================================
+      // 🌙 HORÁRIO DE SILÊNCIO
+      // =================================================
+      try {
+        const db = await getDB();
+        const uCfg = await db.get<{
+          ia_silence_start: number | null;
+          ia_silence_end: number | null;
+        }>(`SELECT ia_silence_start, ia_silence_end FROM users WHERE id = ?`, [userId]);
+
+        if (uCfg?.ia_silence_start !== null && uCfg?.ia_silence_end !== null) {
+          const nowHour = new Date().getHours();
+          const s = Number(uCfg.ia_silence_start);
+          const e = Number(uCfg.ia_silence_end);
+
+          // Intervalo pode cruzar meia-noite (ex: 22–8)
+          const inSilence = s <= e
+            ? nowHour >= s && nowHour < e          // ex: 9–17
+            : nowHour >= s || nowHour < e;          // ex: 22–8
+
+          if (inSilence) {
+            console.log(`🌙 IA silenciada (${s}h–${e}h) para user ${userId}`);
+            messageBuffer.delete(chatKey);
+            return;
+          }
+        }
+      } catch { }
 
       // =================================================
       // 🔐 LIMITE DE PLANO IA

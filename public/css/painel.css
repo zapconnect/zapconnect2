@@ -299,3 +299,152 @@
 }
 
 .session-empty i { font-size: 36px; opacity: .3; }
+
+/* ─── Indicador de uso de IA ─────────────────────────────── */
+.ia-usage-wrap {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.ia-usage-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.ia-usage-label {
+  font-size: 12px;
+  color: var(--muted, #aab0d9);
+}
+
+.ia-usage-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text, #fff);
+}
+
+.ia-progress-track {
+  height: 6px;
+  background: rgba(255,255,255,.08);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ia-progress-bar {
+  height: 100%;
+  border-radius: 999px;
+  transition: width .5s ease, background .3s;
+}
+
+.bar-ok        { background: #2ee6a6; }
+.bar-warning   { background: #f2c94c; }
+.bar-danger    { background: #e54848; animation: blink-bar 1.2s infinite; }
+.bar-unlimited { background: linear-gradient(90deg, #6c64ef, #2ee6a6); }
+
+@keyframes blink-bar {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: .6; }
+}
+
+.ia-usage-footer {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--muted, #aab0d9);
+}
+
+/* ─── Horário de silêncio ────────────────────────────────── */
+.silence-wrap {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.silence-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.silence-config {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeIn .2s ease;
+}
+
+.silence-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.silence-row label {
+  font-size: 12px;
+  color: var(--muted, #aab0d9);
+  margin: 0;
+}
+
+.silence-select {
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text, #fff);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 5px 10px;
+  outline: none;
+  cursor: pointer;
+}
+
+.silence-select:focus {
+  border-color: var(--accent, #6c64ef);
+}
+
+.btn-sm {
+  padding: 5px 12px !important;
+  font-size: 12px !important;
+}
+
+.silence-hint {
+  font-size: 11px;
+  color: var(--muted, #aab0d9);
+  margin: 0;
+  opacity: .7;
+}
+
+.switch-sm input { width: 36px; height: 20px; }
+
+/* ─── Contador de caracteres do prompt ───────────────────── */
+.prompt-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 5px 0 10px;
+  min-height: 18px;
+}
+
+.prompt-count {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted, #aab0d9);
+  transition: color .2s;
+}
+
+.prompt-count.count-ok      { color: #2ee6a6; }
+.prompt-count.count-warning { color: #f2c94c; }
+.prompt-count.count-danger  { color: #e54848; }
+
+.prompt-hint {
+  font-size: 11px;
+  transition: color .2s;
+  text-align: right;
+  max-width: 65%;
+}
+
+.prompt-hint.hint-ok      { color: #2ee6a6; }
+.prompt-hint.hint-warning { color: #f2c94c; }
+.prompt-hint.hint-danger  { color: #e54848; }

@@ -53,6 +53,13 @@ async function loadUser() {
     document.getElementById("user-id").innerText = user.id;
     document.getElementById("user-name").innerText = user.name;
     document.getElementById("user-prompt").value = user.prompt;
+    updateCharCount(); // Atualizar contador ao carregar
+
+    // Renderizar indicador de uso de IA
+    renderIaUsage(user);
+
+    // Carregar configuração de silêncio
+    renderSilenceConfig(user);
 
     // 🔒 garante que QR e loading começam escondidos
     hideQrUI();
@@ -60,6 +67,150 @@ async function loadUser() {
     listSessions();
 }
 
+// ===============================
+// 🤖 INDICADOR DE USO DA IA
+// ===============================
+function renderIaUsage(user) {
+    const LIMITS = { free: 500, starter: 500, pro: null };
+
+    const wrap      = document.getElementById("ia-usage-wrap");
+    const countEl   = document.getElementById("ia-usage-count");
+    const barEl     = document.getElementById("ia-progress-bar");
+    const remaining = document.getElementById("ia-usage-remaining");
+
+    if (!wrap) return;
+
+    const used  = Number(user.ia_messages_used) || 0;
+    const plan  = user.plan || "free";
+    const limit = LIMITS[plan] ?? null;
+
+    wrap.style.display = "block";
+
+    if (limit === null) {
+        // Plano ilimitado
+        countEl.textContent   = used + " / ∞";
+        barEl.style.width     = "100%";
+        barEl.className       = "ia-progress-bar bar-unlimited";
+        remaining.textContent = "Plano Pro — mensagens ilimitadas 🚀";
+        return;
+    }
+
+    const pct  = Math.min(100, Math.round((used / limit) * 100));
+    const left = Math.max(0, limit - used);
+
+    countEl.textContent = `${used} / ${limit}`;
+    barEl.style.width   = pct + "%";
+
+    barEl.className = "ia-progress-bar " +
+        (pct >= 90 ? "bar-danger" : pct >= 70 ? "bar-warning" : "bar-ok");
+
+    remaining.textContent = left > 0
+        ? `${left} mensagens restantes este mês`
+        : "⚠️ Limite atingido — faça upgrade para continuar";
+
+    if (left === 0) remaining.style.color = "#e54848";
+}
+
+
+// ===============================
+// ✍️ CONTADOR DE CARACTERES DO PROMPT
+// ===============================
+function updateCharCount() {
+    const textarea = document.getElementById("user-prompt");
+    const countEl  = document.getElementById("prompt-count");
+    const hintEl   = document.getElementById("prompt-hint");
+
+    if (!textarea || !countEl) return;
+
+    const len = textarea.value.length;
+    countEl.textContent = len + " caracteres";
+
+    // Remover classes anteriores
+    countEl.className = "prompt-count";
+    hintEl.textContent = "";
+
+    if (len === 0) {
+        hintEl.textContent = "Prompt vazio — a IA vai responder sem contexto";
+        hintEl.className = "prompt-hint hint-warning";
+    } else if (len < 50) {
+        hintEl.textContent = "Prompt muito curto — adicione mais contexto para melhores respostas";
+        hintEl.className = "prompt-hint hint-warning";
+        countEl.className = "prompt-count count-warning";
+    } else if (len > 2000) {
+        hintEl.textContent = "Prompt muito longo — pode afetar a velocidade da IA";
+        hintEl.className = "prompt-hint hint-danger";
+        countEl.className = "prompt-count count-danger";
+    } else if (len >= 100) {
+        hintEl.textContent = "✓ Prompt bem configurado";
+        hintEl.className = "prompt-hint hint-ok";
+        countEl.className = "prompt-count count-ok";
+    }
+}
+
+// ===============================
+// 🌙 HORÁRIO DE SILÊNCIO
+// ===============================
+function renderSilenceConfig(user) {
+    const toggle  = document.getElementById("silence-toggle");
+    const config  = document.getElementById("silence-config");
+    const selStart = document.getElementById("silence-start");
+    const selEnd   = document.getElementById("silence-end");
+
+    if (!toggle) return;
+
+    const hassilence = user.ia_silence_start !== null && user.ia_silence_start !== undefined;
+
+    toggle.checked = hassilence;
+    if (config) config.style.display = hassilence ? "block" : "none";
+
+    if (hassilence && selStart && selEnd) {
+        selStart.value = String(user.ia_silence_start ?? 22);
+        selEnd.value   = String(user.ia_silence_end   ?? 8);
+    } else if (selStart && selEnd) {
+        selStart.value = "22";
+        selEnd.value   = "8";
+    }
+}
+
+function toggleSilence() {
+    const toggle = document.getElementById("silence-toggle");
+    const config = document.getElementById("silence-config");
+    if (config) config.style.display = toggle.checked ? "block" : "none";
+
+    if (!toggle.checked) {
+        // Desativar silêncio imediatamente
+        fetch(API + "/user/ia-silence", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: false })
+        }).then(() => notify("Horário de silêncio desativado", "success"));
+    }
+}
+
+async function saveSilence() {
+    const start = Number(document.getElementById("silence-start")?.value);
+    const end   = Number(document.getElementById("silence-end")?.value);
+
+    try {
+        const res = await fetch(API + "/user/ia-silence", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: true, start, end })
+        });
+
+        const data = await res.json();
+        if (data.ok) {
+            const fmt = h => String(h).padStart(2,"0") + ":00";
+            notify(`Silêncio ativo: ${fmt(start)} – ${fmt(end)} ✅`, "success");
+        } else {
+            notify(data.error || "Erro ao salvar", "error");
+        }
+    } catch {
+        notify("Erro ao salvar horário de silêncio", "error");
+    }
+}
 
 // ===============================
 // 📊 MÉTRICAS DO PAINEL
@@ -173,6 +324,10 @@ async function listSessions() {
     });
 
     const { sessions } = await res.json();
+
+    // Cache global para goToChat verificar
+    window._cachedSessions = sessions || [];
+
     const box = document.getElementById("sessions-list");
     box.innerHTML = "";
 

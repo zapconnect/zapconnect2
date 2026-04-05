@@ -33,6 +33,13 @@ export async function initDB() {
     // Coluna já existe — ignorar
   }
 
+  // Migração: adicionar colunas de horário de silêncio
+  try {
+    await pool.query("ALTER TABLE users ADD COLUMN ia_silence_start INT DEFAULT NULL");
+    await pool.query("ALTER TABLE users ADD COLUMN ia_silence_end INT DEFAULT NULL");
+    console.log("✅ Colunas ia_silence adicionadas");
+  } catch { }
+
   // Migração: adicionar follow_up_date se não existir
   try {
     await pool.query(
@@ -41,6 +48,16 @@ export async function initDB() {
     console.log("✅ Coluna follow_up_date adicionada ao CRM");
   } catch {
     // Coluna já existe — ignorar
+  }
+
+  // Migração: recorrência nos agendamentos
+  try {
+    await pool.query(
+      "ALTER TABLE schedules ADD COLUMN recurrence VARCHAR(20) DEFAULT 'none'"
+    );
+    console.log("✅ Coluna recurrence adicionada a schedules");
+  } catch {
+    // Coluna já existe
   }
 
   // ===============================
@@ -64,6 +81,8 @@ export async function initDB() {
       ia_enabled TINYINT DEFAULT 1,
       ia_messages_used INT DEFAULT 0,
       ia_messages_reset_at BIGINT,
+      ia_silence_start INT DEFAULT NULL,
+      ia_silence_end INT DEFAULT NULL,
 
       plan VARCHAR(50) DEFAULT 'free',
       plan_expires_at BIGINT,
@@ -103,6 +122,7 @@ export async function initDB() {
       file LONGTEXT,
       filename VARCHAR(255),
       send_at BIGINT NOT NULL,
+      recurrence VARCHAR(20) DEFAULT 'none',
       status VARCHAR(50) DEFAULT 'pending',
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
