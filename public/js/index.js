@@ -8,6 +8,7 @@ const API = window.APP_CONFIG?.API_URL || window.location.origin;
 // ===============================
 let qrTimer = null;
 let currentUser = null;
+let lastScheduleLogId = 0;
 
 // ===============================
 // 🔌 SOCKET.IO
@@ -24,6 +25,7 @@ const socket = io(API, {
 window.onload = () => {
     loadUser();
     loadStats();
+    startScheduleLogWatcher();
 };
 
 function hideQrUI() {
@@ -590,6 +592,41 @@ function showQrImage(src) {
 function hideQrLoading() {
     const loading = document.getElementById("qr-loading");
     if (loading) loading.style.display = "none";
+}
+
+// ===============================
+// 🔔 ALERTAS DE AGENDAMENTO (PAINEL)
+// ===============================
+async function pollScheduleLogs() {
+    try {
+        const res = await fetch(`${API}/api/agendamentos/logs?after=${lastScheduleLogId}`, {
+            credentials: "include"
+        });
+        if (!res.ok) return;
+
+        const data = await res.json();
+        const logs = Array.isArray(data.logs) ? data.logs : [];
+
+        logs.forEach(log => {
+            const id = Number(log.id) || 0;
+            if (id > lastScheduleLogId) lastScheduleLogId = id;
+
+            const success = Number(log.success_count) || 0;
+            const failure = Number(log.failure_count) || 0;
+            const sentAt = log.sent_at ? new Date(Number(log.sent_at)).toLocaleString("pt-BR") : "";
+            const type = failure > 0 ? "warning" : "success";
+            const msg = `Agendamento #${log.schedule_id} concluído: ${success} sucesso(s), ${failure} falha(s)${sentAt ? " — " + sentAt : ""}`;
+
+            notify(msg, type, 6000);
+        });
+    } catch (err) {
+        console.warn("Erro ao buscar logs de agendamento", err);
+    }
+}
+
+function startScheduleLogWatcher() {
+    pollScheduleLogs();
+    setInterval(pollScheduleLogs, 15000);
 }
 /* ===============================
    🔔 NOTIFICAÇÕES (TOAST)

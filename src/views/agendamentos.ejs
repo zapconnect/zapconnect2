@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="pt-BR">
 
 <head>
@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/css/agendamentos.css">
 </head>
 
-<body>
+<body data-user-tz="<%= user.timezone_offset || -180 %>">
 
   <header class="topbar">
     <div class="brand">
@@ -33,6 +33,21 @@
 
       <div class="form-grid">
         <div class="form-fields">
+          <div class="field">
+            <label><i class="fa-solid fa-earth-americas"></i> Fuso horário</label>
+            <div class="two-cols">
+              <select id="timezoneSelect">
+                <option value="-180">(UTC-03:00) Brasília</option>
+                <option value="-240">(UTC-04:00) Manaus</option>
+                <option value="-120">(UTC-02:00) Fernando de Noronha</option>
+                <option value="0">(UTC+00:00) Londres</option>
+                <option value="60">(UTC+01:00) Lisboa</option>
+                <option value="-300">(UTC-05:00) NY/EST</option>
+              </select>
+              <button class="btn-secondary" type="button" onclick="salvarTimezone()">Salvar fuso</button>
+            </div>
+            <small class="hint">Usado para interpretar data/hora dos agendamentos.</small>
+          </div>
           <label>
             <i class="fa-solid fa-phone"></i>
             Lista de números
@@ -52,6 +67,9 @@
             Mensagem
           </label>
           <textarea id="msg" rows="3" placeholder="Digite a mensagem..." oninput="updatePreview()"></textarea>
+          <small class="hint">
+            Personalize com variáveis: {{nome}}, {{numero}}, {{data}}, {{hora}}, {{pedido}} ou qualquer coluna do CSV (ex.: {{email}}).
+          </small>
 
           <label>
             <i class="fa-solid fa-paperclip"></i>
@@ -94,16 +112,24 @@
                 <i class="fa-solid fa-rotate"></i>
                 Repetição
               </label>
-              <select id="recurrence">
+              <select id="recurrence" onchange="toggleRecurrenceEnd()">
                 <option value="none">Não repetir (único)</option>
                 <option value="daily">Diario</option>
                 <option value="weekly">Semanal</option>
                 <option value="monthly">Mensal</option>
               </select>
             </div>
+            <div class="field" id="recurrenceEndField" style="display:none;">
+              <label>
+                <i class="fa-solid fa-flag-checkered"></i>
+                Encerrar recorrência em
+              </label>
+              <input type="date" id="recurrenceEnd">
+              <small class="hint">Opcional. Último dia para repetir.</small>
+            </div>
           </div>
 
-          <button class="btn-primary" onclick="agendar()">
+          <button id="btnAgendar" class="btn-primary" onclick="agendar()">
             <i class="fa-solid fa-calendar-plus"></i>
             Agendar Mensagem
           </button>
@@ -139,7 +165,7 @@
       <div class="filters">
         <div class="field">
           <label><i class="fa-solid fa-filter"></i> Status</label>
-          <select id="statusFilter" onchange="carregarAgendamentos()">
+          <select id="statusFilter" onchange="resetPageAndLoad()">
             <option value="all">Todos</option>
             <option value="pending">Pendentes</option>
             <option value="sent">Enviados</option>
@@ -147,7 +173,32 @@
         </div>
         <div class="field">
           <label><i class="fa-solid fa-magnifying-glass"></i> Buscar número ou mensagem</label>
-          <input type="text" id="searchTerm" placeholder="54999 ou parte da mensagem" oninput="carregarAgendamentos()" />
+          <input type="text" id="searchTerm" placeholder="54999 ou parte da mensagem" oninput="resetPageAndLoad()" />
+        </div>
+        <div class="field">
+          <label><i class="fa-solid fa-calendar"></i> Período</label>
+          <div class="date-range">
+            <input type="date" id="dateFrom" onchange="resetPageAndLoad()">
+            <span>à</span>
+            <input type="date" id="dateTo" onchange="resetPageAndLoad()">
+          </div>
+        </div>
+        <div class="field">
+          <label><i class="fa-solid fa-arrow-down-wide-short"></i> Ordenar</label>
+          <select id="orderBy" onchange="resetPageAndLoad()">
+            <option value="send_at|desc">Data de envio (mais recente)</option>
+            <option value="send_at|asc">Data de envio (mais antiga)</option>
+            <option value="status|asc">Status (pendentes primeiro)</option>
+            <option value="status|desc">Status (enviados primeiro)</option>
+          </select>
+        </div>
+        <div class="field small">
+          <label><i class="fa-solid fa-list-ol"></i> Por página</label>
+          <select id="pageSize" onchange="resetPageAndLoad()">
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+          </select>
         </div>
       </div>
 
@@ -165,28 +216,143 @@
           </thead>
           <tbody id="agendamentosTable">
             <tr>
-              <td colspan="5" class="loading">Carregando...</td>
+              <td colspan="6" class="loading">Carregando...</td>
             </tr>
           </tbody>
         </table>
+      </div>
+      <div class="pagination">
+        <button id="prevPage" class="btn-secondary" onclick="changePage(-1)">« Anterior</button>
+        <span id="pageInfo">Página 1/1</span>
+        <button id="nextPage" class="btn-secondary" onclick="changePage(1)">Próxima »</button>
       </div>
     </section>
 
   </main>
 
+  <!-- Modal de confirmação -->
+  <div id="confirmModal" class="modal hidden">
+    <div class="modal-content">
+      <h3><i class="fa-solid fa-clipboard-check"></i> Confirmar agendamento</h3>
+      <ul class="summary-list">
+        <li><span>Data e hora:</span> <strong id="summary-datetime">—</strong></li>
+        <li><span>Quantidade:</span> <strong id="summary-qty">—</strong></li>
+        <li><span>Recorrência:</span> <strong id="summary-recurrence">—</strong></li>
+        <li><span>Mensagem:</span> <strong id="summary-message">—</strong></li>
+        <li><span>Personalizadas:</span> <strong id="summary-personalized">—</strong></li>
+        <li><span>Arquivo:</span> <strong id="summary-file">—</strong></li>
+      </ul>
+      <div class="modal-actions">
+        <button id="btnConfirmModal" class="btn-primary">
+          <i class="fa-solid fa-check"></i> Confirmar e agendar
+        </button>
+        <button id="btnCancelModal" class="btn-secondary" type="button">
+          <i class="fa-solid fa-circle-xmark"></i> Voltar e editar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de detalhes -->
+  <div id="detailsModal" class="modal hidden">
+    <div class="modal-content">
+      <h3><i class="fa-solid fa-list"></i> Histórico do agendamento</h3>
+      <div id="detailsBody" class="details-body">Carregando...</div>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="fecharDetalhes()">Fechar</button>
+      </div>
+    </div>
+  </div>
+
   <script>
-    // ── Estado do arquivo selecionado ──────────────────────
+    // ── Estado do arquivo selecionado ────────────────────────────────
     let selectedFileData = null; // { base64, filename, mimetype }
+    let editingId = null;
+    let existingFilename = null;
+    let contactsData = [];
+    const plan = "<%= (user.plan || 'starter').toLowerCase() %>";
+    const PLAN_LIMITS = { free: 50, trial: 50, starter: 50, pro: 200 };
+    const MAX_NUMBERS = PLAN_LIMITS[plan] ?? 50;
+    const WARN_THRESHOLD = 0.8; // 80%
+    let agRows = [];
+    let agPage = 1;
+    let agTotalPages = 1;
+    let USER_TZ = Number(document.body.dataset.userTz || -180); // minutos em relação ao UTC
+
+    // Fallback de notify para esta página, caso não esteja carregado do layout
+    function notify(msg, type = "info") {
+      if (window.toastNotify) return window.toastNotify(msg, type);
+      // fallback simples
+      if (type === "error") alert("❌ " + msg);
+      else if (type === "warning") alert("⚠️ " + msg);
+      else alert(msg);
+    }
+
+    function toggleRecurrenceEnd() {
+      const rec = document.getElementById("recurrence")?.value || "none";
+      const field = document.getElementById("recurrenceEndField");
+      if (!field) return;
+      field.style.display = rec === "none" ? "none" : "block";
+    }
+
+    async function salvarTimezone() {
+      const sel = document.getElementById("timezoneSelect");
+      if (!sel) return;
+      const offset = Number(sel.value);
+      try {
+        const res = await fetch("/user/timezone", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ timezoneOffset: offset })
+        });
+        const data = await res.json();
+        if (!res.ok || data?.ok === false) throw new Error(data?.error || "Erro ao salvar");
+        USER_TZ = offset;
+        notify("Fuso horário atualizado", "success");
+      } catch (err) {
+        alert(err?.message || "Erro ao salvar fuso");
+      }
+    }
+
+    function toUtcFromInput(inputStr, offsetMinutes) {
+      // inputStr: "YYYY-MM-DDTHH:MM"
+      const [datePart, timePart] = inputStr.split("T");
+      const [year, month, day] = datePart.split("-").map(Number);
+      const [hour, minute] = timePart.split(":").map(Number);
+      const utcMs = Date.UTC(year, month - 1, day, hour, minute);
+      return utcMs - offsetMinutes * 60000;
+    }
+
+    function fromUtcToInput(utcMs, offsetMinutes) {
+      const localMs = utcMs + offsetMinutes * 60000;
+      const d = new Date(localMs);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+    }
+
+    function getTimezoneOffsetSelected() {
+      return Number(document.getElementById("timezoneSelect")?.value || USER_TZ || -180);
+    }
 
     // ── Contador de números ────────────────────────────────
     function updateNumCount() {
       const nums = document.getElementById("nums").value
         .split("\n").map(n => n.trim()).filter(Boolean);
       const el = document.getElementById("num-count");
-      if (el) el.textContent = nums.length + " número(s)";
+      if (el) {
+        const used = contactsData.length ? contactsData.length : nums.length;
+        const remaining = Math.max(MAX_NUMBERS - used, 0);
+        const pct = used / MAX_NUMBERS;
+        let cls = "ok";
+        if (used > MAX_NUMBERS) cls = "danger";
+        else if (pct >= WARN_THRESHOLD) cls = "warn";
+        el.className = `field-hint limit-${cls}`;
+        const personalizedTag = contactsData.length ? " • mensagens personalizadas" : "";
+        el.innerHTML = `${used} número(s) • limite ${MAX_NUMBERS} • restantes ${remaining}${personalizedTag}`;
+      }
     }
 
-    // ── Seleção de arquivo ─────────────────────────────────
+    // ── Seleção de arquivo ────────────────────────────────
     function handleFileSelect(input) {
       const file = input.files[0];
       if (!file) return;
@@ -201,6 +367,7 @@
       const reader = new FileReader();
       reader.onload = (e) => {
         const dataUrl = e.target.result;
+        existingFilename = null;
 
         // Imagem → comprimir via canvas
         if (file.type.startsWith("image/")) {
@@ -261,6 +428,7 @@
 
     function clearFile() {
       selectedFileData = null;
+      existingFilename = null;
       document.getElementById("filePreview").style.display = "none";
       document.getElementById("fileUploadArea").style.display = "flex";
       document.getElementById("previewImg").src = "";
@@ -269,14 +437,69 @@
       updatePreview();
     }
 
-    // ── Prévia estilo WhatsApp ─────────────────────────────
+    function getPreviewContext() {
+      const now = new Date();
+      const dataHoje = now.toLocaleDateString("pt-BR");
+      const horaAgora = now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+      if (contactsData.length) {
+        const first = contactsData[0];
+        const vars = first?.vars || {};
+        return {
+          numero: first.number || "55999990000",
+          nome: vars.nome || vars.name || "Maria",
+          pedido: vars.pedido || vars.order || "#12345",
+          data: dataHoje,
+          hora: horaAgora,
+          ...vars,
+        };
+      }
+
+      return {
+        numero: "55999990000",
+        nome: "Maria",
+        pedido: "#12345",
+        data: dataHoje,
+        hora: horaAgora,
+      };
+    }
+
+    function renderTemplatePreview(template) {
+      if (!template) return "";
+      const ctx = getPreviewContext();
+      const mapKeys = {
+        numero: ctx.numero,
+        number: ctx.numero,
+        nome: ctx.nome,
+        name: ctx.nome,
+        pedido: ctx.pedido,
+        order: ctx.pedido,
+        data: ctx.data,
+        data_atual: ctx.data,
+        hoje: ctx.data,
+        hora: ctx.hora,
+        horario: ctx.hora,
+        time: ctx.hora,
+        date: ctx.data,
+      };
+
+      return template.replace(/{{\s*([\w.-]+)\s*}}/gi, (_m, keyRaw) => {
+        const key = String(keyRaw || "").toLowerCase();
+        if (mapKeys[key] !== undefined) return mapKeys[key];
+        if (ctx[key] !== undefined) return ctx[key];
+        return "";
+      });
+    }
+
+    // ── Prévia estilo WhatsApp ────────────────────────────
     function updatePreview() {
       const msg = document.getElementById("msg").value || "";
+      const templated = renderTemplatePreview(msg);
       const previewMessage = document.getElementById("previewMessage");
       const previewImage = document.getElementById("previewImage");
       const previewFile = document.getElementById("previewFile");
 
-      const safe = msg
+      const safe = templated
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
@@ -306,38 +529,77 @@
 
       const reader = new FileReader();
       reader.onload = (e) => {
-        const text = (e.target?.result || "").toString();
+        const text = (e.target?.result || "").toString().replace(/\r/g, "\n");
+        const delim = text.includes(";") && text.split(";").length >= text.split(",").length
+          ? ";"
+          : text.includes("\t")
+            ? "\t"
+            : ",";
 
-        // Suporta separadores ; , espaço ou nova linha
-        const tokens = text
-          .replace(/\r/g, "\n")
-          .split(/[\n;,]+/)
-          .map(t => t.trim())
-          .filter(Boolean);
+        const lines = text.split("\n").filter(Boolean);
+        if (!lines.length) return alert("Nenhum dado encontrado.");
 
-        const numsOnly = tokens.map(t => t.replace(/[^\d+]/g, ""))
-          .filter(Boolean);
+        const headers = lines[0].split(delim).map(h => h.trim().toLowerCase());
+        const idxNum = headers.findIndex(h => ["numero","número","number","phone","telefone"].includes(h));
+        const idxMsg = headers.findIndex(h => ["mensagem","message","msg","texto"].includes(h));
 
-        if (!numsOnly.length) {
+        let parsed = [];
+        if (idxNum >= 0) {
+          for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(delim);
+            const num = (cols[idxNum] || "").replace(/[^\d+]/g, "");
+            if (!num) continue;
+            const msg = idxMsg >= 0 ? (cols[idxMsg] || "") : "";
+
+            const vars = {};
+            headers.forEach((h, idx) => {
+              if (idx === idxNum || idx === idxMsg) return;
+              const key = h.replace(/[^a-z0-9_]+/g, "_");
+              const val = cols[idx] || "";
+              if (key && val) vars[key] = val;
+            });
+
+            parsed.push({ number: num, message: msg, vars: Object.keys(vars).length ? vars : undefined });
+          }
+        }
+
+        // fallback para lista simples
+        if (!parsed.length) {
+          const tokens = text
+            .split(/[\n;,]+/)
+            .map(t => t.trim())
+            .filter(Boolean);
+          parsed = tokens.map(t => ({ number: t.replace(/[^\d+]/g, ""), message: "" }))
+            .filter(p => p.number);
+        }
+
+        if (!parsed.length) {
           alert("Nenhum número encontrado no CSV.");
           return;
         }
 
+        contactsData = parsed;
         const textarea = document.getElementById("nums");
-        textarea.value = numsOnly.join("\n");
+        textarea.value = parsed.map(p => p.number).join("\n");
         updateNumCount();
+        updatePreview();
       };
       reader.readAsText(file, "utf-8");
       input.value = "";
     }
 
-    // ── Agendar ────────────────────────────────────────────
+    // ── Agendar ────────────────────────────────
     async function agendar() {
       const numbers = document.getElementById("nums").value
         .split("\n").map(n => n.trim()).filter(Boolean);
+      const totalCount = contactsData.length ? contactsData.length : numbers.length;
 
-      if (!numbers.length) {
+      if (!numbers.length && !contactsData.length) {
         setResult("Informe pelo menos um número", false);
+        return;
+      }
+      if (totalCount > MAX_NUMBERS) {
+        setResult(`Limite do plano: máximo ${MAX_NUMBERS} números`, false);
         return;
       }
 
@@ -347,10 +609,21 @@
         return;
       }
 
-      const sendAt = new Date(sendAtVal).getTime();
+      const tzOffset = getTimezoneOffsetSelected();
+      const sendAt = toUtcFromInput(sendAtVal, tzOffset);
       if (sendAt <= Date.now()) {
         setResult("A data deve ser no futuro", false);
         return;
+      }
+
+      const recurrence = document.getElementById("recurrence").value || "none";
+      const recurrenceEndVal = document.getElementById("recurrenceEnd")?.value || "";
+      if (recurrence !== "none" && recurrenceEndVal) {
+        const endTs = toUtcFromInput(recurrenceEndVal + "T23:59", tzOffset);
+        if (!Number.isFinite(endTs) || endTs <= sendAt) {
+          setResult("Encerramento da recorrência deve ser após a primeira data.", false);
+          return;
+        }
       }
 
       const message = document.getElementById("msg").value;
@@ -361,20 +634,193 @@
 
       const payload = {
         numbers,
+        contacts: contactsData.length ? contactsData : undefined,
         message,
         sendAt,
         recurrence: document.getElementById("recurrence").value || "none",
+        recurrenceEnd: (document.getElementById("recurrenceEnd")?.value || "")
+          ? toUtcFromInput(document.getElementById("recurrenceEnd").value + "T23:59", tzOffset)
+          : null,
         file:     selectedFileData ? `data:${selectedFileData.mimetype};base64,${selectedFileData.base64}` : null,
         filename: selectedFileData?.filename || null
       };
 
-      const btnEl = document.querySelector(".btn-primary");
+      showConfirmModal(payload);
+    }
+
+    function editar(id) {
+      const row = agRows.find(r => Number(r.id) === Number(id));
+      if (!row) return;
+      editingId = id;
+      existingFilename = row.filename || null;
+      selectedFileData = null;
+
+      // Preenche campos
+      const nums = JSON.parse(row.numbers || "[]");
+      const hasPersonalized = Array.isArray(nums) && nums.length && typeof nums[0] === "object";
+      contactsData = hasPersonalized ? nums : [];
+      document.getElementById("nums").value = nums.map((n) => typeof n === "object" ? n.number : n).join("\n");
+      document.getElementById("msg").value = row.message || "";
+      const dtStr = fromUtcToInput(row.send_at, getTimezoneOffsetSelected());
+      document.getElementById("sendAt").value = dtStr;
+      document.getElementById("recurrence").value = row.recurrence || "none";
+      if (row.recurrence_end) {
+        const endDateStr = fromUtcToInput(Number(row.recurrence_end), getTimezoneOffsetSelected()).slice(0,10);
+        document.getElementById("recurrenceEnd").value = endDateStr;
+      } else {
+        document.getElementById("recurrenceEnd").value = "";
+      }
+      toggleRecurrenceEnd();
+
+      // Preview do arquivo existente (apenas nome)
+      if (row.filename) {
+        document.getElementById("filePreview").style.display = "flex";
+        document.getElementById("fileUploadArea").style.display = "none";
+        document.getElementById("previewImg").style.display = "none";
+        const doc = document.getElementById("previewDoc");
+        doc.style.display = "flex";
+        document.getElementById("previewDocName").textContent = row.filename;
+        selectedFileData = null; // mantém arquivo atual a menos que reenvie
+      } else {
+        clearFile();
+      }
+
+      // UI
+      setResult("Editando agendamento pendente #" + id, true);
+      document.getElementById("btnAgendar").innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Salvar alterações';
+
+      updateNumCount();
+      updatePreview();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function duplicar(id) {
+      const row = agRows.find(r => Number(r.id) === Number(id));
+      if (!row) return;
+      editingId = null; // novo
+      existingFilename = row.filename || null;
+      selectedFileData = null;
+
+      // Números
+      try {
+        const nums = JSON.parse(row.numbers || "[]");
+        const hasPersonalized = Array.isArray(nums) && nums.length && typeof nums[0] === "object";
+        contactsData = hasPersonalized ? nums : [];
+        document.getElementById("nums").value = nums.map((n) => typeof n === "object" ? n.number : n).join("\n");
+      } catch {
+        contactsData = [];
+        document.getElementById("nums").value = "";
+      }
+
+      // Mensagem
+      document.getElementById("msg").value = row.message || "";
+
+      // Recorrência
+      document.getElementById("recurrence").value = row.recurrence || "none";
+      if (row.recurrence_end) {
+        const endDate = new Date(Number(row.recurrence_end));
+        document.getElementById("recurrenceEnd").value = endDate.toISOString().slice(0,10);
+      } else {
+        document.getElementById("recurrenceEnd").value = "";
+      }
+      toggleRecurrenceEnd();
+
+      // Data/hora: limpa para forçar escolha nova
+      document.getElementById("sendAt").value = "";
+
+      // Preview de arquivo (mantém nome se existir)
+      if (row.filename) {
+        document.getElementById("filePreview").style.display = "flex";
+        document.getElementById("fileUploadArea").style.display = "none";
+        document.getElementById("previewImg").style.display = "none";
+        const doc = document.getElementById("previewDoc");
+        doc.style.display = "flex";
+        document.getElementById("previewDocName").textContent = row.filename;
+      } else {
+        clearFile();
+      }
+
+      setResult(`Duplicando agendamento #${id}. Ajuste data/hora e salve.`, true);
+      document.getElementById("btnAgendar").innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Criar agendamento';
+
+      updateNumCount();
+      updatePreview();
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function showConfirmModal(payload) {
+      const modal = document.getElementById("confirmModal");
+      document.getElementById("summary-datetime").textContent = formatDateTime(payload.sendAt);
+      const qty = contactsData.length ? contactsData.length : payload.numbers.length;
+      document.getElementById("summary-qty").textContent = `${qty} número(s)`;
+      document.getElementById("summary-recurrence").textContent = (payload.recurrence || "none").toUpperCase();
+      document.getElementById("summary-message").textContent = payload.message ? truncate(payload.message, 120) : "—";
+      const fileLabel = payload.filename
+        || (payload.file ? "Arquivo novo" : null)
+        || (existingFilename ? `Mantém: ${existingFilename}` : "Nenhum");
+      document.getElementById("summary-file").textContent = fileLabel;
+      const hasPersonalized = contactsData.length > 0;
+      const personalizedLine = document.getElementById("summary-personalized");
+      if (personalizedLine) {
+        personalizedLine.textContent = hasPersonalized ? "Sim (mensagem por contato)" : "Não";
+      }
+
+      modal.classList.remove("hidden");
+
+      const confirmBtn = document.getElementById("btnConfirmModal");
+      const cancelBtn = document.getElementById("btnCancelModal");
+      confirmBtn.innerHTML = editingId
+        ? '<i class="fa-solid fa-floppy-disk"></i> Salvar alterações'
+        : '<i class="fa-solid fa-check"></i> Confirmar e agendar';
+
+      const onConfirm = () => {
+        modal.classList.add("hidden");
+        confirmBtn.removeEventListener("click", onConfirm);
+        cancelBtn.removeEventListener("click", onCancel);
+        submitAgendamento(payload);
+      };
+      const onCancel = () => {
+        modal.classList.add("hidden");
+        confirmBtn.removeEventListener("click", onConfirm);
+        cancelBtn.removeEventListener("click", onCancel);
+      };
+
+      confirmBtn.addEventListener("click", onConfirm);
+      cancelBtn.addEventListener("click", onCancel);
+    }
+
+    function truncate(text, max) {
+      if (!text) return "";
+      return text.length > max ? text.slice(0, max) + "…" : text;
+    }
+
+    function formatDateTime(ts) {
+      const d = new Date(ts + getTimezoneOffsetSelected() * 60000);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth() + 1)}/${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+    }
+
+    async function submitAgendamento(payload) {
+      const btnEl = document.getElementById("btnAgendar");
       btnEl.disabled = true;
-      btnEl.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Agendando...';
+      btnEl.innerHTML = editingId
+        ? '<i class="fa-solid fa-spinner fa-spin"></i> Salvando...'
+        : '<i class="fa-solid fa-spinner fa-spin"></i> Agendando...';
+
+      // manter arquivo atual se não enviar um novo
+      if (editingId && !selectedFileData && existingFilename) {
+        payload.keepExistingFile = true;
+        payload.file = null;
+        payload.filename = null;
+      }
+      const url = editingId
+        ? `/api/agendamentos/update/${editingId}`
+        : "/api/agendamentos/create";
+      const method = editingId ? "PUT" : "POST";
 
       try {
-        const res = await fetch("/api/agendamentos/create", {
-          method: "POST",
+        const res = await fetch(url, {
+          method,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
@@ -382,24 +828,30 @@
         const data = await res.json();
 
         if (data.ok) {
-          setResult("✅ Agendamento criado com sucesso!", true);
+          setResult(editingId ? "✅ Agendamento atualizado!" : "✅ Agendamento criado com sucesso!", true);
           // Limpar formulário
           document.getElementById("nums").value = "";
           document.getElementById("msg").value = "";
           document.getElementById("sendAt").value = "";
           document.getElementById("recurrence").value = "none";
+          document.getElementById("recurrenceEnd").value = "";
           clearFile();
+          contactsData = [];
           updateNumCount();
           updatePreview();
           carregarAgendamentos();
+          editingId = null;
+          existingFilename = null;
+          btnEl.innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
         } else {
           setResult("❌ " + (data.error || "Erro ao agendar"), false);
+          btnEl.innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
         }
       } catch {
         setResult("❌ Erro de conexão", false);
+        btnEl.innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
       } finally {
         btnEl.disabled = false;
-        btnEl.innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
       }
     }
 
@@ -409,38 +861,51 @@
       el.style.color = ok ? "#2ee6a6" : "#e54848";
     }
 
-    // ── Excluir ────────────────────────────────────────────
+    // ── Excluir ────────────────────────────────────────────────────
     async function excluir(id) {
       if (!confirm("Excluir este agendamento?")) return;
       await fetch(`/api/agendamentos/delete/${id}`, { method: "DELETE" });
       carregarAgendamentos();
     }
 
-    // ── Listar ─────────────────────────────────────────────
+    // ── Listar ─────────────────────────────────────────────────────
     async function carregarAgendamentos() {
       const tabela = document.getElementById("agendamentosTable");
-      tabela.innerHTML = `<tr><td colspan="5" class="loading">Carregando...</td></tr>`;
+      tabela.innerHTML = `<tr><td colspan="6" class="loading">Carregando...</td></tr>`;
 
       try {
-        const res = await fetch("/api/agendamentos/list");
-        let rows = await res.json();
-
         const status = document.getElementById("statusFilter")?.value || "all";
-        const term = (document.getElementById("searchTerm")?.value || "").trim().toLowerCase();
+        const term = (document.getElementById("searchTerm")?.value || "").trim();
+        const pageSize = Number(document.getElementById("pageSize")?.value || 10);
+        const orderRaw = document.getElementById("orderBy")?.value || "send_at|desc";
+        const [orderBy, orderDir] = orderRaw.split("|");
+        const fromStr = document.getElementById("dateFrom")?.value;
+        const toStr = document.getElementById("dateTo")?.value;
+        const fromTs = fromStr ? new Date(fromStr + "T00:00:00").getTime() : "";
+        const toTs = toStr ? new Date(toStr + "T23:59:59").getTime() : "";
 
-        rows = rows.filter(row => {
-          if (status !== "all" && row.status !== status) return false;
-
-          if (term) {
-            const nums = JSON.parse(row.numbers || "[]").join(" ").toLowerCase();
-            const msg = (row.message || "").toLowerCase();
-            if (!nums.includes(term) && !msg.includes(term)) return false;
-          }
-          return true;
+        const qs = new URLSearchParams({
+          status,
+          term,
+          page: String(agPage),
+          pageSize: String(pageSize),
+          orderBy,
+          orderDir,
         });
+        if (fromTs) qs.set("from", String(fromTs));
+        if (toTs) qs.set("to", String(toTs));
+
+        const res = await fetch(`/api/agendamentos/list?${qs.toString()}`);
+        const payload = await res.json();
+        const rows = Array.isArray(payload.rows) ? payload.rows : [];
+        agPage = Number(payload.page) || 1;
+        agTotalPages = Number(payload.totalPages) || 1;
+        updatePaginationUI();
+
+        agRows = rows;
 
         if (!rows.length) {
-          tabela.innerHTML = `<tr><td colspan="5" class="loading">Nenhum agendamento encontrado</td></tr>`;
+          tabela.innerHTML = `<tr><td colspan="6" class="loading">Nenhum agendamento encontrado</td></tr>`;
           return;
         }
 
@@ -448,10 +913,33 @@
 
         rows.forEach(row => {
           const nums = JSON.parse(row.numbers || "[]");
+          const hasPersonalized = Array.isArray(nums) && nums.length && typeof nums[0] === "object";
+          const numsDisplay = hasPersonalized
+            ? nums.map((c) => `${c.number || ""} <span class="pill-personalized">msg personalizada</span>`).join("<br>")
+            : nums.join("<br>");
           const recurrenceHtml = recurrenceBadge(row.recurrence);
+          const actionButtons = row.status === "pending"
+            ? `<button class="btn-edit" onclick="editar(${row.id})">
+                 <i class="fa-solid fa-pen"></i> Editar
+               </button>
+               <button class="btn-secondary" onclick="duplicar(${row.id})">
+                 <i class="fa-solid fa-copy"></i> Duplicar
+               </button>
+               <button class="btn-del" onclick="excluir(${row.id})">
+                 <i class="fa-solid fa-trash"></i>
+                 Excluir
+               </button>`
+            : `<button class="btn-secondary" onclick="verDetalhes(${row.id})">
+                 <i class="fa-solid fa-list"></i>
+                 Detalhes
+               </button>
+               <button class="btn-del" onclick="excluir(${row.id})">
+                 <i class="fa-solid fa-trash"></i>
+                 Excluir
+               </button>`;
           const tr = document.createElement("tr");
           tr.innerHTML = `
-            <td>${nums.join("<br>")}</td>
+            <td>${numsDisplay}</td>
             <td>${row.message || "<i>(arquivo)</i>"}</td>
             <td>
               ${formatarData(row.send_at)}
@@ -466,10 +954,7 @@
               ${row.status === "pending" ? "⏳ Pendente" : "✅ Enviado"}
             </td>
             <td class="action-cell">
-              <button class="btn-del" onclick="excluir(${row.id})">
-                <i class="fa-solid fa-trash"></i>
-                Excluir
-              </button>
+              ${actionButtons}
             </td>
           `;
           tabela.appendChild(tr);
@@ -478,14 +963,36 @@
         iniciarCountdowns();
 
       } catch {
-        tabela.innerHTML = `<tr><td colspan="5" class="error">Erro ao carregar</td></tr>`;
+        tabela.innerHTML = `<tr><td colspan="6" class="error">Erro ao carregar</td></tr>`;
       }
     }
 
+    function resetPageAndLoad() {
+      agPage = 1;
+      carregarAgendamentos();
+    }
+
+    function changePage(delta) {
+      const next = Math.min(Math.max(1, agPage + delta), agTotalPages);
+      if (next === agPage) return;
+      agPage = next;
+      carregarAgendamentos();
+    }
+
+    function updatePaginationUI() {
+      const info = document.getElementById("pageInfo");
+      if (info) info.textContent = `Página ${agPage}/${agTotalPages}`;
+      const prev = document.getElementById("prevPage");
+      const next = document.getElementById("nextPage");
+      if (prev) prev.disabled = agPage <= 1;
+      if (next) next.disabled = agPage >= agTotalPages;
+    }
+
     function formatarData(ts) {
-      const d = new Date(ts);
-      return d.toLocaleDateString("pt-BR") + " " +
-        d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      const offset = getTimezoneOffsetSelected();
+      const d = new Date(ts + offset * 60000);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${pad(d.getUTCDate())}/${pad(d.getUTCMonth()+1)}/${d.getUTCFullYear()} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
     }
 
     function formatarCountdown(ts) {
@@ -540,7 +1047,11 @@
       </div>`;
     }
 
+    updateNumCount();
     updatePreview();
+    const tzSel = document.getElementById("timezoneSelect");
+    if (tzSel) tzSel.value = String(USER_TZ);
+    toggleRecurrenceEnd();
     carregarAgendamentos();
     setInterval(carregarAgendamentos, 10000);
   </script>

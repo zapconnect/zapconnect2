@@ -74,11 +74,21 @@
         <input type="file" id="file" />
       </div>
 
-      <!-- BOTÃO -->
-      <button id="btnStart" class="btn-primary">
-        <i class="fa-solid fa-rocket"></i>
-        Iniciar Disparo
-      </button>
+      <!-- BOTÕES -->
+      <div class="btn-group">
+        <button id="btnStart" class="btn-primary">
+          <i class="fa-solid fa-rocket"></i>
+          Iniciar Disparo
+        </button>
+        <button id="btnPause" class="btn-secondary" disabled>
+          <i class="fa-solid fa-circle-pause"></i>
+          Pausar
+        </button>
+        <button id="btnCancel" class="btn-danger" disabled>
+          <i class="fa-solid fa-circle-xmark"></i>
+          Cancelar
+        </button>
+      </div>
 
       <!-- PROGRESSO -->
       <div id="progress" class="progress"></div>

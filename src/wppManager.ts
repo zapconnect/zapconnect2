@@ -4,6 +4,7 @@
 import wppconnect from "@wppconnect-team/wppconnect";
 import terminalKit from "terminal-kit";
 import qrcode from "qrcode";
+import axios from "axios";
 import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
@@ -14,6 +15,12 @@ import { splitMessages, sendMessagesWithDelay } from "./util";
 import { io } from "./server";
 import { canUseIA, consumeIaMessage } from "./services/iaLimiter";
 import { getChatAI } from "./services/chatAiService";
+import {
+  checkFallbackTriggers,
+  clearFallbackRuntime,
+  primeFallbackCache,
+  type FallbackDecision,
+} from "./services/fallbackService";
 
 
 
@@ -334,7 +341,8 @@ export function enableHumanTemporarily(
   userId: string | number,
   sessionName: string,
   chatId: string,
-  durationMs: number | null = HUMAN_INACTIVITY_DEFAULT_MS  // null = sem limite
+  durationMs: number | null = HUMAN_INACTIVITY_DEFAULT_MS,  // null = sem limite
+  customMessage?: string
 ) {
   const key = getHumanKey(userId, sessionName, chatId);
 
@@ -356,12 +364,19 @@ export function enableHumanTemporarily(
   }
 
   // ✅ MENSAGEM AUTOMÁTICA NO WHATSAPP
-  sendSystemMessage(
-    userId,
-    sessionName,
-    chatId,
-    "👤 Conversa transferida para um atendente humano."
-  );
+  const messageToSend =
+    typeof customMessage === "string" && customMessage.trim().length > 0
+      ? customMessage
+      : "👤 Conversa transferida para um atendente humano.";
+
+  if (messageToSend) {
+    sendSystemMessage(
+      userId,
+      sessionName,
+      chatId,
+      messageToSend
+    );
+  }
 
   try {
     global.io?.emit("human_state_changed", {
@@ -491,6 +506,91 @@ function tryDisableHumanByInactivity(
 }
 
 
+
+
+async function handleAutomaticFallback(options: {
+  decision: FallbackDecision;
+  userId: number;
+  sessionName: string;
+  chatId: string;
+  chatKey: string;
+  client: any;
+}) {
+  const { decision, userId, sessionName, chatId, chatKey, client } = options;
+  const humanKey = getHumanKey(userId, sessionName, chatId);
+
+  if (chatHumanLock.get(humanKey) === true) return;
+
+  cancelAIDebounce(chatKey);
+  messageBuffer.delete(chatKey);
+
+  try {
+    await client.stopTyping(chatId);
+  } catch { }
+
+  const duration =
+    decision.config.humanDurationMs === null
+      ? null
+      : (decision.config.humanDurationMs ?? HUMAN_INACTIVITY_DEFAULT_MS);
+
+  enableHumanTemporarily(
+    userId,
+    sessionName,
+    chatId,
+    duration,
+    decision.config.fallbackMessage
+  );
+
+  clearFallbackRuntime(userId, sessionName, chatId);
+
+  if (decision.config.notifyPanel !== false) {
+    try {
+      io.emit("fallback_triggered", {
+        chatId,
+        userId,
+        sessionName,
+        reason: decision.reason,
+        configUsed: decision.config.source === "db",
+      });
+    } catch { }
+  }
+
+  if (decision.config.notifyWebhook && decision.config.webhookUrl) {
+    try {
+      await axios.post(
+        decision.config.webhookUrl,
+        {
+          chatId,
+          userId,
+          sessionName,
+          reason: decision.reason,
+          configUsed: decision.config.source === "db",
+          triggeredAt: Date.now(),
+        },
+        { timeout: 5000 }
+      );
+    } catch (err) {
+      console.error("Erro ao acionar webhook de fallback:", err);
+    }
+  }
+
+  if (decision.config.alertPhone) {
+    const template = decision.config.alertMessage || "Alerta: assuma a conversa {chatId} da sessão {sessionName}.";
+    const msg = template
+      .replace(/{chatId}/g, chatId.replace("@c.us", ""))
+      .replace(/{sessionName}/g, sessionName);
+
+    try {
+      const numberOnly = decision.config.alertPhone.replace(/\D/g, "");
+      const targetNumber = await ensureChat(client, numberOnly);
+      await client.sendText(`${targetNumber}@c.us`, msg);
+    } catch (err) {
+      console.error("Erro ao enviar alerta de fallback por WhatsApp:", err);
+    }
+  }
+
+  console.log(`⚠️ Fallback automático → humano | ${humanKey} | motivo: ${decision.reason}`);
+}
 
 
 // ===========================
@@ -850,6 +950,33 @@ function attachEvents(
       } catch { }
 
       // =================================================
+      // 🆘 FALLBACK AUTOMÁTICO (triggers de mensagem)
+      // =================================================
+      try {
+        const fallbackDecision = await checkFallbackTriggers({
+          userId,
+          sessionName: shortName,
+          chatId,
+          event: "user_message",
+          message: body,
+        });
+
+        if (fallbackDecision.shouldFallback) {
+          await handleAutomaticFallback({
+            decision: fallbackDecision,
+            userId,
+            sessionName: shortName,
+            chatId,
+            chatKey,
+            client,
+          });
+          return;
+        }
+      } catch (err) {
+        console.error("Erro ao avaliar fallback:", err);
+      }
+
+      // =================================================
       // 💬 BUFFER DE MENSAGENS
       // =================================================
       if (!messageBuffer.has(chatKey)) {
@@ -923,6 +1050,7 @@ function attachEvents(
           const finalMessage = `${prompt}\n\n${buffer.join("\n")}`;
 
           let response = "";
+          let aiFailed = false;
 
           for (let i = 1; i <= MAX_RETRIES; i++) {
             try {
@@ -939,9 +1067,59 @@ function attachEvents(
               break;
             } catch (err) {
               if (i === MAX_RETRIES) {
+                aiFailed = true;
                 response = "❌ Erro ao responder no momento.";
               }
             }
+          }
+
+          if (aiFailed) {
+            try {
+              const fbError = await checkFallbackTriggers({
+                userId,
+                sessionName: shortName,
+                chatId,
+                event: "ai_error",
+              });
+
+              if (fbError.shouldFallback) {
+                await handleAutomaticFallback({
+                  decision: fbError,
+                  userId,
+                  sessionName: shortName,
+                  chatId,
+                  chatKey,
+                  client,
+                });
+                return;
+              }
+            } catch (err) {
+              console.error("Erro ao avaliar fallback (falha IA):", err);
+            }
+          }
+
+          try {
+            const fbAfterAI = await checkFallbackTriggers({
+              userId,
+              sessionName: shortName,
+              chatId,
+              event: "ai_response",
+              aiResponse: response,
+            });
+
+            if (fbAfterAI.shouldFallback) {
+              await handleAutomaticFallback({
+                decision: fbAfterAI,
+                userId,
+                sessionName: shortName,
+                chatId,
+                chatKey,
+                client,
+              });
+              return;
+            }
+          } catch (err) {
+            console.error("Erro ao avaliar fallback (resposta IA):", err);
           }
 
           const messages = splitMessages(response);
@@ -1057,6 +1235,7 @@ export async function createWppSession(
 
   if (clients.has(full)) {
     console.log("⚠️ Sessão já está carregada:", full);
+    await primeFallbackCache(userId, shortName);
     return { sessionName: full, exists: true };
   }
 
@@ -1199,6 +1378,7 @@ export async function createWppSession(
 
 
   clients.set(full, client);
+  await primeFallbackCache(userId, shortName);
   return { sessionName: full };
 }
 

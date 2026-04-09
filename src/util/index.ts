@@ -52,8 +52,9 @@ export async function sendMessagesWithDelay({
   for (const msg of messages) {
     if (!msg) continue;
 
-    const dynamicDelay = Math.min(Math.max(msg.length * 100, 900), 6000);
-    await new Promise(resolve => setTimeout(resolve, dynamicDelay));
+    // Espera aleatória entre 2 e 5 segundos para simular comportamento humano
+    const randomDelay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
+    await new Promise(resolve => setTimeout(resolve, randomDelay));
 
     try {
       await client.sendText(chatId, msg.trimStart());

@@ -40,6 +40,12 @@ export async function initDB() {
     console.log("✅ Colunas ia_silence adicionadas");
   } catch { }
 
+  // Migração: timezone do usuário
+  try {
+    await pool.query("ALTER TABLE users ADD COLUMN timezone_offset INT DEFAULT -180");
+    console.log("✅ Coluna timezone_offset adicionada em users");
+  } catch { }
+
   // Migração: adicionar follow_up_date se não existir
   try {
     await pool.query(
@@ -58,6 +64,36 @@ export async function initDB() {
     console.log("✅ Coluna recurrence adicionada a schedules");
   } catch {
     // Coluna já existe
+  }
+  // Migração: data de encerramento da recorrência
+  try {
+    await pool.query(
+      "ALTER TABLE schedules ADD COLUMN recurrence_end BIGINT DEFAULT NULL"
+    );
+    console.log("✅ Coluna recurrence_end adicionada a schedules");
+  } catch {
+    // já existe
+  }
+  // Migração: tabela de itens de log de agendamento
+  try {
+    await pool.query(
+      `CREATE TABLE schedule_log_items (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        log_id INT NOT NULL,
+        schedule_id INT NOT NULL,
+        user_id INT NOT NULL,
+        number VARCHAR(30) NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        error TEXT,
+        sent_at BIGINT NOT NULL,
+        FOREIGN KEY (log_id) REFERENCES schedule_logs(id) ON DELETE CASCADE,
+        FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )`
+    );
+    console.log("✅ Tabela schedule_log_items criada");
+  } catch {
+    // já existe
   }
 
   // ===============================
@@ -83,6 +119,7 @@ export async function initDB() {
       ia_messages_reset_at BIGINT,
       ia_silence_start INT DEFAULT NULL,
       ia_silence_end INT DEFAULT NULL,
+      timezone_offset INT DEFAULT -180,
 
       plan VARCHAR(50) DEFAULT 'free',
       plan_expires_at BIGINT,
@@ -123,7 +160,38 @@ export async function initDB() {
       filename VARCHAR(255),
       send_at BIGINT NOT NULL,
       recurrence VARCHAR(20) DEFAULT 'none',
+      recurrence_end BIGINT DEFAULT NULL,
       status VARCHAR(50) DEFAULT 'pending',
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS schedule_logs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      schedule_id INT NOT NULL,
+      user_id INT NOT NULL,
+      success_count INT DEFAULT 0,
+      failure_count INT DEFAULT 0,
+      sent_at BIGINT NOT NULL,
+      created_at BIGINT NOT NULL,
+      FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS schedule_log_items (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      log_id INT NOT NULL,
+      schedule_id INT NOT NULL,
+      user_id INT NOT NULL,
+      number VARCHAR(30) NOT NULL,
+      status VARCHAR(20) NOT NULL,
+      error TEXT,
+      sent_at BIGINT NOT NULL,
+      FOREIGN KEY (log_id) REFERENCES schedule_logs(id) ON DELETE CASCADE,
+      FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
@@ -220,10 +288,69 @@ export async function initDB() {
       type VARCHAR(255) NOT NULL,
       created_at BIGINT NOT NULL
     )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS disparo_history (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      total_numbers INT NOT NULL,
+      success_count INT NOT NULL,
+      fail_count INT NOT NULL,
+      success_rate DECIMAL(5,2) NOT NULL,
+      message TEXT,
+      status VARCHAR(20) DEFAULT 'completed',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS fallback_settings (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      session_name VARCHAR(255) NOT NULL,
+
+      enable_fallback BOOLEAN DEFAULT TRUE,
+      fallback_message TEXT,
+
+      fallback_sensitivity VARCHAR(10),
+
+      max_repetitions INT,
+      max_frustration INT,
+      max_ia_failures INT,
+
+      trigger_words JSON,
+      frustration_words JSON,
+      ai_uncertainty_phrases JSON,
+      ai_transfer_phrases JSON,
+
+      human_mode_duration INT,
+
+      notify_panel BOOLEAN,
+      notify_webhook BOOLEAN,
+      webhook_url TEXT,
+
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+      UNIQUE KEY uniq_user_session (user_id, session_name),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
     `
   ];
 
+  // Ajustes incrementais de schema (idempotentes)
+  const alters = [
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS alert_phone VARCHAR(32)`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS alert_message TEXT`
+  ];
+
   for (const sql of tables) {
+    await pool.query(sql);
+  }
+
+  for (const sql of alters) {
     await pool.query(sql);
   }
 

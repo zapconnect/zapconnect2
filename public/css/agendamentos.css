@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   --bg: #0D1222;
   --panel: #161B30;
   --input: #1A1F3A;
@@ -146,11 +146,12 @@ body {
   border-radius: 10px;
   display: block;
 }
-.filters {
+ .filters {
   display: flex;
   gap: 12px;
   margin-top: 4px;
   margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 .filters .field { flex: 1; }
 
@@ -173,7 +174,7 @@ label {
 
 .inline-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 10px;
   margin-top: 6px;
 }
@@ -224,16 +225,11 @@ select {
   color: #fff;
 }
 
-.two-cols {
-  display: flex;
-  gap: 12px;
-}
+.two-cols {\n  display: flex;\n  gap: 12px;\n  flex-wrap: wrap;\n}\n.two-cols .field { flex: 1 1 220px; }
 
-.two-cols .field {
-  flex: 1;
-}
 
-/* BOTÃO */
+
+/* BOTÃƒO */
 .btn-primary {
   margin-top: 18px;
   width: 100%;
@@ -321,7 +317,7 @@ th {
   color: var(--danger);
 }
 
-/* AÇÕES */
+/* AÃ‡Ã•ES */
 .action-cell {
   text-align: center;
 }
@@ -357,9 +353,13 @@ th {
     flex-direction: column;
   }
 
-  .filters {
-    flex-direction: column;
-  }
+   .filters {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
 
   .form-grid {
     flex-direction: column;
@@ -370,7 +370,7 @@ th {
   }
 }
 
-/* ─── Upload de arquivo ──────────────────────────────────── */
+/* â”€â”€â”€ Upload de arquivo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .file-upload-area {
   margin-top: 6px;
   border: 2px dashed var(--stroke);
@@ -399,7 +399,7 @@ th {
   opacity: .6;
 }
 
-/* ─── Preview do arquivo ─────────────────────────────────── */
+/* â”€â”€â”€ Preview do arquivo â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .file-preview-area {
   margin-top: 8px;
   position: relative;
@@ -449,10 +449,140 @@ th {
 
 .btn-remove-file:hover { background: rgba(229,72,72,.3); }
 
-/* ─── Contador de números ────────────────────────────────── */
+/* â”€â”€â”€ Contador de nÃºmeros â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 .field-hint {
   font-size: 11px;
   color: var(--muted);
   margin-top: 4px;
   text-align: right;
 }
+
+.field-hint.limit-warn {
+  color: #f2c94c;
+}
+
+.field-hint.limit-danger {
+  color: #e54848;
+}
+
+/* Modal de confirmação */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+.modal.hidden { display: none; }
+.modal-content {
+  width: 420px;
+  max-width: 90vw;
+  background: #0f1530;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+}
+.modal-content h3 {
+  margin-top: 0;
+  margin-bottom: 14px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 18px;
+}
+.summary-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 16px 0;
+  display: grid;
+  gap: 8px;
+}
+.summary-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+}
+.summary-list span { color: var(--muted); }
+.summary-list strong { color: #fff; text-align: right; }
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* Botão editar */
+.btn-edit {
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.btn-edit:hover { filter: brightness(1.1); }
+.pill-personalized {
+  display: inline-block;
+  padding: 2px 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: rgba(108,100,239,0.18);
+  border: 1px solid rgba(108,100,239,0.4);
+  color: #c9c9ff;
+  font-size: 11px;
+}
+
+.date-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.date-range input {
+  width: 100%;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  justify-content: center;
+}
+.pagination button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.filters .field.small {
+  max-width: 150px;
+}
+
+
+.filters .field.small { max-width: 150px; }
+
+/* Fix filtros/paginacao layout */
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 4px;
+  margin-bottom: 12px;
+  align-items: flex-end;
+}
+.filters .field { width: 100%; }
+.filters .field.small { max-width: 170px; }
+.date-range { display: flex; align-items: center; gap: 8px; }
+.date-range input { width: 100%; }
+.pagination { display: flex; align-items: center; gap: 12px; margin-top: 12px; justify-content: center; }
+.pagination button:disabled { opacity: .4; cursor: not-allowed; }
+
+
+
+

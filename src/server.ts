@@ -1,4 +1,4 @@
-// src/server.ts
+﻿// src/server.ts
 import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
@@ -15,15 +15,24 @@ import webhookRoutes from "./routes/webhook";
 import { subscriptionGuard } from "./middlewares/subscriptionGuard";
 import { emailVerifiedMiddleware } from "./middlewares/emailVerifiedMiddleware";
 import { sendResetPasswordEmail } from "./utils/sendResetPasswordEmail";
+import { sendEmail } from "./utils/sendEmail";
 
 import adminRoutes from "./routes/admin";
 import { getChatAI, setChatAI } from "./services/chatAiService";
+import {
+  type FallbackSettings,
+  loadFallbackSettings,
+  saveFallbackSettings,
+  resetFallbackCache,
+} from "./services/fallbackService";
 import { stopChatSession } from "./service/google";
 import emailVerifyRoutes from "./routes/emailVerify";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
+const DISPARO_MIN_INTERVAL_MS = Number(process.env.DISPARO_MIN_INTERVAL_MS || 1500);
+const disparoRateLimit = new Map<number, number>();
 
 import { getDB } from "./database";
 
@@ -39,6 +48,7 @@ interface ScheduleRow {
   filename: string | null;
   send_at: number;
   recurrence: "none" | "daily" | "weekly" | "monthly";
+  recurrence_end: number | null;
   status: "pending" | "sent";
 }
 
@@ -61,6 +71,96 @@ import { User } from "./database/types";
 
 
 const app = express();
+
+// ===============================
+// 🧩 Utilitário de template simples para mensagens
+// ===============================
+type PersonalizedContact = {
+  number: string;
+  message?: string;
+  vars?: Record<string, string>;
+};
+
+const sanitizeNumber = (value: any) => String(value ?? "").replace(/\D/g, "");
+
+const normalizeVars = (input: any): Record<string, string> => {
+  const out: Record<string, string> = {};
+  const source = typeof input?.vars === "object" && input?.vars !== null ? input.vars : input;
+
+  if (source && typeof source === "object") {
+    Object.entries(source).forEach(([key, val]) => {
+      if (["number", "message", "vars"].includes(key)) return;
+      if (val === undefined || val === null) return;
+      const strVal = typeof val === "string" ? val : String(val);
+      const normKey = key.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_");
+      if (normKey) out[normKey] = strVal;
+    });
+  }
+
+  return out;
+};
+
+const sanitizeContactPayload = (raw: any): PersonalizedContact | null => {
+  const number = sanitizeNumber(raw?.number);
+  if (!number) return null;
+  const contact: PersonalizedContact = { number };
+
+  if (raw?.message !== undefined) contact.message = String(raw.message);
+  const vars = normalizeVars(raw);
+  if (Object.keys(vars).length) contact.vars = vars;
+
+  return contact;
+};
+
+const buildContactsFromPayload = (contactsArr: any[]): PersonalizedContact[] =>
+  Array.isArray(contactsArr)
+    ? contactsArr.map(sanitizeContactPayload).filter(Boolean) as PersonalizedContact[]
+    : [];
+
+const buildContactsFromStored = (raw: any, baseMessage?: string): PersonalizedContact[] => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      if (typeof item === "string") {
+        return { number: sanitizeNumber(item), message: baseMessage };
+      }
+      const contact = sanitizeContactPayload(item);
+      if (contact && contact.message === undefined && baseMessage !== undefined) {
+        contact.message = baseMessage;
+      }
+      return contact;
+    })
+    .filter(Boolean) as PersonalizedContact[];
+};
+
+const renderTemplate = (template: string, contact?: PersonalizedContact): string => {
+  if (!template) return "";
+  const now = new Date();
+  const dataHoje = now.toLocaleDateString("pt-BR");
+  const horaAgora = now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+
+  const vars: Record<string, string> = {
+    numero: contact?.number || "",
+    number: contact?.number || "",
+    nome: contact?.vars?.nome || contact?.vars?.name || "",
+    name: contact?.vars?.nome || contact?.vars?.name || "",
+    pedido: contact?.vars?.pedido || contact?.vars?.order || "",
+    order: contact?.vars?.pedido || contact?.vars?.order || "",
+    data: dataHoje,
+    data_atual: dataHoje,
+    hoje: dataHoje,
+    hora: horaAgora,
+    horario: horaAgora,
+    time: horaAgora,
+    date: dataHoje,
+    ...(contact?.vars || {}),
+  };
+
+  return template.replace(/{{\s*([\w.-]+)\s*}}/gi, (_match, keyRaw) => {
+    const key = String(keyRaw || "").toLowerCase();
+    return vars[key] !== undefined ? String(vars[key]) : "";
+  });
+};
 
 // ⚠️ CORS com cookies (importante para deploy)
 app.use(
@@ -1024,17 +1124,36 @@ app.post(
   subscriptionGuard,
   async (req: Request, res: Response) => {
 
-    const { number, message, file, filename } = req.body;
+    const { number, message, file, filename, contacts } = req.body;
     const user = (req as any).user as User;
 
-    // ===============================
-    // ✅ Validações corretas
-    // ===============================
-    if (!number) {
+    // rate limit mínimo
+    const now = Date.now();
+    const last = disparoRateLimit.get(user.id) || 0;
+    const delta = now - last;
+    if (delta < DISPARO_MIN_INTERVAL_MS) {
+      const waitMs = DISPARO_MIN_INTERVAL_MS - delta;
+      return res.status(429).json({ error: `Aguarde ${Math.ceil(waitMs / 1000)}s para novo disparo` });
+    }
+    disparoRateLimit.set(user.id, now);
+
+    const contactsArr: any[] = Array.isArray(contacts) ? contacts : [];
+    const hasPersonalized = contactsArr.length > 0;
+
+    if (!number && !hasPersonalized) {
       return res.status(400).json({ error: "Número é obrigatório" });
     }
 
-    if (!message && !file) {
+    const contactList: PersonalizedContact[] = hasPersonalized
+      ? buildContactsFromPayload(contactsArr)
+      : [{ number: sanitizeNumber(number), message }];
+
+    if (!contactList.length) {
+      return res.status(400).json({ error: "Nenhum número válido" });
+    }
+
+    const hasTextMessage = contactList.some((c) => (c.message ?? message ?? "").trim().length > 0);
+    if (!file && !hasTextMessage) {
       return res.status(400).json({
         error: "Mensagem ou imagem é obrigatória"
       });
@@ -1067,31 +1186,28 @@ app.post(
         });
       }
 
-      const chatId = `${number}@c.us`;
+      for (const contact of contactList) {
+        const chatId = `${contact.number}@c.us`;
+        const finalMessage = renderTemplate(contact.message ?? message ?? "", contact);
 
-      // ===============================
-      // 📤 TEXTO PURO
-      // ===============================
-      if (!file) {
-        await client.sendText(chatId, message);
-        return res.json({ ok: true });
+        if (!file) {
+          await client.sendText(chatId, finalMessage);
+          continue;
+        }
+
+        const base64 = file.split("base64,")[1];
+        const mime = file.substring(
+          file.indexOf(":") + 1,
+          file.indexOf(";")
+        );
+
+        await client.sendFile(
+          chatId,
+          `data:${mime};base64,${base64}`,
+          filename || "arquivo",
+          finalMessage // legenda opcional
+        );
       }
-
-      // ===============================
-      // 📤 MÍDIA (imagem / arquivo)
-      // ===============================
-      const base64 = file.split("base64,")[1];
-      const mime = file.substring(
-        file.indexOf(":") + 1,
-        file.indexOf(";")
-      );
-
-      await client.sendFile(
-        chatId,
-        `data:${mime};base64,${base64}`,
-        filename || "arquivo",
-        message || "" // legenda opcional
-      );
 
       return res.json({ ok: true });
 
@@ -1104,72 +1220,6 @@ app.post(
   }
 );
 
-// =======================================
-// 📊 MÉTRICAS DO PAINEL
-// =======================================
-app.get("/api/painel/stats", authMiddleware, async (req, res) => {
-  try {
-    const user = (req as any).user;
-    const db = getDB();
-    const userId = user.id;
-
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-    const todayTs = startOfDay.getTime();
-
-    // Mensagens recebidas hoje (tabela messages via sessions)
-    const msgsHoje = await db.get<{ total: number }>(
-      `SELECT COUNT(*) as total
-       FROM messages m
-       JOIN sessions s ON s.id = m.session_id
-       WHERE s.user_id = ?
-         AND m.sender = 'client'
-         AND m.created_at >= ?`,
-      [userId, new Date(todayTs).toISOString().slice(0, 19).replace('T', ' ')]
-    );
-
-    // Sessões ativas
-    const sessoesAtivas = await db.get<{ total: number }>(
-      `SELECT COUNT(*) as total FROM sessions
-       WHERE user_id = ? AND status = 'connected'`,
-      [userId]
-    );
-
-    // Clientes no CRM
-    const clientesCRM = await db.get<{ total: number }>(
-      `SELECT COUNT(*) as total FROM crm WHERE user_id = ?`,
-      [userId]
-    );
-
-    // Agendamentos pendentes
-    const agendamentos = await db.get<{ total: number }>(
-      `SELECT COUNT(*) as total FROM schedules
-       WHERE user_id = ? AND status = 'pending'`,
-      [userId]
-    );
-
-    // Mensagens IA usadas no mês
-    const iaUsadas = await db.get<{ ia_messages_used: number }>(
-      `SELECT ia_messages_used FROM users WHERE id = ?`,
-      [userId]
-    );
-
-    return res.json({
-      ok: true,
-      stats: {
-        mensagensHoje:      msgsHoje?.total          ?? 0,
-        sessoesAtivas:      sessoesAtivas?.total      ?? 0,
-        clientesCRM:        clientesCRM?.total        ?? 0,
-        agendamentosPendentes: agendamentos?.total    ?? 0,
-        iaUsadas:           iaUsadas?.ia_messages_used ?? 0,
-      }
-    });
-  } catch (err) {
-    console.error("❌ Erro /api/painel/stats:", err);
-    return res.status(500).json({ ok: false });
-  }
-});
-
 // ===============================
 // 📅 API — AGENDAMENTOS
 // ===============================
@@ -1177,14 +1227,20 @@ app.get("/api/painel/stats", authMiddleware, async (req, res) => {
 // Criar agendamento
 app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (req, res) => {
   const user = (req as any).user;
-  const { numbers, message, file, filename, sendAt } = req.body;
+  const { numbers, contacts, message, file, filename, sendAt, recurrenceEnd } = req.body;
   const recurrenceRaw = (req.body?.recurrence || "none") as string;
   const recurrenceAllowed = ["none", "daily", "weekly", "monthly"];
   const recurrence = recurrenceAllowed.includes(recurrenceRaw) ? recurrenceRaw : "none";
 
   const sendAtMs = Number(sendAt);
+  const recurrenceEndMs = recurrenceEnd ? Number(recurrenceEnd) : null;
 
-  if (!numbers?.length || !sendAtMs)
+  const contactsArr: any[] = Array.isArray(contacts) ? contacts : [];
+  const hasPersonalized = contactsArr.length > 0;
+  const numbersArr: any[] = Array.isArray(numbers) ? numbers : [];
+  const contactList = hasPersonalized ? buildContactsFromPayload(contactsArr) : [];
+
+  if ((!hasPersonalized && !numbersArr.length) || !sendAtMs)
     return res.status(400).json({ error: "Dados incompletos" });
 
   if (!Number.isFinite(sendAtMs))
@@ -1193,25 +1249,280 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
   if (sendAtMs <= Date.now())
     return res.status(400).json({ error: "Data precisa ser futura" });
 
+  if (recurrence !== "none" && recurrenceEndMs) {
+    if (!Number.isFinite(recurrenceEndMs)) return res.status(400).json({ error: "Fim da recorrência inválido" });
+    if (recurrenceEndMs <= sendAtMs) return res.status(400).json({ error: "Fim da recorrência deve ser após a 1ª data" });
+  }
+
+  const hasTextMessage = hasPersonalized
+    ? contactList.some((c) => (c.message ?? message ?? "").trim().length > 0)
+    : String(message || "").trim().length > 0;
+
+  if (!file && !hasTextMessage) {
+    return res.status(400).json({ error: "Mensagem ou arquivo é obrigatório" });
+  }
+
+  const planLimits: Record<string, number> = {
+    free: 50,
+    trial: 50,
+    starter: 50,
+    pro: 200,
+  };
+  const plan = String(user.plan || "").toLowerCase();
+  const maxNumbers = planLimits[plan] ?? 50;
+  const totalCount = hasPersonalized ? contactsArr.length : numbersArr.length;
+  if (totalCount > maxNumbers) {
+    return res.status(400).json({
+      error: `Limite de ${maxNumbers} números para seu plano (${plan || "starter"}). Reduza a lista.`,
+    });
+  }
+
+  const normalized = hasPersonalized
+    ? contactList
+    : numbersArr.map((n) => sanitizeNumber(n)).filter(Boolean);
+
+  if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
+
+  // Checar duplicado: mesmo user, mesma data, mesma lista
   const db = getDB();
+  const existingDup = await db.get<{ id: number }>(
+    `SELECT id FROM schedules
+     WHERE user_id = ? AND status = 'pending' AND send_at = ? AND numbers = ?
+     LIMIT 1`,
+    [user.id, sendAtMs, JSON.stringify(normalized)]
+  );
+  if (existingDup && req.body?.forceDuplicate !== true) {
+    return res.status(409).json({
+      duplicate: true,
+      existingId: existingDup.id,
+      message: "Já existe um agendamento igual (mesmos números e data)."
+    });
+  }
+
   await db.run(
-    `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [user.id, JSON.stringify(numbers), message, file, filename, sendAtMs, recurrence]
+    `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [user.id, JSON.stringify(normalized), message, file, filename, sendAtMs, recurrence, recurrenceEndMs]
   );
 
   res.json({ ok: true });
+});
+
+// Editar agendamento pendente
+app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async (req, res) => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  const { numbers, contacts, message, file, filename, sendAt, keepExistingFile, recurrence, recurrenceEnd } = req.body || {};
+
+  const sendAtMs = Number(sendAt);
+  const recurrenceEndMs = recurrenceEnd ? Number(recurrenceEnd) : null;
+  const contactsArr: any[] = Array.isArray(contacts) ? contacts : [];
+  const hasPersonalized = contactsArr.length > 0;
+  const numbersArr: any[] = Array.isArray(numbers) ? numbers : [];
+  const contactList = hasPersonalized ? buildContactsFromPayload(contactsArr) : [];
+
+  if ((!hasPersonalized && !numbersArr.length) || !sendAtMs)
+    return res.status(400).json({ error: "Dados incompletos" });
+
+  if (!Number.isFinite(sendAtMs))
+    return res.status(400).json({ error: "Data inválida" });
+
+  if (sendAtMs <= Date.now())
+    return res.status(400).json({ error: "Data precisa ser futura" });
+
+  if (recurrence !== "none" && recurrenceEndMs) {
+    if (!Number.isFinite(recurrenceEndMs)) return res.status(400).json({ error: "Fim da recorrência inválido" });
+    if (recurrenceEndMs <= sendAtMs) return res.status(400).json({ error: "Fim da recorrência deve ser após a 1ª data" });
+  }
+
+  const hasTextMessage = hasPersonalized
+    ? contactList.some((c) => (c.message ?? message ?? existing.message ?? "").trim().length > 0)
+    : String(message ?? existing.message ?? "").trim().length > 0;
+
+  if (!file && !keepExistingFile && !hasTextMessage) {
+    return res.status(400).json({ error: "Mensagem ou arquivo é obrigatório" });
+  }
+
+  const planLimits: Record<string, number> = {
+    free: 50,
+    trial: 50,
+    starter: 50,
+    pro: 200,
+  };
+  const plan = String(user.plan || "").toLowerCase();
+  const maxNumbers = planLimits[plan] ?? 50;
+  const totalCount = hasPersonalized ? contactsArr.length : numbersArr.length;
+  if (totalCount > maxNumbers) {
+    return res.status(400).json({
+      error: `Limite de ${maxNumbers} números para seu plano (${plan || "starter"}). Reduza a lista.`,
+    });
+  }
+
+  const db = getDB();
+  const existing = await db.get<any>(
+    `SELECT * FROM schedules WHERE id = ? AND user_id = ?`,
+    [id, user.id]
+  );
+  if (!existing) return res.status(404).json({ error: "Agendamento não encontrado" });
+  if (existing.status !== "pending") {
+    return res.status(400).json({ error: "Somente agendamentos pendentes podem ser editados" });
+  }
+
+  const normalized = hasPersonalized
+    ? contactList
+    : numbersArr.map((n) => String(n || "").replace(/\D/g, "")).filter(Boolean);
+
+  if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
+
+  const recurrenceRaw = (recurrence || existing.recurrence || "none") as string;
+  const allowed = ["none", "daily", "weekly", "monthly"];
+  const finalRecurrence = allowed.includes(recurrenceRaw) ? recurrenceRaw : "none";
+  const finalRecurrenceEnd = recurrenceEndMs ?? existing.recurrence_end ?? null;
+
+  // Checar duplicado (exclui o próprio)
+  const dup = await db.get<{ id: number }>(
+    `SELECT id FROM schedules
+     WHERE user_id = ? AND status = 'pending' AND send_at = ? AND numbers = ? AND id <> ?
+     LIMIT 1`,
+    [user.id, sendAtMs, JSON.stringify(normalized), id]
+  );
+  if (dup && req.body?.forceDuplicate !== true) {
+    return res.status(409).json({
+      duplicate: true,
+      existingId: dup.id,
+      message: "Já existe um agendamento igual (mesmos números e data)."
+    });
+  }
+
+  const finalFile = file ?? (keepExistingFile ? existing.file : null);
+  const finalFilename = filename ?? (keepExistingFile ? existing.filename : null);
+
+  await db.run(
+    `UPDATE schedules
+     SET numbers = ?, message = ?, file = ?, filename = ?, send_at = ?, recurrence = ?, recurrence_end = ?
+     WHERE id = ? AND user_id = ?`,
+    [
+      JSON.stringify(normalized),
+      message,
+      finalFile,
+      finalFilename,
+      sendAtMs,
+      finalRecurrence,
+      finalRecurrenceEnd,
+      id,
+      user.id,
+    ]
+  );
+
+  return res.json({ ok: true });
 });
 
 // Listar agendamentos do usuário
 app.get("/api/agendamentos/list", authMiddleware, async (req, res) => {
   const user = (req as any).user;
   const db = getDB();
-  const rows = await db.all(
-    `SELECT * FROM schedules WHERE user_id = ? ORDER BY send_at ASC`,
-    [user.id]
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const pageSize = Math.min(100, Math.max(5, Number(req.query.pageSize) || 10));
+  const status = String(req.query.status || "all");
+  const term = String(req.query.term || "").trim();
+  const from = Number(req.query.from || 0);
+  const to = Number(req.query.to || 0);
+  const orderByRaw = String(req.query.orderBy || "send_at");
+  const orderDirRaw = String(req.query.orderDir || "desc");
+
+  const orderable = ["send_at", "status"];
+  const orderDirAllowed = ["asc", "desc"];
+  const orderBy = orderable.includes(orderByRaw) ? orderByRaw : "send_at";
+  const orderDir = orderDirAllowed.includes(orderDirRaw) ? orderDirRaw : "desc";
+
+  const where: string[] = ["user_id = ?"];
+  const params: any[] = [user.id];
+
+  if (status !== "all") {
+    where.push("status = ?");
+    params.push(status);
+  }
+
+  if (from > 0) {
+    where.push("send_at >= ?");
+    params.push(from);
+  }
+
+  if (to > 0) {
+    where.push("send_at <= ?");
+    params.push(to);
+  }
+
+  if (term) {
+    where.push("(message LIKE ? OR numbers LIKE ?)");
+    params.push(`%${term}%`, `%${term}%`);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const totalRow = await db.get<{ total: number }>(
+    `SELECT COUNT(*) as total FROM schedules ${whereSql}`,
+    params
   );
-  res.json(rows);
+  const total = totalRow?.total || 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const offset = (safePage - 1) * pageSize;
+
+  const rows = await db.all(
+    `SELECT * FROM schedules
+     ${whereSql}
+     ORDER BY ${orderBy} ${orderDir}
+     LIMIT ? OFFSET ?`,
+    [...params, pageSize, offset]
+  );
+
+  res.json({ rows, total, page: safePage, pageSize, totalPages });
+});
+
+// Logs de execução (alerta no painel)
+app.get("/api/agendamentos/logs", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const afterId = Number(req.query.after || 0);
+  const db = getDB();
+
+  let sql = `
+    SELECT id, schedule_id, success_count, failure_count, sent_at
+    FROM schedule_logs
+    WHERE user_id = ?
+  `;
+  const params: any[] = [user.id];
+
+  if (Number.isFinite(afterId) && afterId > 0) {
+    sql += " AND id > ?";
+    params.push(afterId);
+  }
+
+  sql += " ORDER BY id ASC LIMIT 20";
+
+  const rows = await db.all(sql, params);
+  res.json({ logs: rows });
+});
+
+// Detalhe de log de agendamento (último log + itens)
+app.get("/api/agendamentos/log/:id", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const scheduleId = Number(req.params.id);
+  if (!Number.isFinite(scheduleId)) return res.status(400).json({ error: "ID inválido" });
+
+  const db = getDB();
+  const log = await db.get<any>(
+    `SELECT * FROM schedule_logs WHERE schedule_id = ? AND user_id = ? ORDER BY id DESC LIMIT 1`,
+    [scheduleId, user.id]
+  );
+  if (!log) return res.status(404).json({ error: "Nenhum log encontrado" });
+
+  const items = await db.all<any>(
+    `SELECT number, status, error, sent_at FROM schedule_log_items WHERE log_id = ? ORDER BY id ASC`,
+    [log.id]
+  );
+
+  res.json({ log, items });
 });
 
 // Excluir agendamento
@@ -1226,7 +1537,7 @@ app.delete("/api/agendamentos/delete/:id", authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
-function calculateNextSendAt(current: number, recurrence: string): number | null {
+function calculateNextSendAt(current: number, recurrence: string, recurrenceEnd?: number | null): number | null {
   const base = new Date(current);
   const now = Date.now();
 
@@ -1248,11 +1559,14 @@ function calculateNextSendAt(current: number, recurrence: string): number | null
 
   if (!bump()) return null;
 
-  while (base.getTime() <= now) {
-    bump();
+  const nextTs = base.getTime();
+  if (recurrenceEnd && nextTs > recurrenceEnd) return null;
+
+  if (nextTs <= now) {
+    return calculateNextSendAt(nextTs, recurrence, recurrenceEnd);
   }
 
-  return base.getTime();
+  return nextTs;
 }
 
 // ===============================
@@ -1270,8 +1584,12 @@ setInterval(async () => {
 
   for (const row of schedules) {
     try {
-      const numbers: string[] = JSON.parse(row.numbers || "[]");
+      const rawNumbers = JSON.parse(row.numbers || "[]");
+      const contactsList: PersonalizedContact[] = buildContactsFromStored(rawNumbers, row.message);
       const userId = row.user_id;
+      let successCount = 0;
+      let failureCount = 0;
+      const itemLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
 
       // 🔎 Buscar UMA sessão conectada
       const sessions = await db.all(
@@ -1298,10 +1616,11 @@ setInterval(async () => {
       // =========================
       // 📤 ENVIO DAS MENSAGENS
       // =========================
-      for (const rawNumber of numbers) {
+      for (const contact of contactsList) {
         try {
           // ✅ valida número (SEM @c.us)
-          const target = await ensureChat(client, rawNumber);
+          const target = await ensureChat(client, contact.number);
+          const finalMessage = renderTemplate(contact.message ?? row.message ?? "", contact);
 
           if (row.file && row.filename) {
             // 📎 MÍDIA
@@ -1309,12 +1628,14 @@ setInterval(async () => {
               target,
               row.file,
               row.filename,
-              row.message || ""
+              finalMessage || ""
             );
           } else {
             // 💬 TEXTO — MÉTODO CORRETO
-            await client.sendText(target, row.message);
+            await client.sendText(target, finalMessage);
           }
+          successCount += 1;
+          itemLogs.push({ number: contact.number, status: "sent", sentAt: Date.now() });
 
           // ⏳ delay anti-ban
           await new Promise(r => setTimeout(r, 1200));
@@ -1322,9 +1643,11 @@ setInterval(async () => {
         } catch (err: any) {
           console.error(
             "⚠️ Erro envio agendado (número):",
-            rawNumber,
+            contact.number,
             err?.message || err
           );
+          failureCount += 1;
+          itemLogs.push({ number: contact.number, status: "error", error: String(err?.message || err), sentAt: Date.now() });
         }
       }
 
@@ -1335,13 +1658,61 @@ setInterval(async () => {
       );
 
       const recurrence = (row as any).recurrence || "none";
-      const nextSendAt = calculateNextSendAt(row.send_at, recurrence);
+      const recurrenceEnd = (row as any).recurrence_end || null;
+      const nextSendAt = calculateNextSendAt(row.send_at, recurrence, recurrenceEnd);
+
+      // 📝 Registrar log de execução
+      const sentAt = Date.now();
+      await db.run(
+        `INSERT INTO schedule_logs (schedule_id, user_id, success_count, failure_count, sent_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [row.id, userId, successCount, failureCount, sentAt, sentAt]
+      );
+      const logResult = await db.get<{ insertId: number }>("SELECT LAST_INSERT_ID() as insertId");
+      const logId = logResult?.insertId;
+      if (logId) {
+        for (const item of itemLogs) {
+          await db.run(
+            `INSERT INTO schedule_log_items (log_id, schedule_id, user_id, number, status, error, sent_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [logId, row.id, userId, item.number, item.status, item.error || null, item.sentAt]
+          );
+        }
+      }
+
+      // 📧 Notificação por e-mail (best-effort)
+      try {
+        const user = await db.get<{ name: string; email: string }>(
+          `SELECT name, email FROM users WHERE id = ?`,
+          [userId]
+        );
+
+        if (user?.email) {
+          const subject = `Agendamento #${row.id} concluído`;
+          const successLine = `<li>Sucesso: <b>${successCount}</b></li>`;
+          const failureLine = `<li>Falhas: <b>${failureCount}</b></li>`;
+          const nextLine = nextSendAt
+            ? `<p>Próximo envio agendado para ${new Date(nextSendAt).toLocaleString("pt-BR")}</p>`
+            : "";
+          const html = `
+            <p>Olá ${user.name || ""},</p>
+            <p>Seu agendamento #${row.id} foi concluído em ${new Date(sentAt).toLocaleString("pt-BR")}.</p>
+            <ul>${successLine}${failureLine}</ul>
+            ${nextLine}
+            <p>Mensagem: ${row.message ? row.message.substring(0, 120) : "(sem texto)"}${row.message && row.message.length > 120 ? "..." : ""}</p>
+          `;
+
+          await sendEmail(user.email, subject, html);
+        }
+      } catch (err: any) {
+        console.error("⚠️ Falha ao enviar notificação de agendamento:", err?.message || err);
+      }
 
       if (nextSendAt) {
         await db.run(
-          `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [userId, row.numbers, row.message, row.file, row.filename, nextSendAt, recurrence]
+          `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [userId, row.numbers, row.message, row.file, row.filename, nextSendAt, recurrence, recurrenceEnd]
         );
       }
 
@@ -1545,6 +1916,11 @@ app.get("/fluxos", authMiddleware, (req, res) => {
   res.render("fluxos", { user });
 });
 
+app.get("/fallback-settings", authMiddleware, subscriptionGuard, (req, res) => {
+  const user = (req as any).user;
+  res.render("fallbackSettings", { user });
+});
+
 // Listar fluxos do usuário
 app.get("/api/flows/list", authMiddleware, async (req, res) => {
   try {
@@ -1609,6 +1985,169 @@ app.delete("/api/flows/delete", authMiddleware, async (req, res) => {
   } catch (err) {
     console.error("Erro deletar flow:", err);
     res.status(500).json({ ok: false });
+  }
+});
+
+// ===============================
+// ⚙️ Configuração de fallback IA → humano
+// ===============================
+const toStringArray = (value: any, fallback: string[]) => {
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v || "").trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    const items = value
+      .split(/[\n,]/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    if (items.length) return items;
+  }
+  return fallback;
+};
+
+const toBool = (value: any, fallback: boolean) => {
+  if (typeof value === "boolean") return value;
+  if (value === 1 || value === "1") return true;
+  if (value === 0 || value === "0") return false;
+  if (typeof value === "string") {
+    const norm = value.toLowerCase();
+    if (["true", "on", "yes"].includes(norm)) return true;
+    if (["false", "off", "no"].includes(norm)) return false;
+  }
+  return fallback;
+};
+
+const toNumber = (value: any, fallback: number | null) => {
+  if (value === null) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+const toStringOrNull = (value: any, fallback: string | null) => {
+  if (value === null || value === undefined) return fallback;
+  const text = String(value).trim();
+  if (!text.length) return null;
+  return text;
+};
+
+app.get("/api/fallback-settings", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const sessionName = String(req.query.sessionName || "").trim();
+
+    if (!sessionName) {
+      return res.status(400).json({ ok: false, error: "sessionName é obrigatório" });
+    }
+
+    const config = await loadFallbackSettings(user.id, sessionName);
+    return res.json({ ok: true, config });
+  } catch (err) {
+    console.error("Erro ao buscar fallback-settings:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
+  }
+});
+
+app.get("/api/sessions", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const db = getDB();
+    const sessions = await db.all(
+      `SELECT session_name, status
+       FROM sessions
+       WHERE user_id = ?
+       ORDER BY (status = 'connected') DESC, id DESC`,
+      [user.id]
+    );
+    return res.json({ ok: true, sessions });
+  } catch (err) {
+    console.error("Erro ao listar sessões:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
+  }
+});
+
+app.get("/api/fallback-settings/list", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const db = getDB();
+    const rows = await db.all(
+      `SELECT session_name, enable_fallback, notify_panel, notify_webhook, alert_phone, alert_message, updated_at
+       FROM fallback_settings
+       WHERE user_id = ?
+       ORDER BY updated_at DESC, session_name ASC`,
+      [user.id]
+    );
+    return res.json({ ok: true, items: rows || [] });
+  } catch (err) {
+    console.error("Erro ao listar fallback-settings:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
+  }
+});
+
+app.post("/api/fallback-settings", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const sessionName = String(req.body?.sessionName || req.query.sessionName || "").trim();
+
+    if (!sessionName) {
+      return res.status(400).json({ ok: false, error: "sessionName é obrigatório" });
+    }
+
+    const current = await loadFallbackSettings(user.id, sessionName);
+
+    const sensitivityRaw = String(req.body?.fallbackSensitivity || current.fallbackSensitivity).toLowerCase();
+    const fallbackSensitivity = ["low", "medium", "high"].includes(sensitivityRaw)
+      ? (sensitivityRaw as FallbackSettings["fallbackSensitivity"])
+      : current.fallbackSensitivity;
+
+    const payload: FallbackSettings = {
+      enableFallback: toBool(req.body?.enableFallback, current.enableFallback),
+      fallbackMessage: String(req.body?.fallbackMessage ?? current.fallbackMessage),
+      fallbackSensitivity,
+      maxRepetitions: toNumber(req.body?.maxRepetitions, current.maxRepetitions) ?? current.maxRepetitions,
+      maxFrustration: toNumber(req.body?.maxFrustration, current.maxFrustration) ?? current.maxFrustration,
+      maxIaFailures: toNumber(req.body?.maxIaFailures, current.maxIaFailures) ?? current.maxIaFailures,
+      triggerWords: toStringArray(req.body?.triggerWords, current.triggerWords),
+      frustrationWords: toStringArray(req.body?.frustrationWords, current.frustrationWords),
+      aiUncertaintyPhrases: toStringArray(req.body?.aiUncertaintyPhrases, current.aiUncertaintyPhrases),
+      aiTransferPhrases: toStringArray(req.body?.aiTransferPhrases, current.aiTransferPhrases),
+      humanModeDuration:
+        req.body?.humanModeDuration === undefined
+          ? current.humanModeDuration
+          : toNumber(req.body?.humanModeDuration, current.humanModeDuration),
+      notifyPanel: toBool(req.body?.notifyPanel, current.notifyPanel),
+      notifyWebhook: toBool(req.body?.notifyWebhook, current.notifyWebhook),
+      webhookUrl: String(req.body?.webhookUrl ?? current.webhookUrl),
+      alertPhone: toStringOrNull(req.body?.alertPhone, current.alertPhone || null),
+      alertMessage: toStringOrNull(req.body?.alertMessage, current.alertMessage || null) ?? current.alertMessage,
+    };
+
+    const saved = await saveFallbackSettings(user.id, sessionName, payload);
+    resetFallbackCache(user.id, sessionName); // garante recarga futura caso outro processo esteja usando
+    await loadFallbackSettings(user.id, sessionName); // recarrega imediatamente o cache local
+
+    return res.json({ ok: true, config: saved });
+  } catch (err) {
+    console.error("Erro ao salvar fallback-settings:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
+  }
+});
+
+app.delete("/api/fallback-settings", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const sessionName = String(req.body?.sessionName || req.query.sessionName || "").trim();
+
+    if (!sessionName) {
+      return res.status(400).json({ ok: false, error: "sessionName é obrigatório" });
+    }
+
+    const db = getDB();
+    await db.run(`DELETE FROM fallback_settings WHERE user_id = ? AND session_name = ?`, [user.id, sessionName]);
+    resetFallbackCache(user.id, sessionName);
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro ao deletar fallback-settings:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
   }
 });
 
@@ -1972,7 +2511,6 @@ export async function restoreSessionsOnStartup() {
 
 setInterval(() => {
   const now = Date.now();
-  const LIMIT = 5 * 60 * 1000; // 5 minutos sem cliente falar
 
   for (const [key, last] of chatHumanLastActivity.entries()) {
     const isHuman = chatHumanLock.get(key) === true;
@@ -1983,13 +2521,17 @@ setInterval(() => {
     }
 
     const lastActivity = Number(last || 0);
+    const configured = chatHumanDuration.get(key);
+    if (configured === null) continue; // sem limite por configuração
+
+    const limitMs = configured ?? 5 * 60 * 1000;
 
     if (!lastActivity) {
       chatHumanLastActivity.set(key, now);
       continue;
     }
 
-    if (now - lastActivity >= LIMIT) {
+    if (now - lastActivity >= limitMs) {
       chatHumanLock.set(key, false);
       chatHumanLastActivity.delete(key);
 
@@ -2013,4 +2555,26 @@ setInterval(() => {
 // =======================================
 server.listen(3000, () => {
   console.log("🚀 Server online em http://localhost:3000");
+});
+
+
+
+
+// ===============================
+// 🗺️ Fuso horário do usuário
+// ===============================
+app.post("/user/timezone", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const offset = Number(req.body?.timezoneOffset); // minutos em relação ao UTC
+    if (!Number.isFinite(offset) || offset < -720 || offset > 840) {
+      return res.status(400).json({ ok: false, error: "Fuso inválido" });
+    }
+    const db = getDB();
+    await db.run("UPDATE users SET timezone_offset = ? WHERE id = ?", [offset, user.id]);
+    return res.json({ ok: true, timezoneOffset: offset });
+  } catch (err) {
+    console.error("Erro ao salvar timezone:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao salvar fuso horário" });
+  }
 });

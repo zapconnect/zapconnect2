@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Fallback Automático • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="/img/favinco.png" />
+  <link rel="stylesheet" href="/css/index.css">
+  <link rel="stylesheet" href="/css/fallbackSettings.css">
+</head>
+<body>
+  <div class="fallback-page">
+    <header class="page-header">
+      <div>
+        <h1>Fallback automático para atendimento humano</h1>
+        <p>Defina apenas a mensagem de transferência e por quanto tempo o modo humano permanece ativo.</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn-ghost small" onclick="window.location.href='/painel'">
+          ← Voltar
+        </button>
+        <div class="pill info" id="pill-src">Fonte: —</div>
+      </div>
+    </header>
+
+    <div id="status-box" class="status" style="display:none;"></div>
+
+    <section class="card">
+      <label>Session name</label>
+      <select id="sessionName">
+        <option value="" disabled selected>Carregando sessões...</option>
+      </select>
+      <small class="muted">Seleciona automaticamente a primeira sessão disponível.</small>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="card-title">Mensagem automática</div>
+        <label>Mensagem enviada ao ativar atendimento humano</label>
+        <textarea id="fallbackMessage" placeholder="Vou encaminhar você para um atendente humano, aguarde um momento."></textarea>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Tempo do modo humano</div>
+        <label>Duração (minutos) — 0 para ilimitado</label>
+        <input id="humanModeDuration" type="number" min="0" value="15">
+      </div>
+
+      <div class="card">
+        <div class="card-title">Mensagem da IA pedindo transferência</div>
+        <label>Texto que aciona a transferência</label>
+        <textarea id="aiTransferPhrases" placeholder="transferindo..."></textarea>
+        <small class="muted">Use uma linha por variação; qualquer linha acionará o fallback.</small>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Alerta em outro WhatsApp</div>
+        <label>Número do WhatsApp para alerta (com DDI/DD)</label>
+        <input id="alertPhone" type="text" placeholder="5511999999999">
+
+        <label>Mensagem do alerta</label>
+        <textarea id="alertMessage" placeholder="Alerta: assuma a conversa {chatId} da sessão {sessionName}."></textarea>
+        <small class="muted">Deixe vazio para não enviar alerta. Use {chatId} e {sessionName} como variáveis.</small>
+      </div>
+    </section>
+
+    <div class="actions">
+      <button class="btn-primary" id="btnSave">Salvar configuração</button>
+      <button class="btn-ghost" id="btnLoad">Carregar</button>
+      <button class="btn-ghost" id="btnReset">Resetar para padrão</button>
+    </div>
+
+    <section class="card list-card">
+      <div class="list-header">
+        <div>
+          <div class="card-title">Configurações salvas</div>
+          <small class="muted">Clique em editar para carregar, ou excluir para remover.</small>
+        </div>
+        <button class="btn-ghost small" id="btnRefreshList">Atualizar lista</button>
+      </div>
+      <div class="table">
+        <div class="table-head">
+          <span>Sessão</span>
+          <span>Webhook</span>
+          <span>Alerta</span>
+          <span>Atualizado</span>
+          <span>Ações</span>
+        </div>
+        <div id="fallbackList" class="table-body"></div>
+      </div>
+    </section>
+  </div>
+
+  <div id="userdata" data-user='<%- JSON.stringify(user || {}) %>'></div>
+  <script src="/js/fallbackSettings.js"></script>
+</body>
+</html>
