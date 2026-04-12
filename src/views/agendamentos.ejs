@@ -264,6 +264,8 @@
     </div>
   </div>
 
+  <script src="/js/loading-utils.js"></script>
+  <script src="/js/toast.js"></script>
   <script>
     // ── Estado do arquivo selecionado ────────────────────────────────
     let selectedFileData = null; // { base64, filename, mimetype }
@@ -590,22 +592,26 @@
 
     // ── Agendar ────────────────────────────────
     async function agendar() {
+      clearAllFieldErrors();
       const numbers = document.getElementById("nums").value
         .split("\n").map(n => n.trim()).filter(Boolean);
       const totalCount = contactsData.length ? contactsData.length : numbers.length;
 
       if (!numbers.length && !contactsData.length) {
         setResult("Informe pelo menos um número", false);
+        showFieldError("nums", "Informe pelo menos um número ou importe CSV.");
         return;
       }
       if (totalCount > MAX_NUMBERS) {
         setResult(`Limite do plano: máximo ${MAX_NUMBERS} números`, false);
+        showFieldError("nums", `Limite do plano: máximo ${MAX_NUMBERS} números.`);
         return;
       }
 
       const sendAtVal = document.getElementById("sendAt").value;
       if (!sendAtVal) {
         setResult("Informe a data e hora do envio", false);
+        showFieldError("sendAt", "Informe a data e hora do envio.");
         return;
       }
 
@@ -613,6 +619,7 @@
       const sendAt = toUtcFromInput(sendAtVal, tzOffset);
       if (sendAt <= Date.now()) {
         setResult("A data deve ser no futuro", false);
+        showFieldError("sendAt", "Escolha um horário no futuro.");
         return;
       }
 
@@ -622,6 +629,7 @@
         const endTs = toUtcFromInput(recurrenceEndVal + "T23:59", tzOffset);
         if (!Number.isFinite(endTs) || endTs <= sendAt) {
           setResult("Encerramento da recorrência deve ser após a primeira data.", false);
+          showFieldError("recurrenceEnd", "Encerramento deve ser depois da primeira data.");
           return;
         }
       }
@@ -629,6 +637,7 @@
       const message = document.getElementById("msg").value;
       if (!message && !selectedFileData) {
         setResult("Informe uma mensagem ou selecione um arquivo", false);
+        showFieldError("msg", "Informe mensagem ou anexe um arquivo.");
         return;
       }
 
@@ -1045,6 +1054,54 @@
       return `<div class="recurrence-pill">
         <i class="fa-solid fa-rotate"></i> ${formatarRecorrencia(rec)}
       </div>`;
+    }
+
+    async function verDetalhes(id) {
+      const modal = document.getElementById("detailsModal");
+      const body = document.getElementById("detailsBody");
+      if (!modal || !body) return;
+
+      body.innerHTML = "Carregando...";
+      modal.classList.remove("hidden");
+
+      try {
+        const res = await fetch(`/api/agendamentos/log/${id}`);
+        if (!res.ok) throw new Error("Falha ao buscar detalhes");
+        const payload = await res.json();
+        const log = payload?.log;
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+
+        if (!log) {
+          body.innerHTML = "<p>Nenhum log encontrado.</p>";
+          return;
+        }
+
+        const sentAt = new Date(Number(log.sent_at || 0)).toLocaleString("pt-BR");
+        const success = log.success_count ?? 0;
+        const failure = log.failure_count ?? 0;
+        const rows = items.map((it) => {
+          const status = it.status === "sent" ? "✅" : "⚠️";
+          const when = new Date(Number(it.sent_at || 0)).toLocaleString("pt-BR");
+          const err = it.error ? `<div class=\"item-error\">${it.error}</div>` : "";
+          return `<div class=\"item-row\"><div>${status} ${it.number}</div><div class=\"item-date\">${when}</div>${err}</div>`;
+        }).join("") || "<p>Sem itens detalhados.</p>";
+
+        body.innerHTML = `
+          <div class="details-head">
+            <div><strong>Enviado em:</strong> ${sentAt}</div>
+            <div><strong>Sucesso:</strong> ${success}</div>
+            <div><strong>Falhas:</strong> ${failure}</div>
+          </div>
+          <div class="details-items">${rows}</div>
+        `;
+      } catch (err) {
+        body.innerHTML = `<p>Erro ao carregar detalhes.</p>`;
+      }
+    }
+
+    function fecharDetalhes() {
+      const modal = document.getElementById("detailsModal");
+      if (modal) modal.classList.add("hidden");
     }
 
     updateNumCount();

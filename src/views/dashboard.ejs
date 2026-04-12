@@ -108,8 +108,8 @@
       </div>
     </div>
 
-    <!-- GRÁFICOS ROW 3 -->
-    <div class="chart-card span2">
+  <!-- GRÁFICOS ROW 3 -->
+  <div class="chart-card span2">
       <div class="chart-card-header">
         <div>
           <h3><i class="fa-solid fa-calendar-days"></i> Atividade de Pagamentos</h3>
@@ -151,6 +151,45 @@
       </table>
     </div>
 
+  </section>
+
+  <!-- TEMPLATES TRIAL -->
+  <section class="chart-card span3" style="margin-top:24px">
+    <div class="chart-card-header">
+      <div>
+        <h3><i class="fa-solid fa-envelope"></i> Templates de Trial</h3>
+        <p class="chart-subtitle">Assunto e corpo em HTML para e-mails automáticos do trial</p>
+      </div>
+      <div class="legend">
+        <span class="leg-item"><span class="leg-dot" style="background:#4f6ef7"></span>Auto-save via API</span>
+      </div>
+    </div>
+
+    <div class="template-grid">
+      <div class="template-controls">
+        <label>Template</label>
+        <select id="tpl-select">
+          <option value="trial_day1">Dia 1 — boas-vindas</option>
+          <option value="trial_day3">Dia 3 — engajamento</option>
+          <option value="trial_day6">Dia 6 — ajuste fino</option>
+          <option value="trial_last">Último dia — oferta</option>
+        </select>
+        <label>Assunto</label>
+        <input type="text" id="tpl-subject" placeholder="Assunto do e-mail" />
+        <label>Corpo (HTML)</label>
+        <textarea id="tpl-body" rows="10" placeholder="<h2>...</h2>"></textarea>
+        <div class="template-actions">
+          <button id="tpl-save" class="btn-export" type="button">
+            <i class="fa-solid fa-floppy-disk"></i> Salvar
+          </button>
+          <span class="template-status" id="tpl-status"></span>
+        </div>
+      </div>
+      <div class="template-preview">
+        <div class="preview-header">Preview rápido</div>
+        <iframe id="tpl-preview"></iframe>
+      </div>
+    </div>
   </section>
 
   <!-- FILTROS -->
@@ -200,6 +239,7 @@
       <table>
         <thead>
           <tr>
+            <th style="width:40px"></th>
             <th data-sort="name">Nome <i class="fa-solid fa-sort"></i></th>
             <th>Email</th>
             <th data-sort="plan">Plano <i class="fa-solid fa-sort"></i></th>
@@ -211,7 +251,7 @@
         </thead>
         <tbody id="users">
           <tr class="loading-row">
-            <td colspan="7">
+            <td colspan="8">
               <div class="spinner-wrap">
                 <div class="spinner"></div>
                 <span>Carregando dados…</span>
@@ -225,6 +265,8 @@
   </section>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <script src="/js/loading-utils.js"></script>
+  <script src="/js/toast.js"></script>
   <script src="/js/dashboard.js"></script>
 </body>
 </html>

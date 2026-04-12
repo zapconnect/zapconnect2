@@ -6,6 +6,9 @@
   <title>Chats • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="/img/favinco.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/chats.css" />
 
   <!-- ✅ Variáveis definidas ANTES do chat.js carregar -->
@@ -45,6 +48,7 @@
 
       <header class="chat-header">
         <div class="chat-title">
+          <button id="btnToggleSidebar" class="btn-menu" title="Conversas">☰</button>
           <h2 id="chatTitle">Selecione um chat…</h2>
           <span id="tagHuman" class="tag-human" style="display:none;">HUMANO</span>
           <span id="tagAiOff" class="tag-ai-off" style="display:none;">IA DESLIGADA</span>
@@ -67,6 +71,7 @@
           <button id="btnClearAi" title="Limpar histórico da IA" style="display:none;">🧹 Resetar IA</button>
         </div>
 
+        <button id="btnNotesToggle" class="btn-notes-toggle" title="Mostrar/ocultar notas">🗒️ Notas</button>
         <button id="btnSearch" class="btn-search-toggle" title="Buscar na conversa">🔍</button>
       </header>
 
@@ -79,6 +84,25 @@
           <button id="searchNext" class="search-nav" title="Próximo">↓</button>
           <button id="searchClose" class="search-close" title="Fechar">✕</button>
         </div>
+      </div>
+
+      <!-- Notas internas (não enviadas ao cliente) -->
+      <div id="notesPanel" class="notes-panel hidden">
+        <div class="notes-head">
+          <div class="notes-head-titles">
+            <span class="notes-title">Notas internas</span>
+            <span id="notesCount" class="notes-count">0</span>
+          </div>
+          <button id="notesRefresh" class="notes-refresh" title="Recarregar notas">Atualizar</button>
+        </div>
+        <div id="notesList" class="notes-list empty">Nenhuma nota interna ainda.</div>
+        <form id="noteForm" class="notes-form">
+          <textarea id="noteInput" class="notes-input" placeholder="Adicionar nota interna (aparece só no painel)"></textarea>
+          <div class="notes-actions">
+            <span class="note-helper">Use para combinar transferências ou registrar detalhes sensíveis. Não vai para o cliente.</span>
+            <button type="submit" id="noteSubmit" class="notes-submit">Salvar nota</button>
+          </div>
+        </form>
       </div>
 
       <main id="messages" class="messages"></main>
@@ -110,6 +134,7 @@
 
     </section>
   </div>
+  <div id="sidebarOverlay" class="sidebar-overlay"></div>
 
   <!-- MODAL DE EMOJIS -->
   <div id="emojiModal" class="emoji-modal">
@@ -123,6 +148,7 @@
   </div>
 
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/loading-utils.js"></script>
   <script src="/js/chat.js"></script>
 </body>
 

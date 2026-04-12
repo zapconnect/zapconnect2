@@ -1,5 +1,6 @@
 import express from "express";
 import { getDB } from "../database";
+import { availableTrialKeys, listTrialTemplates, saveTrialTemplate } from "../services/trialTemplates";
 
 const router = express.Router();
 const email = "viniciussowza16@gmail.com";
@@ -155,6 +156,50 @@ router.get("/dashboard-data", async (req, res) => {
     },
     users,
   });
+});
+
+// Templates de e-mail do trial
+router.get("/email-templates", async (req, res) => {
+  const user = (req as any).user;
+  if (user.email !== email) return res.status(403).json({ error: "Acesso negado" });
+
+  try {
+    const templates = await listTrialTemplates();
+    return res.json({ ok: true, templates });
+  } catch (err) {
+    console.error("Erro ao listar templates:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao listar templates" });
+  }
+});
+
+router.post("/email-templates", async (req, res) => {
+  const user = (req as any).user;
+  if (user.email !== email) return res.status(403).json({ error: "Acesso negado" });
+
+  try {
+    const { key, subject, body } = req.body || {};
+    const safeKey = String(key || "").trim();
+    const safeSubject = String(subject || "").trim();
+    const safeBody = String(body || "").trim();
+
+    if (!safeKey || !availableTrialKeys().includes(safeKey as any)) {
+      return res.status(400).json({ ok: false, error: "Template inválido" });
+    }
+    if (!safeSubject || !safeBody) {
+      return res.status(400).json({ ok: false, error: "Subject e body são obrigatórios" });
+    }
+
+    await saveTrialTemplate({
+      key: safeKey as any,
+      subject: safeSubject.slice(0, 255),
+      body: safeBody,
+    });
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro ao salvar template:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao salvar" });
+  }
 });
 
 export default router;

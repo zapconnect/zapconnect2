@@ -15,6 +15,8 @@
 
   <link rel="icon" href="/img/favinco.png" />
   <link rel="stylesheet" href="/css/login.css">
+  <script src="/js/loading-utils.js"></script>
+  <script src="/js/toast.js"></script>
   <script src="/js/login.js" defer></script>
 </head>
 
@@ -38,6 +40,7 @@
       autocomplete="email"
       autofocus
     >
+    <div id="email-error" class="input-error"></div>
 
     <!-- SENHA -->
     <label>Senha</label>
@@ -57,6 +60,7 @@
         <i id="eyeIcon" class="fa-solid fa-eye"></i>
       </button>
     </div>
+    <div id="password-error" class="input-error"></div>
 
     <!-- 🔥 ESQUECEU A SENHA -->
     <div class="forgot-row">

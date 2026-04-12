@@ -34,12 +34,18 @@ function hideQrUI() {
     const img = document.getElementById("qr-img");
     const refresh = document.getElementById("qr-refresh");
     const timer = document.getElementById("qr-timer");
+    const placeholder = document.getElementById("qr-placeholder");
 
-    if (box) box.style.display = "none";
+    if (box) {
+        box.style.display = "block";
+        box.classList.remove("hidden");
+    }
     if (loading) loading.style.display = "none";
     if (img) img.style.display = "none";
     if (refresh) refresh.style.display = "none";
     if (timer) timer.innerText = "";
+    if (placeholder) placeholder.style.display = "flex";
+    clearInterval(qrTimer);
 }
 
 // ===============================
@@ -217,7 +223,14 @@ async function saveSilence() {
 // ===============================
 // 📊 MÉTRICAS DO PAINEL
 // ===============================
+function setStatSkeleton(active) {
+    document.querySelectorAll(".stat-card").forEach(card => {
+        card.classList.toggle("skeleton", !!active);
+    });
+}
+
 async function loadStats() {
+    setStatSkeleton(true);
     try {
         const res = await fetch(API + "/api/painel/stats", { credentials: "include" });
         if (!res.ok) return;
@@ -238,6 +251,8 @@ async function loadStats() {
         // Mostrar 0 em caso de erro
         ["stat-sessions","stat-clientes","stat-agendamentos","stat-ia"]
             .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = "0"; });
+    } finally {
+        setStatSkeleton(false);
     }
 }
 
@@ -333,18 +348,23 @@ async function listSessions() {
     const box = document.getElementById("sessions-list");
     box.innerHTML = "";
 
-    if (!sessions.length) {
-        box.innerHTML = `
+  if (!sessions.length) {
+    box.innerHTML = `
             <div class="session-empty">
-                <i class="fa-brands fa-whatsapp"></i>
-                <p>Nenhuma sessão cadastrada ainda</p>
+                <div class="session-illust">📱</div>
+                <h3>Conecte seu primeiro WhatsApp</h3>
+                <p>Crie uma sessão, escaneie o QR Code e comece a atender clientes pelo painel.</p>
+                <button class="btn btn-accent" onclick="scrollToCreateSession()">
+                  <i class="fa-solid fa-qrcode"></i>
+                  Criar sessão agora
+                </button>
             </div>`;
-        checkConnectionAlert(sessions);
-        return;
-    }
+    checkConnectionAlert(sessions);
+    return;
+  }
 
-    sessions.forEach(s => {
-        const isConnected    = s.status === "connected";
+  sessions.forEach(s => {
+    const isConnected    = s.status === "connected";
         const isReconnecting = s.status === "reconnecting";
         const isPending      = s.status === "pending";
 
@@ -387,10 +407,14 @@ async function listSessions() {
             </div>
         `;
 
-        box.appendChild(div);
-    });
+    box.appendChild(div);
+  });
 
-    checkConnectionAlert(sessions);
+  // Se alguma sessão está conectada, esconder QR/placeholder
+  const hasConnected = sessions.some(s => s.status === "connected");
+  if (hasConnected) hideQrUI();
+
+  checkConnectionAlert(sessions);
 }
 
 async function restartSession(name) {
@@ -448,6 +472,7 @@ socket.on("session:qr", ({ userId, sessionName, full }) => {
     const img = document.getElementById("qr-img");
     const refresh = document.getElementById("qr-refresh");
     const timerText = document.getElementById("qr-timer");
+    const placeholder = document.getElementById("qr-placeholder");
 
     if (!box || !img) return;
 
@@ -458,6 +483,7 @@ socket.on("session:qr", ({ userId, sessionName, full }) => {
     // esconder loading IMEDIATAMENTE
     const loading = document.getElementById("qr-loading");
     if (loading) loading.style.display = "none";
+    if (placeholder) placeholder.style.display = "none";
 
     // mostrar imagem
     img.style.display = "block";
@@ -566,6 +592,7 @@ function showQrLoading() {
     const box = document.getElementById("qr-preview");
     const loading = document.getElementById("qr-loading");
     const img = document.getElementById("qr-img");
+    const placeholder = document.getElementById("qr-placeholder");
 
     if (box) {
         box.classList.remove("hidden");
@@ -574,16 +601,23 @@ function showQrLoading() {
 
     if (loading) loading.style.display = "flex";
     if (img) img.style.display = "none";
+    if (placeholder) placeholder.style.display = "none";
 }
 
 function showQrImage(src) {
     const loading = document.getElementById("qr-loading");
     const img = document.getElementById("qr-img");
+    const placeholder = document.getElementById("qr-placeholder");
+    const timer = document.getElementById("qr-timer");
 
     if (!img) return;
 
     img.onload = () => {
         if (loading) loading.style.display = "none";
+        if (placeholder) placeholder.style.display = "none";
+        if (timer) timer.innerText = "";
+        clearInterval(qrTimer);
+        qrTimer = null;
         img.style.display = "block";
     };
 
@@ -591,7 +625,17 @@ function showQrImage(src) {
 }
 function hideQrLoading() {
     const loading = document.getElementById("qr-loading");
+    const placeholder = document.getElementById("qr-placeholder");
+    const box = document.getElementById("qr-preview");
+    const img = document.getElementById("qr-img");
+    const timer = document.getElementById("qr-timer");
+    clearInterval(qrTimer);
+    qrTimer = null;
     if (loading) loading.style.display = "none";
+    if (placeholder) placeholder.style.display = "none";
+    if (img) img.style.display = "none";
+    if (box) box.style.display = "none";
+    if (timer) timer.innerText = "";
 }
 
 // ===============================
@@ -627,6 +671,17 @@ async function pollScheduleLogs() {
 function startScheduleLogWatcher() {
     pollScheduleLogs();
     setInterval(pollScheduleLogs, 15000);
+}
+
+// ===============================
+// 📱 Helpers de navegação no painel
+// ===============================
+function scrollToCreateSession() {
+    const input = document.getElementById("session-name");
+    if (input) {
+        input.scrollIntoView({ behavior: "smooth", block: "center" });
+        input.focus();
+    }
 }
 /* ===============================
    🔔 NOTIFICAÇÕES (TOAST)

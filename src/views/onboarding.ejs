@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Bem-vindo • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="/img/favinco.png" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
+  <style>
+    :root {
+      --bg: #0D1222;
+      --card: #161B30;
+      --border: #2a3047;
+      --text: #E8ECF7;
+      --muted: #AAB0D9;
+      --primary: #6C64EF;
+      --primary-2: #5AC8FA;
+      --success: #22C55E;
+    }
+    *{box-sizing:border-box;font-family:Inter,system-ui,sans-serif;}
+    body{
+      margin:0;
+      min-height:100vh;
+      background:radial-gradient(circle at 20% 20%, rgba(108,100,239,.15), transparent 35%), radial-gradient(circle at 80% 0%, rgba(90,200,250,.2), transparent 30%), var(--bg);
+      color:var(--text);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:20px;
+    }
+    .shell{
+      width:100%;
+      max-width:960px;
+      background:linear-gradient(180deg,#181f3d,#0f1429);
+      border:1px solid var(--border);
+      border-radius:22px;
+      padding:28px;
+      box-shadow:0 30px 80px rgba(0,0,0,.45);
+    }
+    h1{margin:0;font-size:26px;}
+    p.lead{color:var(--muted);margin:8px 0 20px;}
+    .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;}
+    .card{
+      padding:18px;
+      border-radius:16px;
+      border:1px solid var(--border);
+      background:rgba(255,255,255,0.02);
+      position:relative;
+      overflow:hidden;
+    }
+    .card::after{
+      content:"";
+      position:absolute;
+      inset:0;
+      background:linear-gradient(135deg, rgba(255,255,255,0.08), transparent 40%);
+      opacity:0;
+      transition:.2s;
+      pointer-events:none;
+    }
+    .card:hover::after{opacity:1;}
+    .card h3{margin:10px 0 6px;font-size:16px;}
+    .card p{margin:0;color:var(--muted);font-size:13px;line-height:1.4;}
+    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      padding:6px 10px;
+      border-radius:999px;
+      font-size:12px;
+      background:rgba(255,255,255,0.04);
+      border:1px solid var(--border);
+      color:var(--text);
+    }
+    .btn{
+      margin-top:12px;
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid transparent;
+      cursor:pointer;
+      color:#0b1225;
+      font-weight:700;
+      background:linear-gradient(135deg,var(--primary),var(--primary-2));
+      box-shadow:0 10px 30px rgba(108,100,239,.35);
+      text-decoration:none;
+    }
+    .btn.secondary{
+      background:transparent;
+      border-color:var(--border);
+      color:var(--text);
+      box-shadow:none;
+    }
+    .list{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:13px;}
+    @media(max-width:640px){
+      .shell{padding:22px;}
+      h1{font-size:22px;}
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+      <span class="pill"><i class="fa-solid fa-rocket"></i> Primeiro passo</span>
+    </div>
+    <h1>Bem-vindo ao ZapConnect!</h1>
+    <p class="lead">Completar estes 3 passos leva menos de 2 minutos e aumenta muito suas chances de ativar o produto.</p>
+
+    <div class="steps">
+      <div class="card">
+        <span class="pill" style="background:rgba(34,197,94,0.12);border-color:rgba(34,197,94,0.35);color:#a7f3d0"><i class="fa-solid fa-envelope-circle-check"></i> Passo 1</span>
+        <h3>Confirme seu e-mail</h3>
+        <p>Abra seu e-mail e clique no link de verificação para liberar todos os recursos.</p>
+        <ul class="list">
+          <li>Procure por "ZapConnect"</li>
+          <li>Cheque a caixa de spam</li>
+        </ul>
+        <a class="btn secondary" href="https://mail.google.com" target="_blank" rel="noreferrer">
+          <i class="fa-solid fa-arrow-up-right-from-square"></i>
+          Abrir Gmail
+        </a>
+      </div>
+
+      <div class="card">
+        <span class="pill" style="background:rgba(90,200,250,0.12);border-color:rgba(90,200,250,0.3);color:#cceeff"><i class="fa-solid fa-mobile-screen-button"></i> Passo 2</span>
+        <h3>Conecte sua primeira sessão</h3>
+        <p>Crie uma sessão e escaneie o QR code para atender pelo WhatsApp Web.</p>
+        <ul class="list">
+          <li>Use um número de WhatsApp ativo</li>
+          <li>Mantenha o aparelho online na primeira conexão</li>
+        </ul>
+        <button class="btn" id="btn-go-panel" type="button">
+          <i class="fa-solid fa-right-to-bracket"></i>
+          Ir para o painel
+        </button>
+      </div>
+
+      <div class="card">
+        <span class="pill" style="background:rgba(108,100,239,0.12);border-color:rgba(108,100,239,0.35);color:#dcd6ff"><i class="fa-solid fa-magic"></i> Passo 3</span>
+        <h3>Configure o prompt da IA</h3>
+        <p>Defina tom de voz, saudações e limites. Isso melhora a qualidade das respostas.</p>
+        <ul class="list">
+          <li>Explique como sua empresa atende</li>
+          <li>Inclua exemplos de boas respostas</li>
+        </ul>
+        <a class="btn secondary" href="/login">
+          <i class="fa-solid fa-sliders"></i>
+          Configurar depois
+        </a>
+      </div>
+    </div>
+  </div>
+</body>
+<script>
+  const btn = document.getElementById("btn-go-panel");
+  btn?.addEventListener("click", async () => {
+    try {
+      const res = await fetch("/auth/me", { credentials: "include" });
+      if (res.ok) {
+        window.location.href = "/painel";
+      } else {
+        window.location.href = "/login";
+      }
+    } catch {
+      window.location.href = "/login";
+    }
+  });
+</script>
+</html>

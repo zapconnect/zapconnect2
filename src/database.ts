@@ -15,7 +15,7 @@ export async function initDB() {
     user: process.env.DB_USER,
     password: process.env.DB_PASS,
     database: process.env.DB_NAME,
-    connectionLimit: 10,
+    connectionLimit: Number(process.env.DB_POOL_LIMIT || 30),
     charset: "utf8mb4",
   });
 
@@ -221,6 +221,20 @@ export async function initDB() {
       name VARCHAR(255) NOT NULL,
       trigger_type VARCHAR(255) NOT NULL,
       actions LONGTEXT NOT NULL,
+      active TINYINT DEFAULT 1,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS welcome_flows (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      actions LONGTEXT NOT NULL,
+      active TINYINT DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
@@ -306,6 +320,16 @@ export async function initDB() {
     `,
 
     `
+    CREATE TABLE IF NOT EXISTS rate_limits (
+      rate_key VARCHAR(255) PRIMARY KEY,
+      count INT DEFAULT 0,
+      first_attempt BIGINT DEFAULT 0,
+      blocked_until BIGINT DEFAULT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+    `,
+
+    `
     CREATE TABLE IF NOT EXISTS fallback_settings (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
@@ -330,11 +354,117 @@ export async function initDB() {
       notify_panel BOOLEAN,
       notify_webhook BOOLEAN,
       webhook_url TEXT,
+      alert_phone VARCHAR(32),
+      alert_message TEXT,
+      fallback_cooldown_minutes INT,
 
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
       UNIQUE KEY uniq_user_session (user_id, session_name),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS chat_histories (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      session_name VARCHAR(255) NOT NULL,
+      chat_id VARCHAR(255) NOT NULL,
+      history JSON NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uniq_chat_history (user_id, session_name, chat_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS chat_notes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      session_name VARCHAR(255) NOT NULL,
+      chat_id VARCHAR(255) NOT NULL,
+      attendant_id INT DEFAULT NULL,
+      author_name VARCHAR(255),
+      content TEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      INDEX idx_chat_notes_lookup (user_id, session_name, chat_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS kb_sources (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      type VARCHAR(10) NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      source_url TEXT,
+      status VARCHAR(20) DEFAULT 'pending',
+      error TEXT,
+      tokens INT DEFAULT 0,
+      chunks INT DEFAULT 0,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS kb_chunks (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      source_id INT NOT NULL,
+      user_id INT NOT NULL,
+      session_scope VARCHAR(255),
+      chunk_index INT NOT NULL,
+      content TEXT NOT NULL,
+      embedding JSON,
+      created_at BIGINT NOT NULL,
+      FOREIGN KEY (source_id) REFERENCES kb_sources(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS kb_queries (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      session_name VARCHAR(255),
+      chat_id VARCHAR(255),
+      query TEXT NOT NULL,
+      latency_ms INT,
+      result_count INT,
+      created_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS email_templates (
+      template_key VARCHAR(50) PRIMARY KEY,
+      subject VARCHAR(255) NOT NULL,
+      body TEXT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS ai_metrics (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      session_name VARCHAR(255) NOT NULL,
+      chat_id VARCHAR(255) NOT NULL,
+      provider VARCHAR(10) NOT NULL,
+      latency_ms INT NOT NULL,
+      input_chars INT NOT NULL,
+      output_chars INT NOT NULL,
+      success TINYINT NOT NULL,
+      error_code VARCHAR(64),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_ai_metrics_user (user_id),
+      INDEX idx_ai_metrics_session (session_name),
+      INDEX idx_ai_metrics_chat (chat_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `
@@ -343,7 +473,18 @@ export async function initDB() {
   // Ajustes incrementais de schema (idempotentes)
   const alters = [
     `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS alert_phone VARCHAR(32)`,
-    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS alert_message TEXT`
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS alert_message TEXT`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS fallback_cooldown_minutes INT`,
+    `ALTER TABLE flows ADD COLUMN IF NOT EXISTS conditions JSON`,
+    `ALTER TABLE flows ADD COLUMN IF NOT EXISTS triggers JSON`,
+    `ALTER TABLE flows ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0`,
+    `ALTER TABLE flows ADD COLUMN IF NOT EXISTS active TINYINT DEFAULT 1`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_started_at BIGINT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day1_sent TINYINT DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day3_sent TINYINT DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day6_sent TINYINT DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_last_sent TINYINT DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_onboarding_done TINYINT DEFAULT 0`
   ];
 
   for (const sql of tables) {
@@ -352,6 +493,22 @@ export async function initDB() {
 
   for (const sql of alters) {
     await pool.query(sql);
+  }
+
+  const indexes = [
+    "CREATE INDEX IF NOT EXISTS idx_schedules_status_send_at ON schedules (status, send_at)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions (user_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_notes_lookup ON chat_notes (user_id, session_name, chat_id)",
+    "CREATE INDEX IF NOT EXISTS idx_kb_sources_user ON kb_sources (user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_kb_chunks_scope ON kb_chunks (user_id, session_scope)",
+  ];
+
+  for (const sql of indexes) {
+    try {
+      await pool.query(sql);
+    } catch {
+      // ignorar se índice já existir ou IF NOT EXISTS não for suportado
+    }
   }
 
   console.log("📌 Tabelas verificadas/criadas com sucesso");

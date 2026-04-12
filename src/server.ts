@@ -27,14 +27,27 @@ import {
 } from "./services/fallbackService";
 import { stopChatSession } from "./service/google";
 import emailVerifyRoutes from "./routes/emailVerify";
+import {
+  ingestTextSource,
+  ingestUrlSource,
+  listSources,
+  queryKb,
+  ingestFileSource,
+} from "./services/kbService";
+import { summarizeConversationToCrm } from "./services/conversationSummary";
+import { availableTrialKeys, getTrialTemplate, saveTrialTemplate, listTrialTemplates } from "./services/trialTemplates";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 const DISPARO_MIN_INTERVAL_MS = Number(process.env.DISPARO_MIN_INTERVAL_MS || 1500);
 const disparoRateLimit = new Map<number, number>();
+const MAX_CHAT_MESSAGES = Number(process.env.MAX_CHAT_MESSAGES || 500);
+const TRIAL_EMAIL_SWEEP_MS = 60 * 60 * 1000; // 1h
 
 import { getDB } from "./database";
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // ===============================
 // 📦 TIPAGEM DE AGENDAMENTOS
@@ -65,6 +78,7 @@ import {
   chatHumanLastActivity,
   chatHumanDuration,
 } from "./wppManager";
+import { simulateFlowRun, simulateWelcomeFlow } from "./wppManager";
 
 
 import { User } from "./database/types";
@@ -116,6 +130,200 @@ const buildContactsFromPayload = (contactsArr: any[]): PersonalizedContact[] =>
   Array.isArray(contactsArr)
     ? contactsArr.map(sanitizeContactPayload).filter(Boolean) as PersonalizedContact[]
     : [];
+
+// =======================================================
+// 📨 Trial — emails e onboarding
+// =======================================================
+type TrialFlags = {
+  trial_email_day1_sent?: number;
+  trial_email_day3_sent?: number;
+  trial_email_day6_sent?: number;
+  trial_email_last_sent?: number;
+  trial_started_at?: number | null;
+};
+
+function daysDiffRounded(from: number, to: number) {
+  return Math.floor((to - from) / (24 * 60 * 60 * 1000));
+}
+
+async function sendTrialEmail(
+  user: any,
+  subject: string,
+  html: string,
+  flagColumn: keyof TrialFlags
+) {
+  try {
+    await sendEmail(user.email, subject, html);
+    const db = getDB();
+    await db.run(`UPDATE users SET ${flagColumn} = 1 WHERE id = ?`, [user.id]);
+    console.log(`📧 Trial email ${flagColumn} enviado para ${user.email}`);
+  } catch (err) {
+    console.error(`Erro ao enviar email ${flagColumn}:`, err);
+  }
+}
+
+async function runTrialEmailSweep() {
+  let db;
+  try {
+    db = getDB();
+  } catch {
+    // DB ainda não inicializado — tenta de novo no próximo ciclo
+    return;
+  }
+
+  try {
+    const now = Date.now();
+    const rows = await db.all(
+      `
+      SELECT id, name, email, plan_expires_at, subscription_status,
+             trial_started_at,
+             trial_email_day1_sent, trial_email_day3_sent,
+             trial_email_day6_sent, trial_email_last_sent
+      FROM users
+      WHERE subscription_status = 'trial'
+        AND plan_expires_at IS NOT NULL
+        AND plan_expires_at > ?
+      `,
+      [now - 24 * 60 * 60 * 1000]
+    );
+
+    for (const user of rows) {
+      const started = Number(user.trial_started_at || user.plan_expires_at - 7 * 24 * 60 * 60 * 1000);
+      const daysElapsed = daysDiffRounded(started, now) + 1;
+      const daysLeft = Math.max(0, Math.ceil((Number(user.plan_expires_at) - now) / (24 * 60 * 60 * 1000)));
+
+      // Dia 1
+      if (daysElapsed >= 1 && !user.trial_email_day1_sent) {
+        const tpl = await getTrialTemplate("trial_day1");
+        await sendTrialEmail(user, tpl.subject, tpl.body, "trial_email_day1_sent");
+        continue;
+      }
+
+      // Dia 3
+      if (daysElapsed >= 3 && !user.trial_email_day3_sent) {
+        const tpl = await getTrialTemplate("trial_day3");
+        await sendTrialEmail(user, tpl.subject, tpl.body, "trial_email_day3_sent");
+        continue;
+      }
+
+      // Dia 6
+      if (daysElapsed >= 6 && !user.trial_email_day6_sent) {
+        const tpl = await getTrialTemplate("trial_day6");
+        await sendTrialEmail(user, tpl.subject, tpl.body, "trial_email_day6_sent");
+        continue;
+      }
+
+      // Último dia (<=1 dia restante)
+  if (daysLeft <= 1 && !user.trial_email_last_sent) {
+        const tpl = await getTrialTemplate("trial_last");
+        const html = tpl.body.replace(/{{BASE_URL}}/g, BASE_URL);
+        await sendTrialEmail(user, tpl.subject, html, "trial_email_last_sent");
+      }
+    }
+  } catch (err) {
+    console.error("Erro no sweep de trial:", err);
+  }
+}
+
+function startTrialEmailCron() {
+  runTrialEmailSweep();
+  setInterval(runTrialEmailSweep, TRIAL_EMAIL_SWEEP_MS);
+}
+
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
+const ALLOWED_UPLOAD_MIMES = new Set<string>([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+  "application/pdf",
+  "text/plain",
+  "text/csv",
+  "application/zip",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "audio/mpeg",
+  "audio/ogg",
+  "audio/wav",
+  "video/mp4",
+  "video/webm",
+]);
+
+type SanitizedFile = {
+  dataUrl: string;
+  base64: string;
+  mime: string;
+  filename: string;
+};
+
+const detectMimeFromBuffer = (buf: Buffer): string | null => {
+  if (buf.length < 4) return null;
+
+  const header4 = buf.subarray(0, 4);
+  if (header4[0] === 0xff && header4[1] === 0xd8 && header4[2] === 0xff) return "image/jpeg";
+  if (header4.equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) return "image/png";
+  if (header4.equals(Buffer.from([0x47, 0x49, 0x46, 0x38]))) return "image/gif";
+  if (header4.equals(Buffer.from([0x25, 0x50, 0x44, 0x46]))) return "application/pdf";
+
+  if (header4.equals(Buffer.from([0x52, 0x49, 0x46, 0x46]))) {
+    const subtype = buf.subarray(8, 12).toString("ascii");
+    if (subtype === "WEBP") return "image/webp";
+    if (subtype === "WAVE") return "audio/wav";
+  }
+
+  if (buf.subarray(0, 3).toString("ascii") === "ID3" || (header4[0] === 0xff && (header4[1] & 0xe0) === 0xe0)) {
+    return "audio/mpeg";
+  }
+
+  if (buf.subarray(0, 4).equals(Buffer.from([0x4f, 0x67, 0x67, 0x53]))) return "audio/ogg";
+  if (buf.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) return "video/webm";
+  if (buf.length >= 12 && buf.subarray(4, 8).toString("ascii") === "ftyp") return "video/mp4";
+  if (header4[0] === 0x50 && header4[1] === 0x4b) return "application/zip";
+
+  return null;
+};
+
+const sanitizeIncomingFile = (input: {
+  dataUrl?: string;
+  base64?: string;
+  mimetype?: string;
+  filename?: string;
+}): SanitizedFile => {
+  const candidate = input.dataUrl ?? (input.mimetype && input.base64 ? `data:${input.mimetype};base64,${input.base64}` : "");
+  const match = typeof candidate === "string" ? candidate.match(/^data:([^;]+);base64,(.+)$/i) : null;
+  if (!match) {
+    throw new Error("Arquivo inválido");
+  }
+
+  const declaredMime = match[1].toLowerCase();
+  const rawBase64 = match[2];
+
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(rawBase64, "base64");
+  } catch {
+    throw new Error("Base64 inválido");
+  }
+
+  if (!buffer.length) throw new Error("Arquivo vazio");
+  if (buffer.byteLength > MAX_FILE_BYTES) throw new Error("Arquivo excede limite de 15MB");
+
+  const detected = detectMimeFromBuffer(buffer);
+  const finalMime = detected ?? declaredMime;
+
+  if (!ALLOWED_UPLOAD_MIMES.has(finalMime)) {
+    throw new Error("Tipo de arquivo não permitido");
+  }
+
+  const normalizedBase64 = buffer.toString("base64");
+
+  return {
+    dataUrl: `data:${finalMime};base64,${normalizedBase64}`,
+    base64: normalizedBase64,
+    mime: finalMime,
+    filename: input.filename || "arquivo",
+  };
+};
 
 const buildContactsFromStored = (raw: any, baseMessage?: string): PersonalizedContact[] => {
   if (!Array.isArray(raw)) return [];
@@ -277,6 +485,43 @@ app.get(
 );
 
 // 📦 Servir frontend estático (CSS, JS, imagens)
+// 🔄 Evita cache agressivo nos assets para refletir mudanças imediatas em ambiente de desenvolvimento.
+app.use((req, res, next) => {
+  if (req.path.startsWith("/js/") || req.path.startsWith("/css/")) {
+    res.setHeader("Cache-Control", "no-store");
+  }
+  next();
+});
+
+/* ===========================
+   Minificação simples de CSS em produção
+=========================== */
+const cssCache = new Map<string, { mtime: number; data: Buffer }>();
+app.get(/.*\.css$/, (req, res, next) => {
+  if (process.env.NODE_ENV !== "production") return next();
+  try {
+    const filePath = path.join(process.cwd(), "public", req.path.replace(/^\//, ""));
+    const stat = fs.statSync(filePath);
+    const cached = cssCache.get(filePath);
+    if (cached && cached.mtime === stat.mtimeMs) {
+      res.type("text/css").send(cached.data);
+      return;
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const min = raw
+      .replace(/\/\*[^!*][\s\S]*?\*\//g, "")
+      .replace(/\s+/g, " ")
+      .replace(/\s*([{}:;,>~+])\s*/g, "$1")
+      .replace(/;}/g, "}")
+      .trim();
+    const buf = Buffer.from(min, "utf8");
+    cssCache.set(filePath, { mtime: stat.mtimeMs, data: buf });
+    res.type("text/css").send(buf);
+  } catch {
+    return next();
+  }
+});
+
 app.use(express.static(path.join(process.cwd(), "public")));
 // 📸 Servir QR Codes gerados pelo WPPConnect
 app.use("/qr", express.static(path.join(process.cwd(), "qr")));
@@ -363,13 +608,17 @@ io.on("connection", (socket) => {
 
       // 📎 ENVIO DE ARQUIVO
       if (file && mimetype && filename) {
-        const dataUrl = `data:${mimetype};base64,${file}`;
-        await client.sendFile(chatId, dataUrl, filename, body || "");
+        const safeFile = sanitizeIncomingFile({
+          base64: file,
+          mimetype,
+          filename,
+        });
+        await client.sendFile(chatId, safeFile.dataUrl, safeFile.filename, body || "");
 
         io.to(socket.id).emit("newMessage", {
           chatId,
-          body: file,
-          mimetype,
+          body: safeFile.base64,
+          mimetype: safeFile.mime,
           isMedia: true,
           fromMe: true,
           _isFromMe: true,
@@ -394,7 +643,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("chat_human_state", (data: any) => {
+  socket.on("chat_human_state", async (data: any) => {
     const { chatId, state, sessionName } = data;
     const userId = socket.handshake.auth?.userId;
     if (!userId || !chatId || !sessionName) return;
@@ -427,6 +676,13 @@ io.on("connection", (socket) => {
         userId,
         sessionName,
         state: false,
+      });
+
+      // 📄 Resumo automático da conversa salvo como nota no CRM
+      summarizeConversationToCrm({
+        userId: Number(userId),
+        sessionName,
+        chatId,
       });
     }
 
@@ -472,10 +728,37 @@ io.on("connection", (socket) => {
       // 🔥 Chats reais do WhatsApp
       const allChats = await client.listChats();
 
+      // 🖼️ Mapa de avatares já salvos no CRM (phone -> url)
+      const avatarMap = new Map<string, string>();
+      try {
+        const phones = Array.from(
+          new Set(
+            allChats
+              .filter((c: any) => c.id?._serialized && !c.id._serialized.endsWith("@g.us"))
+              .map((c: any) => c.id?.user || c.id?._serialized.replace(/@.*/, ""))
+              .filter(Boolean)
+          )
+        );
+
+        if (phones.length > 0) {
+          const placeholders = phones.map(() => "?").join(",");
+          const rows = await db.all<{ phone: string; avatar: string | null }>(
+            `SELECT phone, avatar FROM crm WHERE user_id = ? AND phone IN (${placeholders})`,
+            [userId, ...phones]
+          );
+          rows.forEach((r) => {
+            if (r.avatar) avatarMap.set(r.phone, r.avatar);
+          });
+        }
+      } catch (err) {
+        console.warn("⚠️ Não foi possível buscar avatares do CRM:", err);
+      }
+
       const chats = allChats
         .filter((c: any) => c.id?._serialized) // só garante id válido
         .map((c: any) => {
           const chatId = c.id._serialized;
+          const phone = c.id?.user || chatId.replace(/@.*/, "");
 
           const fullKey = `USER${userId}_${session.session_name}`;
           const key = `${fullKey}::${chatId}`;
@@ -511,6 +794,13 @@ io.on("connection", (socket) => {
               const duration = dur ?? 5 * 60 * 1000;
               return (last || Date.now()) + duration;
             })(),
+
+            // 🖼️ avatar prioriza CRM, depois thumbnail do WhatsApp (se disponível)
+            avatar:
+              avatarMap.get(phone) ||
+              c.contact?.profilePicThumbObj?.eurl ||
+              c.profilePicThumbObj?.eurl ||
+              null,
           };
         });
 
@@ -532,11 +822,11 @@ io.on("connection", (socket) => {
     try {
       const userId = socket.handshake.auth?.userId;
       if (!userId || !chatId) {
-        socket.emit("mensagens_chat", []);
-        return;
-      }
+      socket.emit("mensagens_chat", { chatId, messages: [] });
+      return;
+    }
 
-      const db = getDB();
+    const db = getDB();
 
       // 🔎 Buscar sessão conectada
       const session = await db.get(
@@ -548,7 +838,7 @@ io.on("connection", (socket) => {
       );
 
       if (!session) {
-        socket.emit("mensagens_chat", []);
+        socket.emit("mensagens_chat", { chatId, messages: [] });
         return;
       }
 
@@ -556,26 +846,47 @@ io.on("connection", (socket) => {
       const client = getClient(full);
 
       if (!client) {
-        socket.emit("mensagens_chat", []);
+        socket.emit("mensagens_chat", { chatId, messages: [] });
         return;
       }
 
       // ==================================================
       // ✅ ABRIR CHAT (SEM loadEarlierMsgs)
       // ==================================================
-      await client.openChat(chatId);
+      let messages: any[] = [];
 
-      // ⏳ pequeno delay para WhatsApp carregar mensagens em memória
-      await new Promise(r => setTimeout(r, 500));
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await client.openChat(chatId);
 
-      // ==================================================
-      // 📥 BUSCAR MENSAGENS JÁ DISPONÍVEIS
-      // ==================================================
-      const messages = await client.getAllMessagesInChat(
-        chatId,
-        true,   // includeMe
-        false   // includeNotifications (OBRIGATÓRIO)
-      );
+          // ⏳ pequeno delay para WhatsApp carregar mensagens em memória
+          await sleep(500);
+
+          // ==================================================
+          // 📥 BUSCAR MENSAGENS JÁ DISPONÍVEIS
+          // ==================================================
+          messages = await client.getAllMessagesInChat(
+            chatId,
+            true,   // includeMe
+            false   // includeNotifications (OBRIGATÓRIO)
+          );
+          break; // sucesso
+        } catch (e: any) {
+          const msg = String(e?.message || e || "");
+          const recoverable =
+            msg.includes("Promise was collected") ||
+            msg.includes("Execution context was destroyed") ||
+            msg.includes("Target closed") ||
+            msg.includes("Session closed");
+
+          if (attempt < 2 && recoverable) {
+            console.warn(`⚠️ abrir_chat retry (${attempt}) para ${chatId}:`, msg);
+            await sleep(700);
+            continue;
+          }
+          throw e;
+        }
+      }
 
       const formatted = messages.map((m: any) => ({
         chatId,
@@ -587,11 +898,12 @@ io.on("connection", (socket) => {
         _isFromMe: m.fromMe === true
       }));
 
-      socket.emit("mensagens_chat", formatted);
+      const limited = formatted.slice(-MAX_CHAT_MESSAGES);
+      socket.emit("mensagens_chat", { chatId, messages: limited });
 
     } catch (err) {
       console.error("❌ Erro ao abrir chat:", err);
-      socket.emit("mensagens_chat", []);
+      socket.emit("mensagens_chat", { chatId, messages: [] });
     }
   });
 
@@ -770,6 +1082,9 @@ app.get("/", (_req, res) => res.redirect("/painel"));
 app.get("/register", (_req, res) => {
   res.render("register");
 });
+app.get("/onboarding", (_req, res) => {
+  res.render("onboarding");
+});
 
 app.get("/index.html", (_req, res) => res.redirect("/login"));
 
@@ -838,6 +1153,167 @@ app.get("/api/chats", authMiddleware, async (_req, res) => {
   res.json({ ok: true });
 });
 
+// 📚 Base de conhecimento (RAG)
+app.post("/api/kb/upload", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { name, content, sessionScope, fileBase64, fileName } = req.body || {};
+    const safeName = String(name || "").trim() || "Documento";
+    const session = sessionScope ? String(sessionScope) : null;
+
+    if (fileBase64 && fileName) {
+      const buffer = Buffer.from(String(fileBase64), "base64");
+      const result = await ingestFileSource({
+        userId: user.id,
+        filename: String(fileName),
+        data: buffer,
+        sessionScope: session,
+      });
+      if ((result as any).error) {
+        return res.status(400).json({ ok: false, error: (result as any).error });
+      }
+      return res.json({ ok: true, sourceId: (result as any).sourceId, chunks: (result as any).chunks, tokens: (result as any).tokens });
+    }
+
+    const text = String(content || "").trim();
+    if (!text) return res.status(400).json({ ok: false, error: "content ou fileBase64 são obrigatórios" });
+    if (text.length > 200_000) {
+      return res.status(400).json({ ok: false, error: "Limite de 200k caracteres por upload" });
+    }
+
+    const result = await ingestTextSource({
+      userId: user.id,
+      name: safeName,
+      content: text,
+      sessionScope: session,
+    });
+
+    return res.json({ ok: true, sourceId: result.sourceId, chunks: result.chunks, tokens: result.tokens });
+  } catch (err) {
+    console.error("Erro upload KB:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao processar upload" });
+  }
+});
+
+app.post("/api/kb/url", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { url, name, sessionScope } = req.body || {};
+    const safeUrl = String(url || "").trim();
+    if (!safeUrl) return res.status(400).json({ ok: false, error: "url é obrigatório" });
+
+    const result = await ingestUrlSource({
+      userId: user.id,
+      url: safeUrl,
+      name: name ? String(name) : undefined,
+      sessionScope: sessionScope ? String(sessionScope) : null,
+    });
+
+    const errorFlag = (result as any)?.error ?? null;
+    return res.json({ ok: true, sourceId: result.sourceId, error: errorFlag });
+  } catch (err) {
+    console.error("Erro URL KB:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao cadastrar URL" });
+  }
+});
+
+app.get("/api/kb/list", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const sources = await listSources(user.id);
+    return res.json({ ok: true, sources });
+  } catch (err) {
+    console.error("Erro list KB:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao listar base" });
+  }
+});
+
+app.post("/api/kb/query", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { query, sessionName, chatId, topK } = req.body || {};
+    const q = String(query || "").trim();
+    if (!q) return res.status(400).json({ ok: false, error: "query é obrigatória" });
+
+    const results = await queryKb({
+      userId: user.id,
+      query: q,
+      sessionName: sessionName ? String(sessionName) : undefined,
+      chatId: chatId ? String(chatId) : undefined,
+      topK: Number(topK) || 5,
+    });
+
+    return res.json({ ok: true, results });
+  } catch (err) {
+    console.error("Erro query KB:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao consultar base" });
+  }
+});
+
+// 🗒️ Notas internas por chat (painel apenas)
+app.get("/api/chat/notes", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const chatId = String(req.query.chatId || "").trim();
+    const sessionName = String(req.query.sessionName || "").trim();
+
+    if (!chatId || !sessionName) {
+      return res.status(400).json({ ok: false, error: "chatId e sessionName são obrigatórios" });
+    }
+
+    const db = getDB();
+    const notes = await db.all(
+      `SELECT id, content, author_name, created_at
+       FROM chat_notes
+       WHERE user_id = ? AND session_name = ? AND chat_id = ?
+       ORDER BY id DESC`,
+      [user.id, sessionName, chatId]
+    );
+
+    return res.json({ ok: true, notes });
+  } catch (err) {
+    console.error("Erro ao listar notas:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao listar notas" });
+  }
+});
+
+app.post("/api/chat/notes", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const chatId = String(req.body?.chatId || "").trim();
+    const sessionName = String(req.body?.sessionName || "").trim();
+    const content = String(req.body?.content || "").trim();
+
+    if (!chatId || !sessionName || !content) {
+      return res.status(400).json({ ok: false, error: "chatId, sessionName e content são obrigatórios" });
+    }
+
+    const safeContent = content.slice(0, 2000);
+    const createdAt = Date.now();
+    const authorName = user?.name || "Atendente";
+
+    const db = getDB();
+    await db.run(
+      `INSERT INTO chat_notes (user_id, session_name, chat_id, attendant_id, author_name, content, created_at)
+       VALUES (?, ?, ?, NULL, ?, ?, ?)`,
+      [user.id, sessionName, chatId, authorName, safeContent, createdAt]
+    );
+
+    const notes = await db.all(
+      `SELECT id, content, author_name, created_at
+       FROM chat_notes
+       WHERE user_id = ? AND session_name = ? AND chat_id = ?
+       ORDER BY id DESC`,
+      [user.id, sessionName, chatId]
+    );
+
+    return res.json({ ok: true, notes });
+  } catch (err) {
+    console.error("Erro ao salvar nota:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao salvar nota" });
+  }
+});
+
 // 📌 Detalhes de um cliente CRM (pipeline)
 app.get("/api/crm/client/:chatId", authMiddleware, async (req, res) => {
   try {
@@ -881,19 +1357,29 @@ function requireFields(res: Response, fields: Record<string, any>) {
   }
   return false;
 }
-app.get("/auth/auto-login", async (req, res) => {
-  const token = req.query.token as string;
+app.all("/auth/auto-login", (_req, res, next) => {
+  if (_req.method !== "POST") {
+    return res.status(405).json({ error: "Use POST com token no corpo ou Authorization" });
+  }
+  return next();
+});
+
+app.post("/auth/auto-login", async (req, res) => {
+  const bearer = String(req.headers.authorization || "").replace(/^Bearer\\s+/i, "").trim();
+  const token = String(req.body?.token || bearer || "").trim();
   if (!token) return res.status(400).json({ error: "token ausente" });
 
   const user = await findUserByToken(token);
   if (!user) return res.status(404).json({ error: "token inválido" });
 
-  // Criar cookie novamente automaticamente
+  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+
   res.cookie("token", user.token, {
     httpOnly: true,
-    sameSite: "lax",
-    secure: false,   // localhost
-    path: "/",       // 🔥 OBRIGATÓRIO
+    sameSite: "strict",
+    secure: isProd,
+    path: "/",
+    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 dias
   });
   res.json({ ok: true });
 });
@@ -1159,6 +1645,15 @@ app.post(
       });
     }
 
+    let safeFile: SanitizedFile | null = null;
+    if (file) {
+      try {
+        safeFile = sanitizeIncomingFile({ dataUrl: file as string, filename });
+      } catch (err: any) {
+        return res.status(400).json({ error: err?.message || "Arquivo inválido" });
+      }
+    }
+
     try {
       const db = getDB();
 
@@ -1190,21 +1685,15 @@ app.post(
         const chatId = `${contact.number}@c.us`;
         const finalMessage = renderTemplate(contact.message ?? message ?? "", contact);
 
-        if (!file) {
+        if (!safeFile) {
           await client.sendText(chatId, finalMessage);
           continue;
         }
 
-        const base64 = file.split("base64,")[1];
-        const mime = file.substring(
-          file.indexOf(":") + 1,
-          file.indexOf(";")
-        );
-
         await client.sendFile(
           chatId,
-          `data:${mime};base64,${base64}`,
-          filename || "arquivo",
+          safeFile.dataUrl,
+          safeFile.filename || filename || "arquivo",
           finalMessage // legenda opcional
         );
       }
@@ -1252,6 +1741,7 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
   if (recurrence !== "none" && recurrenceEndMs) {
     if (!Number.isFinite(recurrenceEndMs)) return res.status(400).json({ error: "Fim da recorrência inválido" });
     if (recurrenceEndMs <= sendAtMs) return res.status(400).json({ error: "Fim da recorrência deve ser após a 1ª data" });
+    if (recurrenceEndMs <= Date.now()) return res.status(400).json({ error: "Fim da recorrência não pode ser no passado" });
   }
 
   const hasTextMessage = hasPersonalized
@@ -1283,6 +1773,15 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
 
   if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
 
+  let safeFile: SanitizedFile | null = null;
+  if (file) {
+    try {
+      safeFile = sanitizeIncomingFile({ dataUrl: file as string, filename });
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message || "Arquivo inválido" });
+    }
+  }
+
   // Checar duplicado: mesmo user, mesma data, mesma lista
   const db = getDB();
   const existingDup = await db.get<{ id: number }>(
@@ -1302,7 +1801,7 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
   await db.run(
     `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [user.id, JSON.stringify(normalized), message, file, filename, sendAtMs, recurrence, recurrenceEndMs]
+    [user.id, JSON.stringify(normalized), message, safeFile?.dataUrl || null, safeFile?.filename || null, sendAtMs, recurrence, recurrenceEndMs]
   );
 
   res.json({ ok: true });
@@ -1333,6 +1832,17 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
   if (recurrence !== "none" && recurrenceEndMs) {
     if (!Number.isFinite(recurrenceEndMs)) return res.status(400).json({ error: "Fim da recorrência inválido" });
     if (recurrenceEndMs <= sendAtMs) return res.status(400).json({ error: "Fim da recorrência deve ser após a 1ª data" });
+    if (recurrenceEndMs <= Date.now()) return res.status(400).json({ error: "Fim da recorrência não pode ser no passado" });
+  }
+
+  const db = getDB();
+  const existing = await db.get<any>(
+    `SELECT * FROM schedules WHERE id = ? AND user_id = ?`,
+    [id, user.id]
+  );
+  if (!existing) return res.status(404).json({ error: "Agendamento não encontrado" });
+  if (existing.status !== "pending") {
+    return res.status(400).json({ error: "Somente agendamentos pendentes podem ser editados" });
   }
 
   const hasTextMessage = hasPersonalized
@@ -1358,16 +1868,6 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     });
   }
 
-  const db = getDB();
-  const existing = await db.get<any>(
-    `SELECT * FROM schedules WHERE id = ? AND user_id = ?`,
-    [id, user.id]
-  );
-  if (!existing) return res.status(404).json({ error: "Agendamento não encontrado" });
-  if (existing.status !== "pending") {
-    return res.status(400).json({ error: "Somente agendamentos pendentes podem ser editados" });
-  }
-
   const normalized = hasPersonalized
     ? contactList
     : numbersArr.map((n) => String(n || "").replace(/\D/g, "")).filter(Boolean);
@@ -1378,6 +1878,15 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
   const allowed = ["none", "daily", "weekly", "monthly"];
   const finalRecurrence = allowed.includes(recurrenceRaw) ? recurrenceRaw : "none";
   const finalRecurrenceEnd = recurrenceEndMs ?? existing.recurrence_end ?? null;
+
+  let safeFile: SanitizedFile | null = null;
+  if (file) {
+    try {
+      safeFile = sanitizeIncomingFile({ dataUrl: file as string, filename });
+    } catch (err: any) {
+      return res.status(400).json({ error: err?.message || "Arquivo inválido" });
+    }
+  }
 
   // Checar duplicado (exclui o próprio)
   const dup = await db.get<{ id: number }>(
@@ -1394,8 +1903,8 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     });
   }
 
-  const finalFile = file ?? (keepExistingFile ? existing.file : null);
-  const finalFilename = filename ?? (keepExistingFile ? existing.filename : null);
+  const finalFile = safeFile?.dataUrl ?? (keepExistingFile ? existing.file : null);
+  const finalFilename = safeFile?.filename ?? filename ?? (keepExistingFile ? existing.filename : null);
 
   await db.run(
     `UPDATE schedules
@@ -1572,155 +2081,188 @@ function calculateNextSendAt(current: number, recurrence: string, recurrenceEnd?
 // ===============================
 // ⏱️ AGENDADOR — VERSÃO FINAL, ESTÁVEL E SEM "No LID for user"
 // ===============================
+let schedulerRunning = false;
 setInterval(async () => {
-  const db = getDB();
-  const now = Date.now();
+  if (schedulerRunning) return;
+  schedulerRunning = true;
+  try {
+    const db = getDB();
+    const now = Date.now();
 
-  const schedules = await db.all(
-    `SELECT * FROM schedules
-     WHERE status = 'pending' AND send_at <= ?`,
-    [now]
-  );
+    const schedules = await db.all(
+      `SELECT * FROM schedules
+       WHERE status = 'pending' AND send_at <= ?`,
+      [now]
+    );
 
-  for (const row of schedules) {
-    try {
-      const rawNumbers = JSON.parse(row.numbers || "[]");
-      const contactsList: PersonalizedContact[] = buildContactsFromStored(rawNumbers, row.message);
-      const userId = row.user_id;
-      let successCount = 0;
-      let failureCount = 0;
-      const itemLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
-
-      // 🔎 Buscar UMA sessão conectada
-      const sessions = await db.all(
-        `SELECT session_name
-         FROM sessions
-         WHERE user_id = ? AND status = 'connected'
-         LIMIT 1`,
-        [userId]
-      );
-
-      if (!sessions.length) {
-        console.warn("⚠️ Nenhuma sessão conectada para user:", userId);
-        continue;
-      }
-
-      const full = `USER${userId}_${sessions[0].session_name}`;
-      const client = getClient(full);
-
-      if (!client) {
-        console.warn("⚠️ Client não encontrado:", full);
-        continue;
-      }
-
-      // =========================
-      // 📤 ENVIO DAS MENSAGENS
-      // =========================
-      for (const contact of contactsList) {
-        try {
-          // ✅ valida número (SEM @c.us)
-          const target = await ensureChat(client, contact.number);
-          const finalMessage = renderTemplate(contact.message ?? row.message ?? "", contact);
-
-          if (row.file && row.filename) {
-            // 📎 MÍDIA
-            await client.sendFile(
-              target,
-              row.file,
-              row.filename,
-              finalMessage || ""
-            );
-          } else {
-            // 💬 TEXTO — MÉTODO CORRETO
-            await client.sendText(target, finalMessage);
-          }
-          successCount += 1;
-          itemLogs.push({ number: contact.number, status: "sent", sentAt: Date.now() });
-
-          // ⏳ delay anti-ban
-          await new Promise(r => setTimeout(r, 1200));
-
-        } catch (err: any) {
-          console.error(
-            "⚠️ Erro envio agendado (número):",
-            contact.number,
-            err?.message || err
-          );
-          failureCount += 1;
-          itemLogs.push({ number: contact.number, status: "error", error: String(err?.message || err), sentAt: Date.now() });
-        }
-      }
-
-      // ✅ MARCAR COMO ENVIADO
-      await db.run(
-        `UPDATE schedules SET status = 'sent' WHERE id = ?`,
-        [row.id]
-      );
-
-      const recurrence = (row as any).recurrence || "none";
-      const recurrenceEnd = (row as any).recurrence_end || null;
-      const nextSendAt = calculateNextSendAt(row.send_at, recurrence, recurrenceEnd);
-
-      // 📝 Registrar log de execução
-      const sentAt = Date.now();
-      await db.run(
-        `INSERT INTO schedule_logs (schedule_id, user_id, success_count, failure_count, sent_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [row.id, userId, successCount, failureCount, sentAt, sentAt]
-      );
-      const logResult = await db.get<{ insertId: number }>("SELECT LAST_INSERT_ID() as insertId");
-      const logId = logResult?.insertId;
-      if (logId) {
-        for (const item of itemLogs) {
-          await db.run(
-            `INSERT INTO schedule_log_items (log_id, schedule_id, user_id, number, status, error, sent_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [logId, row.id, userId, item.number, item.status, item.error || null, item.sentAt]
-          );
-        }
-      }
-
-      // 📧 Notificação por e-mail (best-effort)
+    for (const row of schedules) {
       try {
-        const user = await db.get<{ name: string; email: string }>(
-          `SELECT name, email FROM users WHERE id = ?`,
+        // 🔒 tentativa de lock otimista: só um worker muda status para "processing"
+        const claimed = await db.run(
+          `UPDATE schedules SET status = 'processing' WHERE id = ? AND status = 'pending'`,
+          [row.id]
+        );
+        if (!claimed.affectedRows) continue; // já foi pego por outro worker
+
+        const rawNumbers = JSON.parse(row.numbers || "[]");
+        const contactsList: PersonalizedContact[] = buildContactsFromStored(rawNumbers, row.message);
+        const userId = row.user_id;
+        let successCount = 0;
+        let failureCount = 0;
+        const itemLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
+
+        // 🔎 Buscar UMA sessão conectada
+        const sessions = await db.all(
+          `SELECT session_name
+           FROM sessions
+           WHERE user_id = ? AND status = 'connected'
+           LIMIT 1`,
           [userId]
         );
 
-        if (user?.email) {
-          const subject = `Agendamento #${row.id} concluído`;
-          const successLine = `<li>Sucesso: <b>${successCount}</b></li>`;
-          const failureLine = `<li>Falhas: <b>${failureCount}</b></li>`;
-          const nextLine = nextSendAt
-            ? `<p>Próximo envio agendado para ${new Date(nextSendAt).toLocaleString("pt-BR")}</p>`
-            : "";
-          const html = `
-            <p>Olá ${user.name || ""},</p>
-            <p>Seu agendamento #${row.id} foi concluído em ${new Date(sentAt).toLocaleString("pt-BR")}.</p>
-            <ul>${successLine}${failureLine}</ul>
-            ${nextLine}
-            <p>Mensagem: ${row.message ? row.message.substring(0, 120) : "(sem texto)"}${row.message && row.message.length > 120 ? "..." : ""}</p>
-          `;
-
-          await sendEmail(user.email, subject, html);
+        if (!sessions.length) {
+          console.warn("⚠️ Nenhuma sessão conectada para user:", userId);
+          continue;
         }
-      } catch (err: any) {
-        console.error("⚠️ Falha ao enviar notificação de agendamento:", err?.message || err);
-      }
 
-      if (nextSendAt) {
+        const full = `USER${userId}_${sessions[0].session_name}`;
+        const client = getClient(full);
+
+        if (!client) {
+          console.warn("⚠️ Client não encontrado:", full);
+          continue;
+        }
+
+        let safeRowFile: SanitizedFile | null = null;
+        if (row.file && row.filename) {
+          try {
+            safeRowFile = sanitizeIncomingFile({ dataUrl: row.file as string, filename: row.filename as string });
+          } catch (err: any) {
+            console.error("⚠️ Arquivo inválido no agendamento", row.id, err?.message || err);
+          }
+        }
+
+        // =========================
+        // 📤 ENVIO DAS MENSAGENS
+        // =========================
+        for (const contact of contactsList) {
+          try {
+            // ✅ valida número (SEM @c.us)
+            const target = await ensureChat(client, contact.number);
+            const finalMessage = renderTemplate(contact.message ?? row.message ?? "", contact);
+
+            if (safeRowFile) {
+              // 📎 MÍDIA
+              await client.sendFile(
+                target,
+                safeRowFile.dataUrl,
+                safeRowFile.filename,
+                finalMessage || ""
+              );
+            } else if (finalMessage) {
+              // 💬 TEXTO — MÉTODO CORRETO
+              await client.sendText(target, finalMessage);
+            } else {
+              throw new Error("Mensagem vazia e mídia inválida");
+            }
+            successCount += 1;
+            itemLogs.push({ number: contact.number, status: "sent", sentAt: Date.now() });
+
+            // ⏳ delay anti-ban
+            await new Promise(r => setTimeout(r, 1200));
+
+          } catch (err: any) {
+            console.error(
+              "⚠️ Erro envio agendado (número):",
+              contact.number,
+              err?.message || err
+            );
+            failureCount += 1;
+            itemLogs.push({ number: contact.number, status: "error", error: String(err?.message || err), sentAt: Date.now() });
+          }
+        }
+
+        // ✅ MARCAR COMO ENVIADO
         await db.run(
-          `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [userId, row.numbers, row.message, row.file, row.filename, nextSendAt, recurrence, recurrenceEnd]
+          `UPDATE schedules SET status = 'sent' WHERE id = ?`,
+          [row.id]
         );
+
+        const recurrence = (row as any).recurrence || "none";
+        const recurrenceEnd = (row as any).recurrence_end || null;
+        const nextSendAt = calculateNextSendAt(row.send_at, recurrence, recurrenceEnd);
+
+        // 📝 Registrar log de execução
+        const sentAt = Date.now();
+        const logInsert = await db.run(
+          `INSERT INTO schedule_logs (schedule_id, user_id, success_count, failure_count, sent_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [row.id, userId, successCount, failureCount, sentAt, sentAt]
+        );
+        const logId = (logInsert as any)?.insertId;
+        if (logId) {
+          for (const item of itemLogs) {
+            await db.run(
+              `INSERT INTO schedule_log_items (log_id, schedule_id, user_id, number, status, error, sent_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [logId, row.id, userId, item.number, item.status, item.error || null, item.sentAt]
+            );
+          }
+        }
+
+        // 📧 Notificação por e-mail (best-effort)
+        try {
+          const user = await db.get<{ name: string; email: string }>(
+            `SELECT name, email FROM users WHERE id = ?`,
+            [userId]
+          );
+
+          if (user?.email) {
+            const subject = `Agendamento #${row.id} concluído`;
+            const successLine = `<li>Sucesso: <b>${successCount}</b></li>`;
+            const failureLine = `<li>Falhas: <b>${failureCount}</b></li>`;
+            const nextLine = nextSendAt
+              ? `<p>Próximo envio agendado para ${new Date(nextSendAt).toLocaleString("pt-BR")}</p>`
+              : "";
+            const html = `
+              <p>Olá ${user.name || ""},</p>
+              <p>Seu agendamento #${row.id} foi concluído em ${new Date(sentAt).toLocaleString("pt-BR")}.</p>
+              <ul>${successLine}${failureLine}</ul>
+              ${nextLine}
+              <p>Mensagem: ${row.message ? row.message.substring(0, 120) : "(sem texto)"}${row.message && row.message.length > 120 ? "..." : ""}</p>
+            `;
+
+            await sendEmail(user.email, subject, html);
+          }
+        } catch (err: any) {
+          console.error("⚠️ Falha ao enviar notificação de agendamento:", err?.message || err);
+        }
+
+        if (nextSendAt) {
+          await db.run(
+            `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [userId, row.numbers, row.message, safeRowFile?.dataUrl ?? row.file, safeRowFile?.filename ?? row.filename, nextSendAt, recurrence, recurrenceEnd]
+          );
+        }
+
+        console.log("✅ Agendamento enviado:", row.id);
+
+      } catch (err) {
+        console.error("❌ Erro geral no agendador:", err);
+        // devolve para pending para tentar novamente depois
+        try {
+          await getDB().run(
+            `UPDATE schedules SET status = 'pending' WHERE id = ? AND status = 'processing'`,
+            [row.id]
+          );
+        } catch { }
       }
-
-      console.log("✅ Agendamento enviado:", row.id);
-
-    } catch (err) {
-      console.error("❌ Erro geral no agendador:", err);
     }
+  } catch (err) {
+    console.error("❌ Erro crítico no loop do agendador:", err);
+  } finally {
+    schedulerRunning = false;
   }
 }, 10000);
 
@@ -1934,42 +2476,60 @@ app.get("/api/flows/list", authMiddleware, async (req, res) => {
   }
 });
 
-// Criar flow
-app.post("/api/flows/create", authMiddleware, subscriptionGuard, async (req, res) => {
-  try {
-    const user = (req as any).user;
-    const { name, trigger, actions } = req.body;
-    if (!name || !trigger || !actions) return res.status(400).json({ ok: false, error: "Dados incompletos" });
-    const db = getDB();
-    await db.run(
-      `INSERT INTO flows (user_id, name, trigger_type, actions)
-   VALUES (?, ?, ?, ?)`,
-      [user.id, name, trigger, JSON.stringify(actions)]
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("Erro criar flow:", err);
-    res.status(500).json({ ok: false });
+  // Criar flow
+  app.post("/api/flows/create", authMiddleware, subscriptionGuard, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const { name, trigger, triggers, actions, priority, active } = req.body;
+
+      const trigList =
+        Array.isArray(triggers) && triggers.length
+          ? triggers
+          : (trigger ? [trigger] : []);
+
+      if (!name || !trigList.length || !actions) {
+        return res.status(400).json({ ok: false, error: "Dados incompletos" });
+      }
+
+      const db = getDB();
+      await db.run(
+        `INSERT INTO flows (user_id, name, trigger_type, actions, triggers, priority, active)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [user.id, name, trigList[0], JSON.stringify(actions), JSON.stringify(trigList), Number(priority) || 0, (active === 0 || active === false) ? 0 : 1]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("Erro criar flow:", err);
+      res.status(500).json({ ok: false });
   }
 });
 
-// Atualizar flow
-app.put("/api/flows/update", authMiddleware, async (req, res) => {
-  try {
-    const user = (req as any).user;
-    const { id, name, trigger, actions } = req.body;
-    if (!id || !name || !trigger || !actions) return res.status(400).json({ ok: false, error: "Dados incompletos" });
-    const db = getDB();
-    await db.run(
-      `UPDATE flows
-   SET name = ?, trigger_type = ?, actions = ?
-   WHERE id = ? AND user_id = ?`,
-      [name, trigger, JSON.stringify(actions), id, user.id]
-    );
-    res.json({ ok: true });
-  } catch (err) {
-    console.error("Erro atualizar flow:", err);
-    res.status(500).json({ ok: false });
+  // Atualizar flow
+  app.put("/api/flows/update", authMiddleware, async (req, res) => {
+    try {
+      const user = (req as any).user;
+      const { id, name, trigger, triggers, actions, priority, active } = req.body;
+
+      const trigList =
+        Array.isArray(triggers) && triggers.length
+          ? triggers
+          : (trigger ? [trigger] : []);
+
+      if (!id || !name || !trigList.length || !actions) {
+        return res.status(400).json({ ok: false, error: "Dados incompletos" });
+      }
+
+      const db = getDB();
+      await db.run(
+        `UPDATE flows
+     SET name = ?, trigger_type = ?, actions = ?, triggers = ?, priority = ?, active = ?
+     WHERE id = ? AND user_id = ?`,
+        [name, trigList[0], JSON.stringify(actions), JSON.stringify(trigList), Number(priority) || 0, (active === 0 || active === false) ? 0 : 1, id, user.id]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("Erro atualizar flow:", err);
+      res.status(500).json({ ok: false });
   }
 });
 
@@ -1985,6 +2545,180 @@ app.delete("/api/flows/delete", authMiddleware, async (req, res) => {
   } catch (err) {
     console.error("Erro deletar flow:", err);
     res.status(500).json({ ok: false });
+  }
+});
+
+// Ativar / desativar flow
+app.put("/api/flows/active", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { id, active } = req.body;
+    if (!id || active === undefined) return res.status(400).json({ ok: false, error: "id e active são obrigatórios" });
+    const db = getDB();
+    await db.run(
+      `UPDATE flows SET active = ? WHERE id = ? AND user_id = ?`,
+      [active ? 1 : 0, id, user.id]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro ao alternar flow:", err);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+// Testar flow (simulação)
+app.post("/api/flows/test", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { id, message, chatId, sessionName, contactName } = req.body;
+    if (!id || !message) return res.status(400).json({ ok: false, error: "id e message são obrigatórios" });
+
+    const db = getDB();
+    const flow = await db.get<any>(
+      `SELECT * FROM flows WHERE id = ? AND user_id = ?`,
+      [id, user.id]
+    );
+    if (!flow) return res.status(404).json({ ok: false, error: "Flow não encontrado" });
+
+    const phone = (chatId || "TEST").replace(/@.*/, "");
+    const tzRow = await db.get<any>(`SELECT timezone_offset FROM users WHERE id = ?`, [user.id]);
+    const offsetMinutes = Number(tzRow?.timezone_offset ?? -180);
+    const now = new Date(Date.now() + offsetMinutes * 60000);
+    const localHour = now.getHours();
+
+    let crmForFlow: { stage?: string | null; tags?: string[] } | undefined;
+    try {
+      const row = await db.get<{ stage: string | null; tags: string | null }>(
+        `SELECT stage, tags FROM crm WHERE user_id = ? AND phone = ?`,
+        [user.id, phone]
+      );
+      crmForFlow = {
+        stage: row?.stage ?? null,
+        tags: row?.tags ? JSON.parse(row.tags) : [],
+      };
+    } catch { }
+
+    const ctx = {
+      userId: user.id,
+      sessionName: sessionName || "TEST",
+      chatId: chatId || `${phone}@c.us`,
+      messageBody: String(message),
+      client: {}, // não usado em simulação
+      crm: crmForFlow,
+      localHour,
+      isFirstMessage: true,
+      contactName: contactName || phone,
+      phone,
+      localDateStr: now.toLocaleDateString("pt-BR"),
+      localTimeStr: now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+      lastResponse: undefined,
+    };
+
+    const result = await simulateFlowRun(flow, ctx);
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error("Erro testar flow:", err);
+    res.status(500).json({ ok: false });
+  }
+});
+
+// ===============================
+// 🤝 Fluxo de boas-vindas (primeiro contato)
+// ===============================
+app.get("/api/welcome-flow", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const db = getDB();
+    const flow = await db.get<any>(
+      `SELECT * FROM welcome_flows WHERE user_id = ? LIMIT 1`,
+      [user.id]
+    );
+    return res.json({ ok: true, flow: flow || null });
+  } catch (err) {
+    console.error("Erro ao buscar welcome flow:", err);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+app.post("/api/welcome-flow", authMiddleware, subscriptionGuard, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { name, actions, active } = req.body;
+
+    if (!name || !actions) {
+      return res.status(400).json({ ok: false, error: "Nome e ações são obrigatórios" });
+    }
+
+    let actionsJson = "";
+    try {
+      actionsJson = JSON.stringify(actions);
+    } catch {
+      return res.status(400).json({ ok: false, error: "Ações inválidas" });
+    }
+
+    const db = getDB();
+    const existing = await db.get<{ id: number }>(
+      `SELECT id FROM welcome_flows WHERE user_id = ? LIMIT 1`,
+      [user.id]
+    );
+
+    if (existing?.id) {
+      await db.run(
+        `UPDATE welcome_flows SET name = ?, actions = ?, active = ? WHERE id = ? AND user_id = ?`,
+        [name, actionsJson, active ? 1 : 0, existing.id, user.id]
+      );
+    } else {
+      await db.run(
+        `INSERT INTO welcome_flows (user_id, name, actions, active)
+         VALUES (?, ?, ?, ?)`,
+        [user.id, name, actionsJson, active ? 1 : 0]
+      );
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro ao salvar welcome flow:", err);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+app.post("/api/welcome-flow/test", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { message, contactName, phone } = req.body;
+    const db = getDB();
+    const flow = await db.get<any>(
+      `SELECT * FROM welcome_flows WHERE user_id = ? AND active = 1 LIMIT 1`,
+      [user.id]
+    );
+    if (!flow) return res.status(404).json({ ok: false, error: "Nenhum fluxo configurado" });
+
+    const actions = JSON.parse(flow.actions || "[]");
+    const tzRow = await db.get<any>(`SELECT timezone_offset FROM users WHERE id = ?`, [user.id]);
+    const offsetMinutes = Number(tzRow?.timezone_offset ?? -180);
+    const now = new Date(Date.now() + offsetMinutes * 60000);
+
+    const ctx = {
+      userId: user.id,
+      sessionName: "TEST",
+      chatId: `${phone || "11999999999"}@c.us`,
+      messageBody: String(message || "Olá, tudo bem?"),
+      client: {}, // não usado em simulação
+      crm: { stage: "Novo", tags: [] },
+      localHour: now.getHours(),
+      isFirstMessage: true,
+      contactName: contactName || "Contato teste",
+      phone: phone || "11999999999",
+      localDateStr: now.toLocaleDateString("pt-BR"),
+      localTimeStr: now.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+      lastResponse: undefined,
+    };
+
+    const result = await simulateWelcomeFlow(actions, ctx as any);
+    return res.json({ ok: true, logs: result.logs });
+  } catch (err) {
+    console.error("Erro ao testar welcome flow:", err);
+    return res.status(500).json({ ok: false });
   }
 });
 
@@ -2119,6 +2853,10 @@ app.post("/api/fallback-settings", authMiddleware, async (req, res) => {
       webhookUrl: String(req.body?.webhookUrl ?? current.webhookUrl),
       alertPhone: toStringOrNull(req.body?.alertPhone, current.alertPhone || null),
       alertMessage: toStringOrNull(req.body?.alertMessage, current.alertMessage || null) ?? current.alertMessage,
+      fallbackCooldownMinutes:
+        req.body?.fallbackCooldownMinutes === undefined
+          ? current.fallbackCooldownMinutes
+          : toNumber(req.body?.fallbackCooldownMinutes, current.fallbackCooldownMinutes),
     };
 
     const saved = await saveFallbackSettings(user.id, sessionName, payload);
@@ -2179,15 +2917,16 @@ app.post("/register", async (req, res) => {
   const token = genToken();
 
   const trialDays = 7;
+  const now = Date.now();
 
   // 🔥 cria usuário
   await db.run(
     `INSERT INTO users (
       name, email, password, prompt, token,
-      plan, subscription_status, plan_expires_at,
+      plan, subscription_status, plan_expires_at, trial_started_at,
       email_verified, email_verify_token, email_verify_expires
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       email,
@@ -2196,7 +2935,8 @@ app.post("/register", async (req, res) => {
       token,
       "free",
       "trial",
-      Date.now() + trialDays * 24 * 60 * 60 * 1000,
+      now + trialDays * 24 * 60 * 60 * 1000,
+      now,
 
       0, // email_verified
       null,
@@ -2251,8 +2991,12 @@ app.post("/auth/login", async (req, res) => {
     return res.status(401).json({ error: "E-mail ou senha inválidos" });
   }
 
+  // 🔐 Rotaciona o token a cada login para invalidar vazamentos antigos
+  const newToken = genToken();
+  await getDB().run(`UPDATE users SET token = ? WHERE id = ?`, [newToken, user.id]);
+
   // ✅ SEMPRE cria o cookie quando login estiver correto
-  res.cookie("token", user.token, {
+  res.cookie("token", newToken, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production", // Railway => true
@@ -2275,7 +3019,18 @@ app.post("/auth/login", async (req, res) => {
 // =======================================
 // 🚪 LOGOUT
 // =======================================
-app.post("/auth/logout", (_req, res) => {
+app.post("/auth/logout", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const db = getDB();
+    const rotated = genToken();
+    // invalida imediatamente o token atual
+    await db.run(`UPDATE users SET token = ? WHERE id = ?`, [rotated, user.id]);
+  } catch (err) {
+    console.error("Erro ao rotacionar token no logout:", err);
+    // continua para limpar cookie mesmo assim
+  }
+
   res.clearCookie("token", {
     httpOnly: true,
     sameSite: "lax",
@@ -2284,6 +3039,32 @@ app.post("/auth/logout", (_req, res) => {
   });
 
   return res.json({ ok: true });
+});
+
+// =======================================
+// 🔄 Rotacionar token manualmente (logout global)
+// =======================================
+app.post("/auth/rotate-token", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const db = getDB();
+    const newToken = genToken();
+
+    await db.run(`UPDATE users SET token = ? WHERE id = ?`, [newToken, user.id]);
+
+    res.cookie("token", newToken, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+    });
+
+    // retorna para uso em integrações se o cliente quiser
+    return res.json({ ok: true, token: newToken });
+  } catch (err) {
+    console.error("Erro ao rotacionar token:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno ao rotacionar token" });
+  }
 });
 
 
@@ -2479,6 +3260,41 @@ app.post("/user/toggle-ia", authMiddleware, async (req, res) => {
   res.json({ ok: true, ia_enabled: enabled ? 1 : 0 });
 });
 
+// 🎯 Trial status e onboarding
+app.get("/api/trial/status", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const now = Date.now();
+    const expiresAt = Number(user.plan_expires_at || 0);
+    const startedAt = Number(user.trial_started_at || expiresAt - 7 * 24 * 60 * 60 * 1000);
+    const daysLeft = Math.max(0, Math.ceil((expiresAt - now) / (24 * 60 * 60 * 1000)));
+    res.json({
+      ok: true,
+      onboardingDone: Number(user.trial_onboarding_done || 0) === 1,
+      startedAt,
+      expiresAt,
+      daysLeft,
+    });
+  } catch (err) {
+    console.error("Erro trial/status:", err);
+    res.status(500).json({ ok: false });
+  }
+});
+
+app.post("/api/trial/onboarding-done", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    await getDB().run(
+      `UPDATE users SET trial_onboarding_done = 1 WHERE id = ?`,
+      [user.id]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro trial/onboarding-done:", err);
+    res.status(500).json({ ok: false });
+  }
+});
+
 
 // =======================================
 // ♻️ Restaurar sessões ao subir
@@ -2553,6 +3369,7 @@ setInterval(() => {
 // =======================================
 // 🚀 Iniciar servidor
 // =======================================
+startTrialEmailCron();
 server.listen(3000, () => {
   console.log("🚀 Server online em http://localhost:3000");
 });

@@ -1,14 +1,4 @@
-:root {
-  --bg: #0D1222;
-  --panel: #161B30;
-  --card: #1A1F3A;
-  --border: #373E59;
-  --text: #FFFFFF;
-  --muted: #AAB0D9;
-  --primary: #6C64EF;
-  --primary-hover: #8B5CF6;
-  --danger: #E54848;
-}
+﻿@import url('./design-tokens.css');
 
 * {
   box-sizing: border-box;
@@ -60,7 +50,7 @@ body {
   padding: 16px 20px;
   background: linear-gradient(135deg, #2a1020, #3b1425);
   border: 1px solid var(--danger);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -138,7 +128,7 @@ body {
   font-weight: 800;
   background: linear-gradient(90deg, #fff, #a9a6ff);
 
-  /* padrão */
+  /* padrÃ£o */
   background-clip: text;
 
   /* WebKit (Chrome, Safari) */
@@ -169,7 +159,7 @@ body {
 .btn {
   margin-top: auto;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: #1e2447;
   color: var(--text);

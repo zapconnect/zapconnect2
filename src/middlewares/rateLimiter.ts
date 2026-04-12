@@ -1,46 +1,68 @@
 // src/middlewares/rateLimiter.ts
 // ===============================
-// 🛡️ RATE LIMITING — PROTEÇÃO CONTRA BRUTE FORCE
+// 🔐 RATE LIMIT PERSISTENTE — compatível com múltiplas instâncias
 // ===============================
-// Implementação sem dependências externas (puro Node.js)
-// Funciona em memória — reinicia com o servidor
-// Para produção com múltiplas instâncias, considere Redis
+// Armazena contadores em MySQL (tabela rate_limits) para sobreviver a restarts
+// e balanceamento entre réplicas. Fallback para memória se o banco falhar.
+
+import { getDB } from "../database";
 
 interface AttemptRecord {
   count: number;
   firstAttempt: number;
-  blockedUntil?: number;
+  blockedUntil?: number | null;
 }
 
-const store = new Map<string, AttemptRecord>();
+// Fallback em memória (caso banco falhe momentaneamente)
+const memoryStore = new Map<string, AttemptRecord>();
 
-// 🧹 Limpeza automática a cada 10 minutos (evita vazamento de memória)
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, record] of store.entries()) {
-    const isExpired =
-      record.blockedUntil
-        ? now > record.blockedUntil + 60_000   // 1 min após desbloquear
-        : now - record.firstAttempt > 15 * 60_000; // 15 min sem tentativa
-
-    if (isExpired) store.delete(key);
-  }
-}, 10 * 60_000);
-
-// ===============================
-// 🏭 FACTORY DE LIMITADORES
-// ===============================
 interface RateLimitOptions {
-  /** Janela de tempo em ms (ex: 15 * 60 * 1000 = 15 min) */
   windowMs: number;
-  /** Máximo de tentativas na janela */
   maxAttempts: number;
-  /** Tempo de bloqueio após exceder (ms). Default: windowMs */
   blockDurationMs?: number;
-  /** Mensagem de erro retornada */
   message?: string;
-  /** Prefixo para separar stores por rota */
   prefix?: string;
+}
+
+async function getRecordDb(key: string): Promise<AttemptRecord | null> {
+  const db = getDB();
+  const row = await db.get<{
+    count: number;
+    first_attempt: number;
+    blocked_until: number | null;
+  }>(
+    `SELECT count, first_attempt, blocked_until FROM rate_limits WHERE rate_key = ?`,
+    [key]
+  );
+  if (!row) return null;
+  return {
+    count: Number(row.count || 0),
+    firstAttempt: Number(row.first_attempt || 0),
+    blockedUntil: row.blocked_until ? Number(row.blocked_until) : null,
+  };
+}
+
+async function saveRecordDb(key: string, record: AttemptRecord) {
+  const db = getDB();
+  await db.run(
+    `
+    INSERT INTO rate_limits (rate_key, count, first_attempt, blocked_until)
+    VALUES (?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      count = VALUES(count),
+      first_attempt = VALUES(first_attempt),
+      blocked_until = VALUES(blocked_until)
+    `,
+    [key, record.count, record.firstAttempt, record.blockedUntil ?? null]
+  );
+}
+
+function getIp(req: any): string {
+  return (
+    req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() ||
+    req.socket?.remoteAddress ||
+    "unknown"
+  );
 }
 
 export function createRateLimiter(opts: RateLimitOptions) {
@@ -52,29 +74,38 @@ export function createRateLimiter(opts: RateLimitOptions) {
     prefix = "rl",
   } = opts;
 
-  return function rateLimitMiddleware(
+  return async function rateLimitMiddleware(
     req: any,
     res: any,
     next: any
   ) {
-    // 🔑 Chave única: prefixo + IP do cliente
-    const ip =
-      req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() ||
-      req.socket?.remoteAddress ||
-      "unknown";
-
+    const ip = getIp(req);
     const key = `${prefix}:${ip}`;
     const now = Date.now();
 
-    let record = store.get(key);
+    let record: AttemptRecord | null = null;
+    let dbOk = true;
 
-    // ✅ Sem registro ainda — primeira tentativa
+    try {
+      record = await getRecordDb(key);
+    } catch (err) {
+      dbOk = false;
+      record = memoryStore.get(key) || null;
+      console.warn("RateLimiter: falha ao ler do banco, usando memória:", err);
+    }
+
     if (!record) {
-      store.set(key, { count: 1, firstAttempt: now });
+      record = { count: 1, firstAttempt: now };
+      if (dbOk) {
+        try { await saveRecordDb(key, record); } catch { dbOk = false; }
+      }
+      if (!dbOk) memoryStore.set(key, record);
+      res.setHeader("X-RateLimit-Limit", String(maxAttempts));
+      res.setHeader("X-RateLimit-Remaining", String(maxAttempts - 1));
       return next();
     }
 
-    // 🚫 Verificar se está bloqueado
+    // Bloqueado?
     if (record.blockedUntil && now < record.blockedUntil) {
       const remainingSecs = Math.ceil((record.blockedUntil - now) / 1000);
       const remainingMins = Math.ceil(remainingSecs / 60);
@@ -90,34 +121,40 @@ export function createRateLimiter(opts: RateLimitOptions) {
       });
     }
 
-    // ♻️ Janela expirou — resetar contagem
+    // Janela expirou?
     if (now - record.firstAttempt > windowMs) {
       record.count = 1;
       record.firstAttempt = now;
-      delete record.blockedUntil;
-      store.set(key, record);
-      return next();
+      record.blockedUntil = null;
+    } else {
+      record.count += 1;
+      if (record.count > maxAttempts) {
+        record.blockedUntil = now + blockDurationMs;
+      }
     }
 
-    // ➕ Incrementar tentativas
-    record.count += 1;
+    // Persistir
+    if (dbOk) {
+      try {
+        await saveRecordDb(key, record);
+      } catch (err) {
+        dbOk = false;
+        console.warn("RateLimiter: falha ao salvar no banco, caindo para memória:", err);
+      }
+    }
+    if (!dbOk) memoryStore.set(key, record);
 
-    // 🚫 Excedeu o limite — bloquear
-    if (record.count > maxAttempts) {
-      record.blockedUntil = now + blockDurationMs;
-      store.set(key, record);
+    // Headers
+    const remaining =
+      record.count > maxAttempts ? 0 : Math.max(0, maxAttempts - record.count);
+    res.setHeader("X-RateLimit-Limit", String(maxAttempts));
+    res.setHeader("X-RateLimit-Remaining", String(remaining));
 
-      const remainingSecs = Math.ceil(blockDurationMs / 1000);
+    // Bloqueado recém-atingido
+    if (record.blockedUntil && now >= record.firstAttempt && record.count > maxAttempts) {
+      const remainingSecs = Math.ceil((record.blockedUntil - now) / 1000);
       const remainingMins = Math.ceil(remainingSecs / 60);
-
-      console.warn(
-        `🚫 Rate limit atingido — IP: ${ip} | Rota: ${req.path} | Tentativas: ${record.count}`
-      );
-
       res.setHeader("Retry-After", String(remainingSecs));
-      res.setHeader("X-RateLimit-Limit", String(maxAttempts));
-      res.setHeader("X-RateLimit-Remaining", "0");
-
       return res.status(429).json({
         error: message,
         retryAfter: remainingSecs,
@@ -125,14 +162,6 @@ export function createRateLimiter(opts: RateLimitOptions) {
       });
     }
 
-    // ✅ Dentro do limite
-    res.setHeader("X-RateLimit-Limit", String(maxAttempts));
-    res.setHeader(
-      "X-RateLimit-Remaining",
-      String(maxAttempts - record.count)
-    );
-
-    store.set(key, record);
     return next();
   };
 }

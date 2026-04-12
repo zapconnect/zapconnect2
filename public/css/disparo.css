@@ -1,22 +1,11 @@
-:root {
-  --bg: #0D1222;
-  --panel: #161B30;
-  --stroke: #373E59;
-
-  --text: #FFFFFF;
-  --muted: #AAB0D9;
-
-  --accent: #6C64EF;
-  --accent-2: #8B5CF6;
-  --danger: #E54848;
-}
+﻿@import url("./design-tokens.css");
 
 /* ===============================
    BASE
 =============================== */
 * {
   box-sizing: border-box;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: var(--font-base);
 }
 
 body {
@@ -67,7 +56,7 @@ body {
 }
 
 /* ===============================
-   CONTEÚDO
+   CONTEÃšDO
 =============================== */
 .wrap {
   max-width: 900px;
@@ -78,7 +67,7 @@ body {
 .card {
   background: linear-gradient(180deg, #181f3d, #12172e);
   border: 1px solid var(--stroke);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   padding: 28px;
   box-shadow: 0 12px 40px rgba(108,100,239,.18);
 }
@@ -109,7 +98,7 @@ small {
 textarea {
   width: 100%;
   min-height: 140px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: 12px;
   background: #0f1530;
   color: var(--text);
@@ -130,7 +119,7 @@ input[type="file"] {
 }
 
 /* ===============================
-   BOTÃO
+   BOTÃƒO
 =============================== */
 .btn-group {
   display: flex;
@@ -144,7 +133,7 @@ input[type="file"] {
   border: none;
   padding: 14px 22px;
   font-size: 15px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   color: #fff;
   font-weight: 600;
@@ -172,7 +161,7 @@ input[type="file"] {
 .btn-danger {
   margin-top: 10px;
   padding: 14px 18px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--stroke);
   background: rgba(255,255,255,0.05);
   color: #fff;
@@ -201,7 +190,7 @@ input[type="file"] {
   margin-top: 24px;
   padding: 16px;
   background: #0f1530;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--stroke);
   display: none;
 }
@@ -233,7 +222,7 @@ input[type="file"] {
 .preview-invalid {
   background: rgba(229, 72, 72, 0.08);
   border: 1px solid rgba(229, 72, 72, 0.35);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px;
   color: #ff8a8a;
 }
@@ -271,23 +260,6 @@ input[type="file"] {
   color: var(--muted);
   font-size: 13px;
 }
-
-.progress-toast {
-  margin-top: 10px;
-}
-
-.toast {
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 6px;
-}
-
-.toast-info { background: rgba(170, 176, 217, 0.15); border-left: 4px solid #aab0d9; }
-.toast-warn { background: rgba(242, 201, 76, 0.18); border-left: 4px solid #f2c94c; }
-.toast-error { background: rgba(229, 72, 72, 0.18); border-left: 4px solid #e54848; }
-.toast-success { background: rgba(46, 230, 166, 0.18); border-left: 4px solid #2ee6a6; }
 
 .pill-suspect {
   display: inline-block;
@@ -330,3 +302,4 @@ footer a:hover {
     padding: 20px;
   }
 }
+

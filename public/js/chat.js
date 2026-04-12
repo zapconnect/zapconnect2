@@ -19,6 +19,7 @@ const socket = io({
    📥 VARIÁVEIS GLOBAIS
    ========================================================== */
 const chats = {};
+const chatNotes = {};
 let currentChat = null;
 let selectedFile = null;
 let searchQuery = "";    // termo de busca atual
@@ -46,6 +47,52 @@ const btnAiToggle  = document.getElementById("btnAiToggle");
 const btnClearAi   = document.getElementById("btnClearAi");
 const tagAiOff = document.getElementById("tagAiOff");
 
+const btnNotesToggle = document.getElementById("btnNotesToggle");
+const notesPanel   = document.getElementById("notesPanel");
+const notesList    = document.getElementById("notesList");
+const notesCount   = document.getElementById("notesCount");
+const notesRefresh = document.getElementById("notesRefresh");
+const noteForm     = document.getElementById("noteForm");
+const noteInput    = document.getElementById("noteInput");
+const noteSubmit   = document.getElementById("noteSubmit");
+let notesVisible = false;
+
+// Sidebar mobile
+const btnToggleSidebar = document.getElementById("btnToggleSidebar");
+const sidebarOverlay = document.getElementById("sidebarOverlay");
+const wrap = document.querySelector(".wrap");
+
+function openSidebar() {
+  wrap?.classList.add("sidebar-open");
+  if (sidebarOverlay) sidebarOverlay.style.display = "block";
+}
+function closeSidebar() {
+  wrap?.classList.remove("sidebar-open");
+  if (sidebarOverlay) sidebarOverlay.style.display = "none";
+}
+btnToggleSidebar?.addEventListener("click", () => {
+  if (wrap?.classList.contains("sidebar-open")) closeSidebar();
+  else openSidebar();
+});
+sidebarOverlay?.addEventListener("click", closeSidebar);
+
+/* ==========================================================
+   🧾 AUTO-RESIZE DO CAMPO DE MENSAGEM
+   ========================================================== */
+const INPUT_MAX_LINES = 5;
+const INPUT_LINE_HEIGHT = 22;
+function resizeInput() {
+  if (!inputMsg) return;
+  inputMsg.style.height = "auto";
+  const maxHeight = INPUT_MAX_LINES * INPUT_LINE_HEIGHT;
+  const newHeight = Math.min(inputMsg.scrollHeight, maxHeight);
+  inputMsg.style.height = `${newHeight}px`;
+  inputMsg.style.overflowY = inputMsg.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+inputMsg?.addEventListener("input", resizeInput);
+// reset ao carregar
+resizeInput();
+
 /* ==========================================================
    🏷️ TRATAMENTO DO NOME DO CONTATO
    ========================================================== */
@@ -70,6 +117,54 @@ function extrairNome(chat) {
 }
 
 /* ==========================================================
+   🎨 AVATAR COM INICIAIS (FALLBACK COLORIDO)
+   ========================================================== */
+const AVATAR_COLORS = [
+    "#6C64EF", "#2EE6A6", "#F2994A", "#5AC8FA", "#FF8A65",
+    "#8E44AD", "#45AAF2", "#F2C94C", "#26DE81", "#E056FD"
+];
+
+function avatarInitials(name) {
+    const parts = (name || "Contato").trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "??";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function avatarColor(name) {
+    const text = (name || "").toLowerCase();
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) {
+        hash = text.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
+}
+
+function buildAvatarHtml(chat) {
+    const name = chat?.name || "Contato";
+    const initials = avatarInitials(name);
+    const color = avatarColor(name);
+    const hasPic = !!chat?.pic;
+
+    return `
+      <div class="avatar-shell">
+        ${hasPic ? `
+          <img
+            class="avatar avatar-img"
+            src="${chat.pic}"
+            alt="${escapeHtml(name)}"
+            loading="lazy"
+            onerror="this.style.display='none';const f=this.nextElementSibling;if(f){f.classList.remove('hidden');}"
+          >
+        ` : ""}
+        <div class="avatar avatar-fallback ${hasPic ? "hidden" : ""}" style="background:${color};">
+          ${initials}
+        </div>
+      </div>
+    `;
+}
+
+/* ==========================================================
    🔍 DETECTAR MENSAGEM DO ADMIN (FROM ME)
    ========================================================== */
 function resolveIsFromMe(msg) {
@@ -78,6 +173,20 @@ function resolveIsFromMe(msg) {
     } catch {
         return false;
     }
+}
+
+function escapeHtml(text) {
+    return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function formatNoteDate(ts) {
+    const d = new Date(Number(ts) || Date.now());
+    return d.toLocaleString();
 }
 
 /* ==========================================================
@@ -161,9 +270,10 @@ function renderChatList(filter = "") {
         const preview = getLastMsgPreview(chats[id]);
         const lastTime = fmtLastTime(chats[id].lastMsg?.timestamp);
         const unread = chats[id].unread || 0;
+        const avatar = buildAvatarHtml(chats[id]);
 
         div.innerHTML = `
-            <img class="avatar" src="${chats[id].pic || "/img/no-photo.png"}">
+            ${avatar}
             <div class="chat-infos">
                 <div class="chat-name-row">
                     <div class="chat-name">${chats[id].name}</div>
@@ -183,10 +293,13 @@ function renderChatList(filter = "") {
    📌 SELECIONAR CHAT + RECARREGAR MODO HUMANO + TIMER
    ========================================================== */
 async function selectChat(chatId) {
-    currentChat = chatId;
+  currentChat = chatId;
 
-    // Solicita mensagens ao servidor
-    socket.emit("abrir_chat", chatId);
+  // Fechar sidebar no mobile ao selecionar chat
+  closeSidebar();
+
+  // Solicita mensagens ao servidor
+  socket.emit("abrir_chat", chatId);
 
     // Zerar contador de não lidas ao abrir o chat
     if (chats[chatId]) {
@@ -245,6 +358,11 @@ async function selectChat(chatId) {
     // Atualiza UI da IA
     updateAiUi(chatId);
 
+    // Notas internas (se painel estiver aberto)
+    if (notesVisible) {
+        await loadNotes(chatId);
+    }
+
     // Renderizar mensagens
     renderMessages(chatId);
 
@@ -262,6 +380,9 @@ async function selectChat(chatId) {
     } catch {
         pipelineStatus.innerHTML = "";
     }
+
+    // Notas internas
+    await loadNotes(chatId);
 }
 
 /* ==========================================================
@@ -304,27 +425,59 @@ function renderMessages(chatId) {
         const fromMe = resolveIsFromMe(msg);
 
         const row = document.createElement("div");
-        row.className = "msg-row " + (fromMe ? "from-user" : "from-bot");
+        const isSystem = msg.system === true;
+        row.className = "msg-row " + (isSystem ? "system-msg" : (fromMe ? "from-user" : "from-bot"));
         row.dataset.msgIdx = idx;
 
         const bubble = document.createElement("div");
         bubble.className = "msg-bubble";
 
-        if (msg.isMedia || msg.mimetype) {
+        if (isSystem) {
+            bubble.textContent = msg.body || "";
+        } else if (msg.isMedia || msg.mimetype) {
             msg.isMedia = true;
             const mime = msg.mimetype || "";
 
             if (mime.startsWith("image/")) {
-                bubble.innerHTML = `<img class="msg-img" src="data:${mime};base64,${msg.body}">`;
-            } else if (mime.startsWith("audio/") || mime.includes("opus")) {
+                row.classList.add("msg-photo");
+                bubble.classList.add("msg-bubble-media");
                 bubble.innerHTML = `
-                    <audio controls class="msg-audio">
-                        <source src="data:${mime};base64,${msg.body}" type="${mime}">
-                    </audio>`;
+                    <img class="msg-img" src="data:${mime};base64,${msg.body}" alt="imagem enviada">
+                `;
+            } else if (mime.startsWith("audio/") || mime.includes("opus")) {
+                row.classList.add("msg-audio-row");
+                bubble.classList.add("msg-bubble-media", "msg-audio-card");
+
+                // Pequena forma de onda estática para diferenciação visual
+                const bars = Array.from({ length: 16 }).map((_, i) => `<span style="--i:${i};"></span>`).join("");
+
+                bubble.innerHTML = `
+                    <div class="audio-card">
+                        <div class="audio-wave">${bars}</div>
+                        <audio controls class="msg-audio">
+                            <source src="data:${mime};base64,${msg.body}" type="${mime}">
+                        </audio>
+                    </div>
+                `;
             } else if (mime.startsWith("video/")) {
+                row.classList.add("msg-video-row");
+                bubble.classList.add("msg-bubble-media");
                 bubble.innerHTML = `<video controls class="msg-video" src="data:${mime};base64,${msg.body}"></video>`;
             } else {
-                bubble.innerHTML = `<a download href="data:${mime};base64,${msg.body}">📎 Arquivo (${mime})</a>`;
+                row.classList.add("msg-doc-row");
+                bubble.classList.add("msg-doc-card");
+                const filename = msg.filename || "Documento";
+                const fileType = (mime.split("/")[1] || "file").toUpperCase();
+                bubble.innerHTML = `
+                    <div class="doc-card">
+                        <div class="doc-icon">${fileType.slice(0, 3)}</div>
+                        <div class="doc-body">
+                            <div class="doc-name">${escapeHtml(filename)}</div>
+                            <div class="doc-meta">${mime || "Arquivo"}</div>
+                            <a class="doc-download" download href="data:${mime};base64,${msg.body}">⬇ Baixar</a>
+                        </div>
+                    </div>
+                `;
             }
         } else {
             // Texto — aplica highlight se houver busca
@@ -355,6 +508,64 @@ function renderMessages(chatId) {
         box.scrollTop = box.scrollHeight;
     } else if (searchMatches.length > 0) {
         scrollToMatch(searchCurrent);
+    }
+}
+
+/* ==========================================================
+   🗒️ NOTAS INTERNAS (PAINEL)
+   ========================================================== */
+function renderNotes(chatId) {
+    if (!notesList || !notesCount) return;
+    const list = chatNotes[chatId] || [];
+    notesCount.textContent = String(list.length);
+
+    notesList.innerHTML = "";
+    if (list.length === 0) {
+        notesList.classList.add("empty");
+        notesList.textContent = "Nenhuma nota interna ainda.";
+        return;
+    }
+
+    notesList.classList.remove("empty");
+
+    list.forEach(note => {
+        const item = document.createElement("div");
+        item.className = "note-item";
+        const meta = document.createElement("div");
+        meta.className = "note-meta";
+        const author = document.createElement("span");
+        author.textContent = note.author_name || "Atendente";
+        const when = document.createElement("span");
+        when.textContent = formatNoteDate(note.created_at);
+        meta.appendChild(author);
+        meta.appendChild(when);
+
+        const body = document.createElement("div");
+        body.className = "note-body";
+        body.innerHTML = escapeHtml(note.content || "");
+
+        item.appendChild(meta);
+        item.appendChild(body);
+        notesList.appendChild(item);
+    });
+}
+
+async function loadNotes(chatId) {
+    if (!chatId || !window.SESSION_NAME) return;
+    if (!notesList) return;
+    try {
+        const res = await fetch(`/api/chat/notes?chatId=${encodeURIComponent(chatId)}&sessionName=${encodeURIComponent(window.SESSION_NAME)}`);
+        const data = await res.json();
+        if (data?.ok) {
+            chatNotes[chatId] = data.notes || [];
+            renderNotes(chatId);
+        } else {
+            throw new Error(data?.error || "Erro ao carregar notas");
+        }
+    } catch (err) {
+        console.error("Notas - load error:", err);
+        notesList.innerHTML = "Erro ao carregar notas";
+        notesList.classList.remove("empty");
     }
 }
 
@@ -477,6 +688,7 @@ btnSend.addEventListener("click", () => {
     }
 
     inputMsg.value = "";
+    resizeInput();
     setTimeout(() => renderMessages(currentChat), 40);
 });
 
@@ -486,6 +698,72 @@ inputMsg.addEventListener("keydown", e => {
         btnSend.click();
     }
 });
+
+/* ==========================================================
+   🗒️ FORMULÁRIO DE NOTAS INTERNAS
+   ========================================================== */
+if (noteForm) {
+    noteForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (!currentChat) return;
+        const text = (noteInput?.value || "").trim();
+        if (!text) return;
+
+        if (noteSubmit) {
+            setButtonLoading(noteSubmit, true, "Salvando...");
+        }
+
+        try {
+            const res = await fetch("/api/chat/notes", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    chatId: currentChat,
+                    sessionName: window.SESSION_NAME,
+                    content: text
+                })
+            });
+            const data = await res.json();
+            if (data?.ok) {
+                chatNotes[currentChat] = data.notes || [];
+                noteInput.value = "";
+                renderNotes(currentChat);
+            } else {
+                alert(data?.error || "Erro ao salvar nota");
+            }
+        } catch (err) {
+            console.error("Notas - save error:", err);
+            alert("Erro ao salvar nota");
+        } finally {
+            if (noteSubmit) {
+                setButtonLoading(noteSubmit, false);
+            }
+        }
+    });
+}
+
+if (notesRefresh) {
+    notesRefresh.addEventListener("click", () => {
+        if (!currentChat) return;
+        loadNotes(currentChat);
+    });
+}
+
+if (btnNotesToggle && notesPanel) {
+    const setNotesVisible = (visible) => {
+        notesVisible = !!visible;
+        notesPanel.classList.toggle("hidden", !notesVisible);
+        btnNotesToggle.classList.toggle("active", notesVisible);
+        btnNotesToggle.textContent = notesVisible ? "🗒️ Notas (aberto)" : "🗒️ Notas";
+        if (notesVisible && currentChat) {
+            loadNotes(currentChat);
+        }
+    };
+
+    btnNotesToggle.addEventListener("click", () => {
+        setNotesVisible(!notesVisible);
+    });
+}
 
 /* ==========================================================
    🤖 IA POR CHAT
@@ -524,8 +802,18 @@ socket.on("lista_chats", lista => {
         chats[id].human = chat.human === true;
         chats[id].ai = chat.ai;
         chats[id].expire = chat.expire || null;
+        if (chat.avatar) {
+            chats[id].pic = chat.avatar;
+        }
     });
     renderChatList();
+
+    // Prefetch mensagens de todos os chats (lazy, mas antes do clique)
+    const ids = lista.map(c => c.id?._serialized || c.id).filter(Boolean);
+    ids.forEach((id, idx) => {
+      // espaça requisições para não sobrecarregar o browser do WPP
+      setTimeout(() => socket.emit("abrir_chat", id), idx * 250);
+    });
 
     // Abrir chat do contato vindo do CRM automaticamente
     if (contactParam) {
@@ -537,17 +825,28 @@ socket.on("lista_chats", lista => {
         const url = new URL(window.location.href);
         url.searchParams.delete("contact");
         window.history.replaceState({}, "", url);
+        return;
+    }
+
+    // Se não veio contactParam e nenhum chat está aberto, abra o primeiro disponível
+    if (!currentChat && lista.length > 0) {
+        const first = lista[0];
+        const firstId = first.id?._serialized || first.id;
+        selectChat(firstId);
     }
 });
 
-socket.on("mensagens_chat", msgs => {
-    if (!currentChat) return;
-    chats[currentChat].msgs = msgs || [];
+socket.on("mensagens_chat", payload => {
+    const chatId = payload?.chatId;
+    const msgs = payload?.messages || [];
+    if (!chatId) return;
+    ensureChat(chatId);
+    chats[chatId].msgs = msgs;
 
     // Atualizar preview com a última mensagem do histórico
     if (msgs && msgs.length > 0) {
         const last = msgs[msgs.length - 1];
-        chats[currentChat].lastMsg = {
+        chats[chatId].lastMsg = {
             body: last.body,
             fromMe: resolveIsFromMe(last),
             timestamp: last.timestamp,
@@ -558,9 +857,11 @@ socket.on("mensagens_chat", msgs => {
     }
 
     // Garantir que o status da IA por chat seja atualizado junto
-    socket.emit("chat_ai_state_request", currentChat);
+    socket.emit("chat_ai_state_request", chatId);
 
-    renderMessages(currentChat);
+    if (currentChat === chatId) {
+        renderMessages(chatId);
+    }
 });
 
 socket.on("profilePic", data => {
@@ -572,6 +873,9 @@ socket.on("profilePic", data => {
 
 socket.on("newMessage", msg => {
     ensureChat(msg.chatId, msg.name);
+    if (msg.avatar) {
+        chats[msg.chatId].pic = msg.avatar;
+    }
     msg.isMedia = msg.isMedia || !!msg.mimetype;
     msg.timestamp = msg.timestamp || Date.now();
     msg._isFromMe = resolveIsFromMe(msg) || msg.fromBot === true;
@@ -603,6 +907,50 @@ socket.on("newMessage", msg => {
     if (currentChat === msg.chatId) {
         hideTyping(); // remove indicador ao receber resposta real
         renderMessages(msg.chatId);
+    }
+    renderChatList();
+});
+
+// Fallback acionado automaticamente (notificação para o operador)
+socket.on("fallback_triggered", data => {
+    if (!data || data.userId !== window.USER_ID) return;
+    const { chatId, reason, matchedPhrase, triggeredAt } = data;
+    ensureChat(chatId);
+
+    const labels = {
+        user_request: "Cliente pediu humano",
+        repetition_limit: "Mensagens repetidas",
+        frustration_limit: "Frustração detectada",
+        ai_failure: "Falha da IA",
+        ai_uncertainty: "IA sem confiança",
+        ai_transfer: "IA sugeriu transferir",
+        cooldown: "Em cooldown",
+        silence_window: "Horário de silêncio",
+    };
+
+    const label = labels[reason] || "Fallback automático";
+    const detail = matchedPhrase ? ` | Detalhe: "${matchedPhrase}"` : "";
+
+    const systemMsg = {
+        body: `⚠️ Fallback ativado (${label})${detail}`,
+        timestamp: triggeredAt || Date.now(),
+        fromBot: true,
+        system: true,
+    };
+
+    chats[chatId].msgs.push(systemMsg);
+
+    // mantém preview informativo
+    chats[chatId].lastMsg = {
+        body: systemMsg.body,
+        fromMe: false,
+        timestamp: systemMsg.timestamp,
+        isMedia: false,
+        mimetype: ""
+    };
+
+    if (currentChat === chatId) {
+        renderMessages(chatId);
     }
     renderChatList();
 });

@@ -1,13 +1,4 @@
-:root {
-  --bg: #0D1222;
-  --card: #161B30;
-  --input: #1A1F3A;
-  --border: #373E59;
-  --text: #FFFFFF;
-  --muted: #AAB0D9;
-  --primary: #6C64EF;
-  --primary-hover: #8B5CF6;
-}
+﻿@import url('./design-tokens.css');
 
 * {
   box-sizing: border-box;
@@ -31,7 +22,7 @@ body {
   max-width: 360px;
   background: linear-gradient(180deg, #181f3d, #12172e);
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: var(--radius-xl);
   padding: 34px;
   box-shadow: 0 20px 60px rgba(108,100,239,.35);
 }
@@ -72,7 +63,7 @@ label {
 .login-box > input {
   width: 100%;
   padding: 14px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--input);
   color: var(--text);
@@ -91,6 +82,14 @@ label {
   outline: none;
 }
 
+.input-error {
+  margin-top: -10px;
+  margin-bottom: 12px;
+  color: #ff6b6b;
+  font-size: 12px;
+  min-height: 14px;
+}
+
 /* ==============================
    INPUT GROUP (SENHA)
 ============================== */
@@ -99,7 +98,7 @@ label {
   align-items: center;
   background: var(--input);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: 0 12px;
   margin-bottom: 18px;
   transition: .2s;
@@ -139,11 +138,11 @@ label {
   color: var(--primary);
 }
 
-/* BOTÃO */
+/* BOTÃƒO */
 .login-box .acessar {
   width: 100%;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   border: none;
   background: linear-gradient(135deg, var(--primary), var(--primary-hover));
   color: #fff;
@@ -201,3 +200,4 @@ label {
   color: #fff;
   text-decoration: underline;
 }
+

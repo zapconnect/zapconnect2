@@ -12,28 +12,10 @@ function toBase64(file) {
 }
 
 // ===================================================
-// 🔔 NOTIFICAÇÃO INLINE
+// 🔔 NOTIFICAÇÃO (usa toast global)
 // ===================================================
 function notify(msg, type = "info") {
-  const progress = document.getElementById("progress");
-  progress.style.display = "block";
-
-  const hasBar = progress.querySelector(".progress-bar");
-  if (hasBar) {
-    let toastBox = progress.querySelector(".progress-toast");
-    if (!toastBox) {
-      toastBox = document.createElement("div");
-      toastBox.className = "progress-toast";
-      progress.appendChild(toastBox);
-    }
-    toastBox.innerHTML = `<div class="toast toast-${type}">${msg}</div>`;
-  } else {
-    progress.innerHTML = `
-      <div class="toast toast-${type}">
-        ${msg}
-      </div>
-    `;
-  }
+  showToast(type === "warn" ? "warn" : type, msg);
 }
 
 let isSending = false;
@@ -105,6 +87,7 @@ async function sendWithRetry(payload, maxRetries = 2) {
 // 🚀 DISPARO
 // ===================================================
 async function startDisparo() {
+  clearAllFieldErrors(document);
   if (isSending) {
     notify("⏳ Um disparo já está em andamento. Aguarde terminar.", "warn");
     return;
@@ -144,6 +127,7 @@ async function startDisparo() {
   // Validações
   // ===============================
   if (!numbers.length) {
+    showFieldError("numbers", "Informe pelo menos um número válido (10-15 dígitos).");
     notify("⚠️ Informe pelo menos um número válido (10-15 dígitos).", "error");
     resetButton(originalLabel);
     return;
@@ -159,6 +143,7 @@ async function startDisparo() {
   }
 
   if (!message && fileInput.files.length === 0) {
+    showFieldError("message", "Mensagem ou mídia obrigatória.");
     notify("⚠️ Mensagem ou imagem é obrigatória.", "error");
     resetButton(originalLabel);
     return;

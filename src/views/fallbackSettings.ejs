@@ -44,6 +44,10 @@
         <div class="card-title">Tempo do modo humano</div>
         <label>Duração (minutos) — 0 para ilimitado</label>
         <input id="humanModeDuration" type="number" min="0" value="15">
+
+        <label>Cooldown entre fallbacks (minutos)</label>
+        <input id="fallbackCooldownMinutes" type="number" min="0" value="5">
+        <small class="muted">Evita reativar o fallback no mesmo chat durante o intervalo definido.</small>
       </div>
 
       <div class="card">
@@ -92,6 +96,7 @@
   </div>
 
   <div id="userdata" data-user='<%- JSON.stringify(user || {}) %>'></div>
+  <script src="/js/loading-utils.js"></script>
   <script src="/js/fallbackSettings.js"></script>
 </body>
 </html>

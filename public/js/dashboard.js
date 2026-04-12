@@ -16,12 +16,38 @@ const State = {
 };
 
 /* ===========================
+   HELPERS UI
+=========================== */
+function renderEmptyState(container, message = "Nenhum dado ainda", icon = "fa-chart-line") {
+  if (!container) return true;
+  container.innerHTML = `
+    <div class="empty-state" style="padding:28px 12px">
+      <i class="fa-solid ${icon}"></i>
+      <p>${message}</p>
+    </div>
+  `;
+  return true;
+}
+
+function ensureCanvas(wrap, id) {
+  if (!wrap) return null;
+  wrap.innerHTML = `<canvas id="${id}"></canvas>`;
+  return wrap.querySelector("canvas");
+}
+
+/* ===========================
    INIT
 =========================== */
 document.addEventListener("DOMContentLoaded", () => {
   loadDashboard();
   bindFilters();
   bindTableSort();
+  loadTemplates();
+  window.addEventListener("resize", () => {
+    const grid = document.getElementById('heatmap');
+    const days = document.getElementById('hm-days');
+    adjustHeatmapSize(grid, days);
+  });
 });
 
 /* ===========================
@@ -60,6 +86,96 @@ async function loadDashboard() {
   } finally {
     btn?.classList.remove('spinning');
   }
+}
+
+/* ===========================
+   TEMPLATES TRIAL
+=========================== */
+const TemplateState = {
+  templates: {},
+  current: "trial_day1",
+};
+
+async function loadTemplates() {
+  try {
+    const res = await fetch("/admin/email-templates");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const list = data.templates || [];
+    TemplateState.templates = {};
+    list.forEach(t => { TemplateState.templates[t.template_key] = t; });
+    bindTemplateForm();
+    renderTemplateForm();
+  } catch (err) {
+    console.error("Erro ao carregar templates:", err);
+    showToast('error', 'Falha ao carregar templates');
+  }
+}
+
+function bindTemplateForm() {
+  const select = document.getElementById("tpl-select");
+  const subject = document.getElementById("tpl-subject");
+  const body = document.getElementById("tpl-body");
+  const preview = document.getElementById("tpl-preview");
+  const saveBtn = document.getElementById("tpl-save");
+
+  if (!select || !subject || !body || !preview || !saveBtn) return;
+
+  select.onchange = () => {
+    TemplateState.current = select.value;
+    renderTemplateForm();
+  };
+
+  const updatePreview = () => {
+    preview.srcdoc = body.value || "<p>(vazio)</p>";
+  };
+  body.addEventListener("input", updatePreview);
+  subject.addEventListener("input", () => {
+    const st = document.getElementById("tpl-status");
+    if (st) st.textContent = "";
+  });
+
+  saveBtn.onclick = async () => {
+    const key = select.value;
+    const subj = subject.value.trim();
+    const html = body.value.trim();
+    if (!subj || !html) {
+      showToast('error', 'Preencha assunto e corpo');
+      return;
+    }
+    setButtonLoading(saveBtn, true, "Salvando...");
+    try {
+      const res = await fetch("/admin/email-templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key, subject: subj, body: html })
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      TemplateState.templates[key] = { template_key: key, subject: subj, body: html, updated_at: Date.now() };
+      const st = document.getElementById("tpl-status");
+      if (st) st.textContent = "Salvo às " + new Date().toLocaleTimeString();
+      showToast('success', 'Template salvo');
+    } catch (err) {
+      console.error("Erro ao salvar template:", err);
+      showToast('error', 'Erro ao salvar template');
+    } finally {
+      setButtonLoading(saveBtn, false);
+    }
+  };
+}
+
+function renderTemplateForm() {
+  const key = TemplateState.current;
+  const tpl = TemplateState.templates[key];
+  if (!tpl) return;
+  const subject = document.getElementById("tpl-subject");
+  const body = document.getElementById("tpl-body");
+  const preview = document.getElementById("tpl-preview");
+  const status = document.getElementById("tpl-status");
+  if (subject) subject.value = tpl.subject || "";
+  if (body) body.value = tpl.body || "";
+  if (preview) preview.srcdoc = tpl.body || "";
+  if (status) status.textContent = tpl.updated_at ? ("Última edição: " + new Date(tpl.updated_at).toLocaleString()) : "Default";
 }
 
 /* ===========================
@@ -174,7 +290,9 @@ function destroyChart(id) {
    Agrupa pagamentos aprovados por mês usando last_payment_at e last_amount */
 function renderRevenueChart(users, monthlyRevenue) {
   destroyChart('revenue');
-  const ctx = document.getElementById('chart-revenue');
+  const wrap = document.getElementById('chart-revenue')?.parentElement;
+  let ctx = document.getElementById('chart-revenue');
+  if (!ctx && wrap) ctx = ensureCanvas(wrap, 'chart-revenue');
   if (!ctx) return;
 
   let months, values;
@@ -206,6 +324,9 @@ function renderRevenueChart(users, monthlyRevenue) {
     });
     values = months.map(m => mrrMap[m]);
   }
+
+  const hasData = values.some(v => Number(v) > 0);
+  if (!hasData) return renderEmptyState(wrap, "Nenhuma receita registrada", "fa-wallet");
 
   State.charts.revenue = new Chart(ctx, {
     type: 'bar',
@@ -241,7 +362,9 @@ function renderRevenueChart(users, monthlyRevenue) {
 /* ─── 2. DONUT — distribuição de planos ─── */
 function renderDonutChart(stats) {
   destroyChart('donut');
-  const ctx = document.getElementById('chart-donut');
+  const wrap = document.getElementById('chart-donut')?.parentElement;
+  let ctx = document.getElementById('chart-donut');
+  if (!ctx && wrap) ctx = ensureCanvas(wrap, 'chart-donut');
   if (!ctx) return;
 
   // Conta planos a partir dos users
@@ -252,8 +375,12 @@ function renderDonutChart(stats) {
     else counts.free++;
   });
 
-  const total   = State.allUsers.length || 1;
+  const total   = State.allUsers.length || 0;
   const paidPct = Math.round(((counts.starter + counts.pro) / total) * 100);
+
+  if (total === 0) {
+    return renderEmptyState(wrap, "Nenhum usuário ainda", "fa-user-slash");
+  }
 
   // Atualiza texto central
   const bigEl = document.querySelector('.donut-big');
@@ -309,7 +436,11 @@ function renderFunnelChart(stats) {
   const abandoned  = stats.abandoned  || 0;
 
   // Referência: leads é o topo do funil
-  const ref = leads || total || 1;
+  const ref = leads || total;
+
+  if (!ref) {
+    return renderEmptyState(el, "Nenhum dado do funil ainda", "fa-filter");
+  }
 
   const data = [
     { label: 'Leads',      val: leads,     color: '#6366f1' },
@@ -347,7 +478,9 @@ function renderFunnelChart(stats) {
    ou usa last_payment_at). */
 function renderDailyChart(users, dailyNewUsers) {
   destroyChart('daily');
-  const ctx = document.getElementById('chart-daily');
+  const wrap = document.getElementById('chart-daily')?.parentElement;
+  let ctx = document.getElementById('chart-daily');
+  if (!ctx && wrap) ctx = ensureCanvas(wrap, 'chart-daily');
   if (!ctx) return;
 
   const labels = [], values = [];
@@ -385,6 +518,9 @@ function renderDailyChart(users, dailyNewUsers) {
     });
     labels.forEach(l => values.push(dayMap[l]));
   }
+
+  const hasData = values.some(v => Number(v) > 0);
+  if (!hasData) return renderEmptyState(wrap, "Nenhuma atividade diária ainda", "fa-wave-square");
 
   State.charts.daily = new Chart(ctx, {
     type: 'line',
@@ -448,7 +584,13 @@ function renderHeatmap(users, dailyPayments) {
     });
   }
 
-  const maxCount = Math.max(...Object.values(countMap), 1);
+  const entries = Object.values(countMap);
+  if (entries.length === 0) {
+    if (daysEl) daysEl.innerHTML = "";
+    return renderEmptyState(grid, "Nenhuma atividade ainda", "fa-calendar-days");
+  }
+
+  const maxCount = Math.max(...entries, 1);
 
   const palette = isDark
     ? ['rgba(79,110,247,0.08)', 'rgba(79,110,247,0.25)', 'rgba(79,110,247,0.55)', '#4f6ef7']
@@ -494,6 +636,23 @@ function renderHeatmap(users, dailyPayments) {
       col.appendChild(cell);
     }
     grid.appendChild(col);
+  }
+
+  adjustHeatmapSize(grid, daysEl);
+}
+
+function adjustHeatmapSize(grid, daysEl) {
+  if (!grid) return;
+  const GAP = 4;
+  const cols = 7; // semanas renderizadas
+  const available = grid.clientWidth - (cols - 1) * GAP;
+  if (available <= 0) return;
+  const size = Math.max(10, Math.min(18, Math.floor(available / cols)));
+  grid.style.setProperty('--hm-size', `${size}px`);
+  grid.style.setProperty('--hm-gap', `${GAP}px`);
+  if (daysEl) {
+    daysEl.style.setProperty('--hm-size', `${size}px`);
+    daysEl.style.setProperty('--hm-gap', `${GAP}px`);
   }
 }
 
@@ -553,7 +712,7 @@ function renderUsers(users) {
   }
 
   if (!page.length) {
-    tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
+    tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">
       <i class="fa-solid fa-user-slash"></i>
       <p>Nenhum cliente encontrado com os filtros aplicados.</p>
     </div></td></tr>`;
@@ -561,8 +720,26 @@ function renderUsers(users) {
     return;
   }
 
-  tbody.innerHTML = page.map((u, idx) => `
+  const avatarColors = ["#6C64EF","#2EE6A6","#F2994A","#5AC8FA","#FF8A65","#8E44AD","#45AAF2","#F2C94C","#26DE81","#E056FD"];
+  const makeInitials = (name = "") => {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "??";
+    if (parts.length === 1) return parts[0].slice(0,2).toUpperCase();
+    return (parts[0][0] + parts[parts.length-1][0]).toUpperCase();
+  };
+  const colorFor = (text = "") => {
+    let h = 0;
+    for (let i=0;i<text.length;i++) h = text.charCodeAt(i) + ((h<<5)-h);
+    return avatarColors[Math.abs(h)%avatarColors.length];
+  };
+
+  tbody.innerHTML = page.map((u, idx) => {
+    const initials = makeInitials(u.name || u.email || "");
+    const color = colorFor(u.name || u.email || "");
+
+    return `
     <tr class="${u.abandoned ? 'abandoned' : ''}" style="animation-delay:${idx * 20}ms">
+      <td class="col-avatar"><div class="user-avatar" style="background:${color}">${initials}</div></td>
       <td>
         <div class="user-name">${escHtml(u.name || '—')}</div>
       </td>
@@ -582,7 +759,8 @@ function renderUsers(users) {
       <td>${escHtml(u.last_method || '—')}</td>
       <td class="${(u.failures || 0) > 0 ? 'danger-cell' : ''}">${u.failures || 0}</td>
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
   renderPagination(total);
 }
@@ -590,7 +768,7 @@ function renderUsers(users) {
 function renderTableError() {
   const tbody = document.getElementById("users");
   if (!tbody) return;
-  tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state">
+  tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">
     <i class="fa-solid fa-triangle-exclamation"></i>
     <p>Não foi possível carregar os dados. Tente recarregar.</p>
   </div></td></tr>`;
@@ -743,14 +921,11 @@ function exportCSV() {
    TOAST
 =========================== */
 function showToast(type, message) {
-  document.querySelectorAll('.toast').forEach(t => t.remove());
-  const icons = { success: 'fa-circle-check', error: 'fa-circle-xmark', info: 'fa-circle-info' };
-  const toast = Object.assign(document.createElement('div'), {
-    className: `toast ${type}`,
-    innerHTML: `<i class="fa-solid ${icons[type] || icons.info}"></i> ${escHtml(message)}`,
-  });
-  document.body.appendChild(toast);
-  setTimeout(() => toast.remove(), 3200);
+  if (window.showToast) {
+    window.showToast(type, message);
+    return;
+  }
+  alert(message);
 }
 
 /* ===========================

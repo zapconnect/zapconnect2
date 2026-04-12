@@ -1,4 +1,4 @@
-// ======================================================
+﻿// ======================================================
 // CRM KANBAN — JS COMPLETO E CORRIGIDO
 // ======================================================
 
@@ -10,6 +10,29 @@ let activeTag = null; // tag clicada para filtrar
 
 let modalTags = [];
 let modalNotes = [];
+let viewMode = "kanban"; // "kanban" | "list"
+
+function normalizeStage(stage) {
+    const s = (stage || "Novo")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    const map = {
+        novo: "Novo",
+        qualificando: "Qualificando",
+        negociacao: "Negociação",
+        negociacao: "Negociação",
+        fechado: "Fechado",
+        perdido: "Perdido",
+    };
+    return map[s] || "Novo";
+}
+
+// Toast (usa helper global quando disponível)
+function showToast(msg, type = "success") {
+    if (window.showToast) return window.showToast(type, msg);
+    alert(msg);
+}
 
 // ------------------------------------------------------
 // ELEMENTOS
@@ -49,20 +72,30 @@ const closeModalBtn = document.getElementById("closeClientModal");
 
 closeModalBtn?.addEventListener("click", closeClientModal);
 
+// View toggle
+const btnViewKanban = document.getElementById("btnViewKanban");
+const btnViewList = document.getElementById("btnViewList");
+const listView = document.getElementById("listView");
+const kanbanBoard = document.getElementById("kanbanBoard");
 
-// Toast
-const toasts = document.getElementById("toasts");
-
-// ------------------------------------------------------
-// TOAST
-// ------------------------------------------------------
-function showToast(msg, type = "success") {
-    const div = document.createElement("div");
-    div.className = `toast ${type}`;
-    div.innerText = msg;
-    toasts.appendChild(div);
-    setTimeout(() => div.remove(), 3000);
+function setViewMode(mode) {
+    viewMode = mode;
+    document.body.classList.toggle("list-mode", mode === "list");
+    if (btnViewKanban) btnViewKanban.classList.toggle("active", mode === "kanban");
+    if (btnViewList) btnViewList.classList.toggle("active", mode === "list");
+    renderBoard(); // re-render to fill list/kanban
 }
+
+btnViewKanban?.addEventListener("click", () => setViewMode("kanban"));
+btnViewList?.addEventListener("click", () => setViewMode("list"));
+
+// define modo padrão em telas pequenas
+function autoViewByWidth() {
+    if (window.innerWidth <= 700) setViewMode("list");
+    else setViewMode(viewMode === "list" ? "kanban" : viewMode); // mantém escolha
+}
+window.addEventListener("resize", autoViewByWidth);
+window.addEventListener("load", autoViewByWidth);
 
 // ------------------------------------------------------
 // RENDER TAGS DO MODAL
@@ -117,7 +150,8 @@ async function loadClients() {
     const res = await fetch("/api/crm/list");
     const data = await res.json();
 
-    clients = data.clients || [];   // ✅
+    clients = data.clients || [];   // ok
+    console.log("CRM: clientes carregados", clients.length);
     renderBoard();
   } catch (err) {
     console.error(err);
@@ -171,10 +205,12 @@ function renderBoard() {
     };
 
     Object.values(stages).forEach(z => z.innerHTML = "");
+    if (listView) listView.innerHTML = "";
 
     const search = (searchInput?.value || "").toLowerCase();
     const counts = { Novo: 0, Qualificando: 0, "Negociação": 0, Fechado: 0, Perdido: 0 };
     const values = { Novo: 0, Qualificando: 0, "Negociação": 0, Fechado: 0, Perdido: 0 };
+    let rendered = 0;
 
     // Ordenar antes de renderizar
     const sorted = [...clients].sort((a, b) => {
@@ -198,12 +234,12 @@ function renderBoard() {
     });
 
     sorted.forEach(c => {
-        const stage = c.stage || "Novo";
+        const stage = normalizeStage(c.stage);
 
         // filtros
         if (stage === "Novo" && !filterNovo.checked) return;
         if (stage === "Qualificando" && !filterQualificando.checked) return;
-        if ((stage === "Negociação" || stage === "Negociacao") && !filterNegociacao.checked) return;
+        if (stage === "Negociação" && !filterNegociacao.checked) return;
         if (stage === "Fechado" && !filterFechado.checked) return;
         if (stage === "Perdido" && !filterPerdido.checked) return;
 
@@ -221,18 +257,56 @@ function renderBoard() {
         // filtro por tag clicada
         if (activeTag && !tags.includes(activeTag)) return;
 
-        const zoneName = stage === "Negociacao" ? "Negociação" : stage;
+        const chatPhone = (c.phone || "").replace(/\D/g, "");
+        const zoneName = stage;
         const zone = stages[zoneName];
         counts[zoneName]++;
         values[zoneName] = (values[zoneName] || 0) + (Number(c.deal_value) || 0);
+        rendered++;
+
+        // render list view card
+        if (listView) {
+            const item = document.createElement("div");
+            item.className = "list-card";
+            item.dataset.id = c.id;
+            const tagsHtml = tags.map(t => renderTag(t, false, false)).join(" ");
+            const stageColor = {
+                "Novo": "var(--p-novo)",
+                "Qualificando": "var(--p-qualificando)",
+                "Negociação": "var(--p-negociacao)",
+                "Perdido": "var(--p-perdido)",
+                "Fechado": "var(--p-fechado)"
+            }[zoneName] || "var(--accent)";
+
+            const valueStr = Number(c.deal_value) > 0
+                ? "R$ " + Number(c.deal_value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : "";
+            const fup = c.follow_up_date ? Number(c.follow_up_date) : null;
+            const fupLabel = fup ? new Date(fup).toLocaleDateString("pt-BR") : "";
+
+            item.innerHTML = `
+              <h3>${c.name || "Sem nome"}</h3>
+              <div class="list-cta">
+                <a href="/chat?contact=${chatPhone}" target="_blank">Abrir chat</a>
+                <button data-id="${c.id}" class="btn-list-edit">Editar</button>
+              </div>
+              <div class="list-meta">
+                ${c.phone || ""} • ${c.citystate || "Cidade não informada"}
+              </div>
+              <div class="list-meta">
+                ${valueStr ? `<span>${valueStr}</span>` : ""}
+                ${fupLabel ? `<span>Follow-up: ${fupLabel}</span>` : ""}
+                ${c.stage ? `<span class="list-stage" style="background:${stageColor}20;color:${stageColor};border:1px solid ${stageColor}40;">${zoneName}</span>` : ""}
+              </div>
+              <div class="list-tags">${tagsHtml || ""}</div>
+            `;
+            listView.appendChild(item);
+          }
 
         const card = document.createElement("div");
         card.className = "kanban-card";
         card.draggable = true;
         card.dataset.id = c.id;
-
-        // Formatar número para chatId (só dígitos + @c.us)
-        const chatPhone = (c.phone || "").replace(/\D/g, "");
 
         // Follow-up
         const now = Date.now();
@@ -257,11 +331,11 @@ function renderBoard() {
           <div class="card-inner">
 
             <!-- Topo: avatar + nome + valor -->
-            <div class="card-top">
-              <div class="card-avatar">${c.avatar
-                ? `<img src="${c.avatar}" alt="${initials}" />`
+          <div class="card-top">
+            <div class="card-avatar">${c.avatar
+                ? `<img src="${c.avatar}" alt="${initials}" loading="lazy" />`
                 : `<span>${initials}</span>`}
-              </div>
+            </div>
               <div class="card-info">
                 <div class="card-name">${c.name || "Sem nome"}</div>
                 <div class="card-phone">
@@ -323,6 +397,13 @@ function renderBoard() {
         zone.appendChild(card);
     });
 
+    if (!rendered) {
+        const empty = document.createElement("div");
+        empty.className = "kanban-empty";
+        empty.innerHTML = `<i class="fa-regular fa-circle-question"></i><p>Nenhum cliente encontrado.<br><small>Revise filtros ou cadastre um novo.</small></p>`;
+        document.getElementById("kanbanBoard")?.appendChild(empty);
+    }
+
     // contadores e valores por coluna
     for (const k in counts) {
         const el = document.getElementById("count-" + k);
@@ -376,7 +457,7 @@ function selectClient(id) {
     modalCity.value = selectedClient.citystate;
     modalStage.value = selectedClient.stage;
 
-    if (modalValue) modalValue.value = selectedClient.deal_value || "";
+    if (modalValue) modalValue.value = selectedClient.deal_value ?? "";
     if (modalFollowUp) {
         if (selectedClient.follow_up_date) {
             // Converter timestamp (ms) para formato YYYY-MM-DD do input date
@@ -475,11 +556,11 @@ modalDelete?.addEventListener("click", async () => {
             method: "DELETE"
         });
 
-        const data = await res.json();
+    const data = await res.json();
 
-        if (!data.ok) {
-            return showToast("Erro ao excluir cliente", "error");
-        }
+    if (!data.ok) {
+        return showToast("Erro ao excluir cliente", "error");
+    }
 
         showToast("Cliente excluído!");
         closeClientModal();
@@ -493,7 +574,18 @@ modalDelete?.addEventListener("click", async () => {
 // ------------------------------------------------------
 // SALVAR CLIENTE (CRIAR / EDITAR)
 // ------------------------------------------------------
+function parseDealValue(rawInput) {
+    const raw = String(rawInput ?? "").trim();
+    if (!raw) return 0;
+    const normalized = raw.replace(/\s+/g, "").replace(/\./g, "").replace(",", ".");
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : 0;
+}
+
 modalSave.addEventListener("click", async () => {
+    if (typeof clearAllFieldErrors === "function") clearAllFieldErrors(document);
+    if (typeof setButtonLoading === "function") setButtonLoading(modalSave, true, "Salvando...");
+
     const body = {
         name: modalName.value.trim(),
         phone: modalPhone.value.trim(),
@@ -501,42 +593,66 @@ modalSave.addEventListener("click", async () => {
         stage: modalStage.value,
         tags: JSON.stringify(modalTags),
         notes: JSON.stringify(modalNotes),
-        deal_value: parseFloat(modalValue?.value || "0") || 0,
+        deal_value: parseDealValue(modalValue?.value),
         follow_up_date: modalFollowUp?.value
             ? new Date(modalFollowUp.value + "T00:00:00").getTime()
             : null
     };
 
-    if (!body.name || !body.phone) {
-        return showToast("Nome e telefone obrigatórios!", "error");
+    let savedOk = false;
+    let hasError = false;
+
+    if (!body.name) {
+        if (typeof showFieldError === "function") showFieldError(modalName, "Nome obrigatório.");
+        hasError = true;
+    }
+    if (!body.phone) {
+        if (typeof showFieldError === "function") showFieldError(modalPhone, "Telefone obrigatório.");
+        hasError = true;
+    }
+
+    if (hasError) {
+        showToast("Nome e telefone obrigatórios!", "error");
+        if (typeof setButtonLoading === "function") setButtonLoading(modalSave, false);
+        return;
     }
 
     try {
         if (selectedClient?.id) {
             body.id = selectedClient.id;
 
-            await fetch("/api/crm/update", {
+            const res = await fetch("/api/crm/update", {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body)
             });
-
+            const data = await res.json();
+            if (!res.ok || data.ok === false) throw new Error(data.error || "Erro ao atualizar cliente");
             showToast("Cliente atualizado!");
+            savedOk = true;
         } else {
-            await fetch("/api/crm/create", {
+            const res = await fetch("/api/crm/create", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body)
             });
-
+            const data = await res.json();
+            if (!res.ok || data.ok === false) throw new Error(data.error || "Erro ao criar cliente");
             showToast("Cliente criado!");
+            savedOk = true;
         }
 
-        closeClientModal();
-        loadClients();
-
     } catch (err) {
-        showToast("Erro ao salvar cliente", "error");
+        console.error(err);
+        showToast(err?.message || "Erro ao salvar cliente", "error");
+    } finally {
+        if (!hasError) {
+            try { closeClientModal(); } catch {}
+        }
+        if (savedOk) {
+            try { await loadClients(); } catch (err) { console.error("Erro ao recarregar clientes:", err); }
+        }
+        if (typeof setButtonLoading === "function") setButtonLoading(modalSave, false);
     }
 });
 
@@ -641,12 +757,12 @@ function getFilteredClients() {
     const search = (searchInput?.value || "").toLowerCase();
 
     return clients.filter(c => {
-        const stage = c.stage || "Novo";
+        const stage = normalizeStage(c.stage);
 
         // Aplicar mesmos filtros do renderBoard
         if (stage === "Novo"          && !filterNovo.checked)          return false;
         if (stage === "Qualificando"  && !filterQualificando.checked)  return false;
-        if ((stage === "Negociação" || stage === "Negociacao") && !filterNegociacao.checked) return false;
+        if (stage === "Negociação" && !filterNegociacao.checked) return false;
         if (stage === "Fechado"       && !filterFechado.checked)       return false;
         if (stage === "Perdido"       && !filterPerdido.checked)       return false;
 
@@ -692,7 +808,7 @@ function exportCSV() {
     });
 
     const csv = [headers.join(","), ...rows].join("");
-    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" }); // BOM para Excel
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }); // BOM para Excel
     const url  = URL.createObjectURL(blob);
 
     const a = document.createElement("a");
@@ -753,3 +869,6 @@ sortDirBtn?.addEventListener("click", () => {
 // INIT
 // ------------------------------------------------------
 loadClients();
+
+
+

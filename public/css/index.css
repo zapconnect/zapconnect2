@@ -1,27 +1,4 @@
-/* ============================================
-   🔥 Painel Estilo WhatsApp Web (Dark)
-   ============================================ */
-
-:root {
-  /* Brand */
-  --primary: #6C64EF;        /* Roxo ZapConnect */
-  --primary-light: #CCD0F3;  /* Roxo claro / glow */
-  --accent: #1b0ffb;        
-  --danger: #d93838;
-  --accent2: #6C64EF;
-  /* Backgrounds */
-  --bg: #0D1222;           /* Fundo principal */
-  --sidebar: #161B30;      /* Sidebar / topo */
-  --panel: #0D1222;        /* Fundo de áreas */
-  --card: #161B30;         /* Cards */
-  --border: #373E59;       /* Bordas */
-  --hover: #1f2547;        /* Hover de botões */
-
-  /* Text */
-  --text: #FFFFFF;
-  --text-muted: #AAB0D9;
-  --white: #ffffff;
-}
+﻿@import url('./design-tokens.css');
 
 
 * {
@@ -46,12 +23,12 @@ body {
     background: var(--sidebar);
     border-bottom: 1px solid var(--border);
     padding: 10px 12px;
-    /* 👈 diminuiu */
+    /* ðŸ‘ˆ diminuiu */
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 10px;
-    /* 👈 novo */
+    /* ðŸ‘ˆ novo */
 }
 
 .topbar button,
@@ -103,7 +80,7 @@ body {
 .card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     padding: 16px;
 }
 
@@ -114,14 +91,14 @@ body {
 }
 
 /* ===========================
-   🔘 BOTÕES MODERNOS
+   ðŸ”˜ BOTÃ•ES MODERNOS
    =========================== */
 
 .btn {
     background: var(--hover);
     border: none;
     padding: 12px 18px;
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     color: var(--text);
     font-size: 14px;
     cursor: pointer;
@@ -138,7 +115,7 @@ body {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 
-/* Botão principal (verde WhatsApp) */
+/* BotÃ£o principal (verde WhatsApp) */
 .btn-primary {
     background: var(--primary);
     color: var(--white);
@@ -149,7 +126,7 @@ body {
     box-shadow: 0 4px 12px rgba(0, 168, 132, 0.4);
 }
 
-/* Botão de destaque (azul) */
+/* BotÃ£o de destaque (azul) */
 .btn-accent {
     background: #0274c7;
     color: var(--white);
@@ -160,7 +137,7 @@ body {
     box-shadow: 0 4px 12px rgba(2, 116, 199, 0.35);
 }
 
-/* Botão de perigo (vermelho) */
+/* BotÃ£o de perigo (vermelho) */
 .btn-danger {
     background: #d93838;
     color: var(--white);
@@ -171,7 +148,7 @@ body {
     box-shadow: 0 4px 12px rgba(217, 56, 56, 0.35);
 }
 
-/* Botões pequenos */
+/* BotÃµes pequenos */
 .small {
     padding: 6px 10px;
     font-size: 12px;
@@ -185,7 +162,7 @@ body {
 .textarea {
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius-md);
     color: var(--text);
     width: 100%;
     padding: 10px;
@@ -199,7 +176,7 @@ textarea {
 }
 
 /* ===============================
-   📱 LISTA DE SESSÕES (ZapConnect)
+   ðŸ“± LISTA DE SESSÃ•ES (ZapConnect)
 =============================== */
 
 #sessions-list {
@@ -209,11 +186,11 @@ textarea {
   margin-top: 12px;
 }
 
-/* Cada sessão */
+/* Cada sessÃ£o */
 .session-row {
   background: linear-gradient(180deg, #181f3d, #12172e);
   border: 1px solid #373E59;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 14px 16px;
   display: flex;
   align-items: center;
@@ -229,7 +206,7 @@ textarea {
   box-shadow: 0 16px 40px rgba(108, 100, 239, 0.28);
 }
 
-/* Nome da sessão */
+/* Nome da sessÃ£o */
 .session-row b {
   font-size: 15px;
   font-weight: 700;
@@ -247,13 +224,13 @@ textarea {
   color: #AAB0D9;
 }
 
-/* Botão Apagar */
+/* BotÃ£o Apagar */
 .session-row button {
   background: rgba(255, 95, 95, 0.12);
   border: 1px solid rgba(255, 95, 95, 0.4);
   color: #fff;
   padding: 8px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 13px;
   font-weight: 600;
@@ -265,21 +242,21 @@ textarea {
   box-shadow: 0 0 20px rgba(255, 95, 95, 0.5);
 }
 
-/* Ícones online/offline */
+/* Ãcones online/offline */
 .session-row b::before {
-  content: "●";
+  content: "â—";
   font-size: 12px;
   margin-right: 6px;
   color: #888;
 }
 
-/* Quando conectado (📱) */
+/* Quando conectado (ðŸ“±) */
 .session-row:has(b:contains()) b::before {
     color: #2EE6A6;
     text-shadow: 0 0 10px #2EE6A6;
 }
 
-/* Quando offline (📴) */
+/* Quando offline (ðŸ“´) */
 .session-row:has(b:contains()) b::before {
   color: #FF5F5F;
   text-shadow: 0 0 10px #FF5F5F;
@@ -299,7 +276,7 @@ textarea {
     width: 250px;
     border: 1px solid var(--border);
     padding: 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--white);
 }
 
@@ -312,7 +289,7 @@ textarea {
     font-size: 12px;
     border: 1px solid var(--border);
     padding: 12px;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     max-height: 200px;
     overflow-y: auto;
     line-height: 1.4;
@@ -365,10 +342,10 @@ footer a:hover {
     font-size: 13px;
     color: var(--text-muted);
     padding: 6px 10px;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: var(--hover);
     margin-right: 12px;
-    /* 👈 aproxima do botão */
+    /* ðŸ‘ˆ aproxima do botÃ£o */
 }
 
 
@@ -417,7 +394,7 @@ footer a:hover {
     background: rgba(0, 0, 0, 0.7);
     padding: 4px 8px;
     font-size: 12px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     color: #fff;
 }
 

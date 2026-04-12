@@ -7,7 +7,7 @@ const router = express.Router();
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
-const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET!;
+const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
 // 🔒 Tipagem estendida
 type InvoiceWithExtras = Stripe.Invoice & {
@@ -20,6 +20,11 @@ router.post(
   async (req, res) => {
     const sig = req.headers["stripe-signature"] as string;
     let event: Stripe.Event;
+
+    if (!endpointSecret) {
+      console.error("❌ STRIPE_WEBHOOK_SECRET não configurado");
+      return res.status(500).json({ error: "Webhook secret ausente no servidor" });
+    }
 
     // =====================================================
     // 🔐 VALIDAR WEBHOOK

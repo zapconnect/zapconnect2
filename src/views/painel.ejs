@@ -237,12 +237,22 @@
         </button>
 
         <!-- QR AREA -->
-        <div id="qr-preview" class="hidden qr-area">
+        <div id="qr-preview" class="qr-area">
 
           <!-- 🔄 LOADING -->
           <div id="qr-loading" class="qr-loading" style="display: none;">
             <i class="fa-solid fa-qrcode"></i>
             <p>Gerando QR Code…</p>
+          </div>
+
+          <!-- ⏳ PLACEHOLDER -->
+          <div id="qr-placeholder" class="qr-placeholder">
+            <div class="qr-shimmer"></div>
+            <div class="qr-lines">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
           </div>
 
           <!-- 📸 QR -->

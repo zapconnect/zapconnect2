@@ -6,6 +6,7 @@ const DEFAULTS = {
   source: "default",
   alertPhone: "",
   alertMessage: "Alerta: assuma a conversa {chatId} da sessão {sessionName}.",
+  fallbackCooldownMinutes: 5,
 };
 
 let lastConfig = { ...DEFAULTS };
@@ -154,6 +155,10 @@ function applyConfig(cfg) {
   qs("aiTransferPhrases").value = listToText(merged.aiTransferPhrases ?? DEFAULTS.aiTransferPhrases);
   qs("alertPhone").value = merged.alertPhone ?? "";
   qs("alertMessage").value = merged.alertMessage ?? DEFAULTS.alertMessage;
+  qs("fallbackCooldownMinutes").value =
+    merged.fallbackCooldownMinutes === null || merged.fallbackCooldownMinutes === undefined
+      ? DEFAULTS.fallbackCooldownMinutes
+      : merged.fallbackCooldownMinutes;
   qs("pill-src").textContent = `Fonte: ${merged.source === "db" ? "Personalizada" : "Padrão"}`;
 }
 
@@ -177,7 +182,13 @@ async function loadConfig() {
 
 async function saveConfig() {
   const sessionName = qs("sessionName").value.trim();
-  if (!sessionName) return showStatus("Informe o sessionName antes de salvar.", false);
+  const btnSave = qs("btnSave");
+  clearAllFieldErrors(document);
+  if (!sessionName) {
+    showFieldError("sessionName", "Selecione uma sessão.");
+    setButtonLoading(btnSave, false);
+    return showStatus("Informe o sessionName antes de salvar.", false);
+  }
 
   const transferList = textToList(qs("aiTransferPhrases").value);
   const payload = {
@@ -191,9 +202,15 @@ async function saveConfig() {
     aiTransferPhrases: transferList.length ? transferList : DEFAULTS.aiTransferPhrases,
     alertPhone: qs("alertPhone").value.trim(),
     alertMessage: qs("alertMessage").value.trim() || DEFAULTS.alertMessage,
+    fallbackCooldownMinutes: (() => {
+      const n = Number(qs("fallbackCooldownMinutes").value);
+      if (!Number.isFinite(n) || n < 0) return DEFAULTS.fallbackCooldownMinutes;
+      return n;
+    })(),
   };
 
   showStatus("Salvando...", true);
+  setButtonLoading(btnSave, true, "Salvando...");
   try {
     const res = await fetch("/api/fallback-settings", {
       method: "POST",
@@ -209,6 +226,8 @@ async function saveConfig() {
   } catch (err) {
     console.error(err);
     showStatus(err.message || "Erro ao salvar.", false);
+  } finally {
+    setButtonLoading(btnSave, false);
   }
 }
 

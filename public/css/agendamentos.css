@@ -1,26 +1,8 @@
-﻿:root {
-  --bg: #0D1222;
-  --panel: #161B30;
-  --input: #1A1F3A;
-  --stroke: #373E59;
-
-  --text: #FFFFFF;
-  --muted: #AAB0D9;
-
-  --accent: #6C64EF;
-  --accent-hover: #8B5CF6;
-
-  --danger: #E54848;
-  --danger-hover: #FF5F5F;
-
-  --table-head: #1E2346;
-  --shadow: rgba(108,100,239,.25);
-}
-
+﻿@import url('./design-tokens.css');
 /* BASE */
 * {
   box-sizing: border-box;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: var(--font-base);
 }
 
 body {
@@ -72,7 +54,7 @@ body {
 .card {
   background: linear-gradient(180deg, #181f3d, #12172e);
   border: 1px solid var(--stroke);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   padding: 24px;
   box-shadow: 0 12px 40px var(--shadow);
 }
@@ -88,7 +70,7 @@ body {
   width: 260px;
   background: linear-gradient(180deg, #111831, #0d1224);
   border: 1px solid var(--stroke);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 14px;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.03), 0 12px 30px rgba(0,0,0,.35);
 }
@@ -103,7 +85,7 @@ body {
 .preview-chat {
   background: radial-gradient(circle at 20% 10%, rgba(108,100,239,.2), rgba(17,24,48,.6));
   border: 1px solid var(--stroke);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -115,7 +97,7 @@ body {
   background: #075e54;
   color: #fff;
   padding: 10px 12px;
-  border-radius: 12px 12px 2px 12px;
+  border-radius: var(--radius-md) 12px 2px 12px;
   box-shadow: 0 10px 20px rgba(0,0,0,.35);
   position: relative;
   font-size: 14px;
@@ -131,7 +113,7 @@ body {
 .chat-file, .chat-image {
   align-self: flex-end;
   max-width: 220px;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: rgba(255,255,255,.05);
   border: 1px solid rgba(255,255,255,.08);
   padding: 8px 10px;
@@ -143,7 +125,7 @@ body {
 }
 .chat-image img {
   width: 100%;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   display: block;
 }
  .filters {
@@ -185,7 +167,7 @@ input, textarea, select {
   padding: 12px;
   background: var(--input);
   border: 1px solid var(--stroke);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   color: var(--text);
   font-size: 14px;
   outline: none;
@@ -212,7 +194,7 @@ select {
   border: 1px solid var(--stroke);
   color: var(--text);
   padding: 8px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -234,7 +216,7 @@ select {
   margin-top: 18px;
   width: 100%;
   padding: 14px;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   border: none;
   background: linear-gradient(135deg, var(--accent), var(--accent-hover));
   font-weight: 700;
@@ -327,7 +309,7 @@ th {
   border: none;
   color: #fff;
   padding: 6px 12px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   cursor: pointer;
   display: inline-flex;
@@ -374,7 +356,7 @@ th {
 .file-upload-area {
   margin-top: 6px;
   border: 2px dashed var(--stroke);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -408,14 +390,14 @@ th {
   gap: 10px;
   background: rgba(255,255,255,.04);
   border: 1px solid var(--stroke);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   padding: 10px;
 }
 
 .file-preview-area img {
   max-height: 80px;
   max-width: 120px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   object-fit: cover;
 }
 
@@ -436,7 +418,7 @@ th {
   background: rgba(229,72,72,.15);
   border: 1px solid rgba(229,72,72,.3);
   color: #e54848;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   width: 26px;
   height: 26px;
   display: flex;
@@ -465,7 +447,7 @@ th {
   color: #e54848;
 }
 
-/* Modal de confirmação */
+/* Modal de confirmaï¿½ï¿½o */
 .modal {
   position: fixed;
   inset: 0;
@@ -481,7 +463,7 @@ th {
   max-width: 90vw;
   background: #0f1530;
   border: 1px solid var(--stroke);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 20px;
   box-shadow: 0 20px 60px rgba(0,0,0,0.45);
 }
@@ -515,12 +497,12 @@ th {
   justify-content: center;
 }
 
-/* Botão editar */
+/* Botï¿½o editar */
 .btn-edit {
   background: var(--accent);
   color: #fff;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   border: none;
   cursor: pointer;
   display: inline-flex;

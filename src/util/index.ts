@@ -1,36 +1,84 @@
 import { type Whatsapp } from '@wppconnect-team/wppconnect';
 
 /**
- * ✂️ Divide mensagens sem quebrar links, PDF, JSON, números e e-mails
+ * ✂️ Divide mensagens em partes legíveis, preservando links/e-mails e evitando cortar frases.
+ * Regras:
+ *  - prioridade para quebras por parágrafo (linhas em branco)
+ *  - depois por frases (., !, ?)
+ *  - limite de ~800 caracteres por parte com fallback seguro
  */
 export function splitMessages(text: string): string[] {
   if (!text) return [];
 
-  const complexPattern =
-    /(http[s]?:\/\/[^\s]+)|(www\.[^\s]+)|([^\s]+@[^\s]+\.[^\s]+)|(["'].*?["'])|(\b\d+\.\s)|(\w+\.\w+)/g;
-  const placeholders = text.match(complexPattern) ?? [];
+  const MAX_LEN = 800;
 
-  const placeholder = 'PLACEHOLDER_';
-  let index = 0;
+  // Protege links/emails colocando placeholders
+  const complexPattern =
+    /(http[s]?:\/\/[^\s]+)|(www\.[^\s]+)|([^\s]+@[^\s]+\.[^\s]+)/g;
+  const placeholders = (text.match(complexPattern) as string[]) ?? [];
+  const placeholder = "PLACEHOLDER_";
+  let phIndex = 0;
 
   const withPlaceholders = text.replace(
     complexPattern,
-    () => `${placeholder}${index++}`
+    () => `${placeholder}${phIndex++}`
   );
 
-  const splitPattern = /(?<!\b\d+\.\s)(?<!\w+\.\w+)[^.?!]+(?:[.?!]+["']?|$)/g;
-  let parts = (withPlaceholders.match(splitPattern) ?? []).map((p) => p.trim());
+  // 1) Quebra por parágrafo duplo
+  const paragraphs = withPlaceholders
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
 
-  if (placeholders.length > 0) {
-    parts = parts.map((part) =>
-      placeholders.reduce(
-        (acc, val, idx) => acc.replace(`${placeholder}${idx}`, val),
-        part
-      )
-    );
+  const chunks: string[] = [];
+
+  const emitChunk = (chunk: string) => {
+    // restitui placeholders
+    let restored = chunk;
+    placeholders.forEach((val, idx) => {
+      restored = restored.replaceAll(`${placeholder}${idx}`, val);
+    });
+    restored = restored.trim();
+    if (restored.length) chunks.push(restored);
+  };
+
+  const splitParagraph = (para: string) => {
+    if (para.length <= MAX_LEN) {
+      emitChunk(para);
+      return;
+    }
+
+    // 2) Quebra por frases OU emojis (emoji conta como parte isolada)
+    const sentences =
+      [...para.matchAll(/(\p{Extended_Pictographic}|[^.?!]+[.?!]?)/gu)]
+        .map((m) => m[1]?.trim() ?? "")
+        .filter(Boolean) ?? [para];
+
+    let buffer = "";
+    for (const s of sentences) {
+      if ((buffer + " " + s).trim().length <= MAX_LEN) {
+        buffer = (buffer ? buffer + " " : "") + s;
+      } else {
+        if (buffer) emitChunk(buffer);
+        if (s.length <= MAX_LEN) {
+          buffer = s;
+        } else {
+          // 3) Fallback duro: corta em blocos de MAX_LEN
+          for (let i = 0; i < s.length; i += MAX_LEN) {
+            emitChunk(s.slice(i, i + MAX_LEN));
+          }
+          buffer = "";
+        }
+      }
+    }
+    if (buffer) emitChunk(buffer);
+  };
+
+  for (const p of paragraphs) {
+    splitParagraph(p);
   }
 
-  return parts.filter((p) => p.length > 0);
+  return chunks;
 }
 
 /**
@@ -47,10 +95,10 @@ export async function sendMessagesWithDelay({
 }): Promise<void> {
   const chatId = targetNumber.toString();
 
-  try { await client.startTyping(chatId); } catch {}
-
   for (const msg of messages) {
     if (!msg) continue;
+
+    try { await client.startTyping(chatId); } catch {}
 
     // Espera aleatória entre 2 e 5 segundos para simular comportamento humano
     const randomDelay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;

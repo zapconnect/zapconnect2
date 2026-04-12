@@ -1,4 +1,5 @@
 import { getDB } from "../database";
+import { isInSilenceWindow as isInSilenceWindowUtil } from "./silenceUtils";
 
 export type FallbackSensitivity = "low" | "medium" | "high";
 
@@ -8,7 +9,9 @@ export type FallbackReason =
   | "frustration_limit"
   | "ai_failure"
   | "ai_uncertainty"
-  | "ai_transfer";
+  | "ai_transfer"
+  | "cooldown"
+  | "silence_window";
 
 export interface FallbackSettings {
   enableFallback: boolean;
@@ -27,6 +30,7 @@ export interface FallbackSettings {
   webhookUrl: string;
   alertPhone?: string | null;
   alertMessage?: string;
+  fallbackCooldownMinutes?: number | null;
 }
 
 export interface EffectiveFallbackSettings extends FallbackSettings {
@@ -37,6 +41,7 @@ export interface EffectiveFallbackSettings extends FallbackSettings {
     iaFailures: number;
   };
   humanDurationMs: number | null;
+  cooldownMs: number | null;
 }
 
 export interface FallbackDecision {
@@ -99,6 +104,7 @@ const DEFAULT_FALLBACK_SETTINGS: FallbackSettings = {
   webhookUrl: "",
   alertPhone: null,
   alertMessage: "Alerta: assuma a conversa {chatId} da sessão {sessionName}.",
+  fallbackCooldownMinutes: 5,
 };
 
 type RuntimeState = {
@@ -110,8 +116,36 @@ type RuntimeState = {
   lastUpdated: number;
 };
 
-export const fallbackSettingsCache = new Map<string, EffectiveFallbackSettings>();
+type CachedEntry = { value: EffectiveFallbackSettings; storedAt: number };
+export const fallbackSettingsCache = new Map<string, CachedEntry>();
 const runtimeByChat = new Map<string, RuntimeState>();
+const lastFallbackAt = new Map<string, number>();
+const silenceCache = new Map<number, { value: boolean; fetchedAt: number }>();
+
+const LONG_AUDIO_SECONDS = 90;
+const DOCUMENT_NO_TEXT_WEIGHT = 2;
+
+// Palavras de frustração com peso maior (peso 2 por padrão aqui)
+const STRONG_FRUSTRATION_WEIGHTS: Record<string, number> = {
+  absurdo: 2,
+  ridiculo: 2,
+  "ridículo": 2,
+  processo: 2,
+  inaceitavel: 2,
+  "inaceitável": 2,
+  pessimo: 2,
+  "péssimo": 2,
+  horrivel: 2,
+  "horrível": 2,
+  enganacao: 2,
+  "enganação": 2,
+  procon: 2,
+  advogado: 2,
+  processar: 2,
+  cancelar: 2,
+};
+
+const CACHE_TTL_MS = 8 * 60 * 1000; // 8 minutos
 
 function cacheKey(userId: number | string, sessionName: string) {
   return `USER${userId}_${sessionName}`;
@@ -127,6 +161,23 @@ function normalize(text: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
+}
+
+async function isInSilenceWindow(userId: number): Promise<boolean> {
+  const now = Date.now();
+  const cached = silenceCache.get(userId);
+  if (cached && now - cached.fetchedAt < 5 * 60 * 1000) {
+    return cached.value;
+  }
+
+  try {
+    const value = await isInSilenceWindowUtil(userId);
+    silenceCache.set(userId, { value, fetchedAt: now });
+    return value;
+  } catch (err) {
+    console.warn("Falha ao checar horÃ¡rio de silÃªncio (fallback):", err);
+    return false;
+  }
 }
 
 function parseJsonArray(value: any, fallback: string[]): string[] {
@@ -175,10 +226,21 @@ function buildEffectiveSettings(
       ? null
       : Math.max(1, humanMinutes) * 60 * 1000;
 
+  const cooldownMinutes =
+    base.fallbackCooldownMinutes === null || base.fallbackCooldownMinutes === undefined
+      ? DEFAULT_FALLBACK_SETTINGS.fallbackCooldownMinutes
+      : Number(base.fallbackCooldownMinutes);
+
+  const cooldownMs =
+    cooldownMinutes === null || cooldownMinutes === 0
+      ? null
+      : Math.max(1, cooldownMinutes) * 60 * 1000;
+
   return {
     ...base,
     limits,
     humanDurationMs,
+    cooldownMs,
     source,
   };
 }
@@ -189,7 +251,9 @@ export async function loadFallbackSettings(
 ): Promise<EffectiveFallbackSettings> {
   const key = cacheKey(userId, sessionName);
   const cached = fallbackSettingsCache.get(key);
-  if (cached) return cached;
+  if (cached && Date.now() - cached.storedAt < CACHE_TTL_MS) {
+    return cached.value;
+  }
 
   const db = getDB();
 
@@ -205,7 +269,7 @@ export async function loadFallbackSettings(
 
   if (!row) {
     const effective = buildEffectiveSettings({ ...DEFAULT_FALLBACK_SETTINGS }, "default");
-    fallbackSettingsCache.set(key, effective);
+    fallbackSettingsCache.set(key, { value: effective, storedAt: Date.now() });
     return effective;
   }
 
@@ -229,10 +293,14 @@ export async function loadFallbackSettings(
     webhookUrl: row.webhook_url || DEFAULT_FALLBACK_SETTINGS.webhookUrl,
     alertPhone: row.alert_phone || DEFAULT_FALLBACK_SETTINGS.alertPhone,
     alertMessage: row.alert_message || DEFAULT_FALLBACK_SETTINGS.alertMessage,
+    fallbackCooldownMinutes:
+      row.fallback_cooldown_minutes === null || row.fallback_cooldown_minutes === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.fallbackCooldownMinutes
+        : Number(row.fallback_cooldown_minutes),
   };
 
   const effective = buildEffectiveSettings(settings, "db");
-  fallbackSettingsCache.set(key, effective);
+  fallbackSettingsCache.set(key, { value: effective, storedAt: Date.now() });
   return effective;
 }
 
@@ -263,8 +331,9 @@ export async function saveFallbackSettings(
       notify_webhook,
       webhook_url,
       alert_phone,
-      alert_message
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      alert_message,
+      fallback_cooldown_minutes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       enable_fallback = VALUES(enable_fallback),
       fallback_message = VALUES(fallback_message),
@@ -281,7 +350,8 @@ export async function saveFallbackSettings(
       notify_webhook = VALUES(notify_webhook),
       webhook_url = VALUES(webhook_url),
       alert_phone = VALUES(alert_phone),
-      alert_message = VALUES(alert_message)
+      alert_message = VALUES(alert_message),
+      fallback_cooldown_minutes = VALUES(fallback_cooldown_minutes)
     `,
     [
       userId,
@@ -302,11 +372,12 @@ export async function saveFallbackSettings(
       payload.webhookUrl,
       payload.alertPhone || null,
       payload.alertMessage || DEFAULT_FALLBACK_SETTINGS.alertMessage,
+      payload.fallbackCooldownMinutes ?? DEFAULT_FALLBACK_SETTINGS.fallbackCooldownMinutes,
     ]
   );
 
   const effective = buildEffectiveSettings(payload, "db");
-  fallbackSettingsCache.set(cacheKey(userId, sessionName), effective);
+  fallbackSettingsCache.set(cacheKey(userId, sessionName), { value: effective, storedAt: Date.now() });
   return effective;
 }
 
@@ -340,14 +411,69 @@ function getRuntimeState(key: string): RuntimeState {
   return fresh;
 }
 
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= b.length; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1, // deletion
+        dp[i][j - 1] + 1, // insertion
+        dp[i - 1][j - 1] + cost // substitution
+      );
+    }
+  }
+  return dp[a.length][b.length];
+}
+
+function fuzzyMatchText(text: string, candidate: string): boolean {
+  const normText = normalize(text);
+  const normCand = normalize(candidate);
+  if (!normCand) return false;
+
+  // 1) match direto por substring
+  if (normText.includes(normCand)) return true;
+
+  // 2) fuzzy por palavras (corrige typos simples)
+  const words = normText.split(/\s+/).filter(Boolean);
+  for (const w of words) {
+    const dist = levenshtein(w, normCand);
+    const maxLen = Math.max(w.length, normCand.length);
+    const ratio = maxLen === 0 ? 1 : dist / maxLen;
+
+    // tolerância: até 1 erro para palavras curtas, até 2 para médias,
+    // ou distância relativa até 30%
+    if (
+      (maxLen <= 4 && dist <= 1) ||
+      (maxLen <= 8 && dist <= 2) ||
+      ratio <= 0.3
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function findMatch(text: string, options: string[]): string | null {
-  const norm = normalize(text);
   for (const raw of options) {
-    const candidate = normalize(String(raw || ""));
-    if (!candidate) continue;
-    if (norm.includes(candidate)) return raw;
+    const candidate = String(raw || "");
+    if (!candidate.trim()) continue;
+    if (fuzzyMatchText(text, candidate)) return raw;
   }
   return null;
+}
+
+function frustrationWeight(term: string): number {
+  const norm = normalize(term);
+  return STRONG_FRUSTRATION_WEIGHTS[norm] ?? 1;
 }
 
 export async function checkFallbackTriggers(params: {
@@ -357,6 +483,9 @@ export async function checkFallbackTriggers(params: {
   event: "user_message" | "ai_response" | "ai_error";
   message?: string;
   aiResponse?: string;
+  mediaType?: "audio" | "document" | "image" | "video";
+  mediaSeconds?: number | null;
+  hasText?: boolean;
 }): Promise<FallbackDecision> {
   const config = await loadFallbackSettings(params.userId, params.sessionName);
 
@@ -364,10 +493,37 @@ export async function checkFallbackTriggers(params: {
     return { shouldFallback: false, config };
   }
 
-  const state = getRuntimeState(runtimeKey(params.userId, params.sessionName, params.chatId));
+  // janela de silêncio (reuse do horário de silêncio da IA)
+  if (await isInSilenceWindow(params.userId)) {
+    return { shouldFallback: false, reason: "silence_window", config };
+  }
 
-  if (params.event === "user_message" && params.message) {
-    const text = params.message;
+  const state = getRuntimeState(runtimeKey(params.userId, params.sessionName, params.chatId));
+  const cooldownKey = runtimeKey(params.userId, params.sessionName, params.chatId);
+  const lastFb = lastFallbackAt.get(cooldownKey);
+  if (config.cooldownMs && lastFb && Date.now() - lastFb < config.cooldownMs) {
+    return { shouldFallback: false, reason: "cooldown", config };
+  }
+
+  if (params.event === "user_message") {
+    const text = params.message || "";
+    const isLongAudio =
+      params.mediaType === "audio" &&
+      params.mediaSeconds !== null &&
+      params.mediaSeconds !== undefined &&
+      Number(params.mediaSeconds) >= LONG_AUDIO_SECONDS;
+
+    const isDocumentNoText = params.mediaType === "document" && params.hasText === false;
+
+    if (isLongAudio) {
+      state.frustrationScore += DOCUMENT_NO_TEXT_WEIGHT; // peso 2 para áudio longo
+      state.lastFrustration = "[audio_longo]";
+    }
+
+    if (isDocumentNoText) {
+      state.frustrationScore += DOCUMENT_NO_TEXT_WEIGHT; // peso 2 para doc sem contexto
+      state.lastFrustration = "[documento_sem_contexto]";
+    }
     const directRequest = findMatch(text, config.triggerWords);
     if (directRequest) {
       return {
@@ -380,7 +536,7 @@ export async function checkFallbackTriggers(params: {
 
     const matchFrustration = findMatch(text, config.frustrationWords);
     if (matchFrustration) {
-      state.frustrationScore += 1;
+      state.frustrationScore += frustrationWeight(matchFrustration);
       state.lastFrustration = matchFrustration;
     } else {
       state.frustrationScore = Math.max(0, state.frustrationScore - 1);
@@ -466,4 +622,8 @@ export function clearFallbackRuntime(userId: number, sessionName: string, chatId
 
 export function resetFallbackCache(userId: number, sessionName: string) {
   fallbackSettingsCache.delete(cacheKey(userId, sessionName));
+}
+
+export function markFallbackTimestamp(userId: number, sessionName: string, chatId: string) {
+  lastFallbackAt.set(runtimeKey(userId, sessionName, chatId), Date.now());
 }

@@ -14,6 +14,8 @@
     crossorigin="anonymous" referrerpolicy="no-referrer" />
 
   <link rel="icon" href="/img/favinco.png" />
+  <script src="/js/loading-utils.js"></script>
+  <script src="/js/toast.js"></script>
 
   <style>
     :root {
@@ -268,7 +270,7 @@
         showNotification("Conta criada com sucesso!", "success");
 
         setTimeout(() => {
-          window.location.href = "/login";
+          window.location.href = "/onboarding";
         }, 1500);
 
       } catch {

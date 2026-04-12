@@ -18,9 +18,15 @@ function togglePassword() {
 async function login() {
   const email = document.getElementById("email").value.trim();
   const password = document.getElementById("password").value;
+  const errEmail = document.getElementById("email-error");
+  const errPass  = document.getElementById("password-error");
+
+  if (errEmail) errEmail.textContent = "";
+  if (errPass)  errPass.textContent  = "";
 
   if (!email || !password) {
-    alert("Digite email e senha");
+    if (errEmail) errEmail.textContent = !email ? "Informe seu email" : "";
+    if (errPass)  errPass.textContent  = !password ? "Informe sua senha" : "";
     return;
   }
 
@@ -52,7 +58,14 @@ async function login() {
 
   // ❌ erro normal
   if (!res.ok || data.error) {
-    alert(data.error || "Erro ao fazer login");
+    const msg = (data.error || "").toLowerCase();
+    if (msg.includes("email") || msg.includes("usuário")) {
+      if (errEmail) errEmail.textContent = data.error || "E-mail não encontrado";
+    } else if (msg.includes("senha") || msg.includes("password")) {
+      if (errPass) errPass.textContent = data.error || "Senha incorreta";
+    } else {
+      if (errPass) errPass.textContent = data.error || "Não foi possível entrar";
+    }
     return;
   }
 

@@ -11,6 +11,7 @@
   const btnAddAction = document.getElementById("btnAddAction");
   const btnSave = document.getElementById("flowSave");
   const btnCancel = document.getElementById("flowCancel");
+  const flowActive = document.getElementById("flowActive");
   const user = JSON.parse(document.getElementById("userdata").dataset.user);
 
 
@@ -27,11 +28,14 @@
         <div style="display:flex;justify-content:space-between;align-items:center">
           <strong>${f.name}</strong>
           <div>
+            <span style="font-size:12px;color:${f.active ? '#22c55e' : '#f97316'};margin-right:8px;">${f.active ? 'Ativo' : 'Pausado'}</span>
+            <button data-id="${f.id}" class="test-btn">🧪</button>
             <button data-id="${f.id}" class="edit-btn">✏️</button>
+            <button data-id="${f.id}" class="toggle-btn">${f.active ? '⏸' : '▶️'}</button>
             <button data-id="${f.id}" class="del-btn">🗑️</button>
           </div>
         </div>
-        <div style="margin-top:6px;color:#94a3b8">trigger: ${f.trigger}</div>
+        <div style="margin-top:6px;color:#94a3b8">trigger(s): ${(f.triggers ? JSON.parse(f.triggers) : [f.trigger]).join(", ")}</div>
         <div class="actions-list">
           ${(JSON.parse(f.actions) || []).slice(0,3).map(a => `<div class="action-item">${a.type}${a.payload ? `: ${String(a.payload).slice(0,50)}` : ''}</div>`).join('')}
         </div>
@@ -41,6 +45,8 @@
     // listeners
     document.querySelectorAll(".edit-btn").forEach(b => b.onclick = e => openEdit(Number(b.dataset.id)));
     document.querySelectorAll(".del-btn").forEach(b => b.onclick = e => delFlow(Number(b.dataset.id)));
+    document.querySelectorAll(".toggle-btn").forEach(b => b.onclick = () => toggleFlow(Number(b.dataset.id)));
+    document.querySelectorAll(".test-btn").forEach(b => b.onclick = () => testFlow(Number(b.dataset.id)));
   }
 
   async function fetchList(){
@@ -58,6 +64,7 @@
     modalTitle.innerText = "Novo Fluxo";
     flowName.value = "";
     flowTrigger.value = "";
+    if (flowActive) flowActive.checked = true;
     renderActions();
     modal.style.display = "flex";
   }
@@ -68,10 +75,12 @@
     editing = f;
     modalTitle.innerText = "Editar Fluxo";
     flowName.value = f.name;
-    flowTrigger.value = f.trigger;
+    flowTrigger.value = (f.triggers ? JSON.parse(f.triggers)[0] : f.trigger) || "";
+    if (flowActive) flowActive.checked = f.active !== 0;
     actions = JSON.parse(f.actions || "[]");
     renderActions();
     modal.style.display = "flex";
+    // também popula editor visual se aberto
   }
 
   function closeModal(){ modal.style.display = "none"; }
@@ -147,10 +156,17 @@
   
 
   btnSave.onclick = async () => {
+    clearAllFieldErrors(document);
     const name = flowName.value.trim();
     const trigger = flowTrigger.value.trim();
-    if (!name || !trigger) return alert("Nome e trigger obrigatórios");
-    const payload = { name, trigger, actions };
+    if (!name || !trigger) {
+      if (!name) showFieldError(flowName, "Nome obrigatório.");
+      if (!trigger) showFieldError(flowTrigger, "Trigger obrigatório.");
+      return;
+    }
+    const active = flowActive ? flowActive.checked : true;
+    const payload = { name, trigger, actions, active };
+    setButtonLoading(btnSave, true, editing ? "Salvando..." : "Criando...");
     try {
       if (editing) {
         await fetch("/api/flows/update", { method: "PUT", headers: { "Content-Type":"application/json" }, body: JSON.stringify({ id: editing.id, ...payload }) });
@@ -161,6 +177,8 @@
       closeModal();
     } catch (err) {
       alert("Erro salvar");
+    } finally {
+      setButtonLoading(btnSave, false);
     }
   };
 
@@ -172,7 +190,60 @@
     await fetchList();
   }
 
+  async function toggleFlow(id){
+    const f = flows.find(x => x.id === id);
+    if (!f) return;
+    const next = f.active ? 0 : 1;
+    await fetch("/api/flows/active", {
+      method: "PUT",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify({ id, active: next })
+    });
+    await fetchList();
+  }
+
+  async function testFlow(id){
+    const message = prompt("Digite a mensagem de teste:");
+    if (!message) return;
+    try {
+      const res = await fetch("/api/flows/test", {
+        method: "POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify({ id, message })
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        return alert("Falha ao testar fluxo");
+      }
+      if (!data.matched) {
+        return alert("Nenhum trigger combinou com a mensagem.");
+      }
+      if (!data.conditionPassed) {
+        return alert("Triggers combinaram, mas as condições do fluxo falharam.");
+      }
+      const logs = (data.logs || []).join("\n");
+      alert(`Fluxo executaria:\n${logs || "(sem ações)"}`);
+    } catch (err) {
+      alert("Erro ao testar fluxo");
+    }
+  }
+
   btnNew.onclick = openNew;
+  // abrir editor visual por fluxo
+  window.addEventListener('visualFlowUpdate', (ev) => {
+    const { id, actions: newActions } = ev.detail || {};
+    if (!id || !newActions) return;
+    const f = flows.find(x => x.id === id);
+    if (f) {
+      f.actions = JSON.stringify(newActions);
+      actions = newActions;
+      if (editing && editing.id === id) {
+        renderActions();
+      }
+      alert("Fluxo visual aplicado. Clique em Salvar para persistir.");
+    }
+  });
+
   // fecha modal clicando fora
   modal.onclick = e => { if (e.target === modal) closeModal(); };
 

@@ -5,6 +5,8 @@
   <title>Fluxos Inteligentes</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/css/fluxos.css">
+  <!-- Drawflow (visual editor) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.47/dist/drawflow.min.css">
   <link rel="icon" href="/img/favinco.png" />
   <style>
     /* ajustes mínimos para a tela de fluxos */
@@ -21,11 +23,67 @@
     <h1>Fluxos Inteligentes</h1>
     <p>Criar / editar / deletar fluxos por usuário</p>
 
+    <div class="flow-card" id="welcomeCard" style="margin-bottom:16px; width:100%; box-sizing:border-box;">
+      <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+        <div>
+          <h2 style="margin:0;">Fluxo de Boas-vindas automático</h2>
+          <p style="color:#94a3b8; margin:4px 0 8px;">
+            Dispara na primeira mensagem de um novo contato (registrado no CRM), sem palavra-chave.
+          </p>
+          <div id="welcomeStatus" style="color:#cbd5e1; font-size:13px;">Carregando...</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="btnWelcomeEdit" class="btn">Configurar ações</button>
+          <button id="btnWelcomeToggle" class="btn">Ativar/Desativar</button>
+          <button id="btnWelcomeTest" class="btn">Simular</button>
+        </div>
+      </div>
+      <div style="margin-top:10px;">
+        <strong>Prévia das ações</strong>
+        <div id="welcomeActions" class="actions-list" style="margin-top:6px;"></div>
+      </div>
+    </div>
+
     <div style="margin-bottom:12px">
       <button id="btnNewFlow" class="btn">+ Novo Fluxo</button>
+      <button id="btnVisualFlow" class="btn" style="margin-left:8px;">Editor Visual (Beta)</button>
     </div>
 
     <div id="flowsWrap" class="flow-list"></div>
+  </div>
+
+  <!-- MODAL WELCOME FLOW -->
+  <div id="welcomeModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center;">
+    <div style="background:var(--panel,#0f172a); padding:20px; border-radius:10px; width:720px; max-height:90vh; overflow:auto;">
+      <h2>Fluxo de Boas-vindas</h2>
+
+      <label>Nome</label>
+      <input id="welcomeName" style="width:100%; padding:8px; margin-bottom:8px">
+
+      <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <input type="checkbox" id="welcomeActive"> Ativo
+      </label>
+
+      <h4>Ações</h4>
+      <div id="welcomeModalActions"></div>
+
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <select id="welcomeAddActionType">
+          <option value="send_text">Enviar Texto</option>
+          <option value="delay">Aguardar (segundos)</option>
+          <option value="send_media">Enviar Mídia (base64 URL)</option>
+          <option value="handover_human">Encaminhar para humano</option>
+          <option value="update_crm">Atualizar CRM</option>
+          <option value="call_webhook">Chamar Webhook</option>
+        </select>
+        <button id="welcomeAddAction" class="btn">Adicionar Ação</button>
+      </div>
+
+      <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
+        <button id="welcomeCancel" class="btn">Cancelar</button>
+        <button id="welcomeSave" class="btn">Salvar</button>
+      </div>
+    </div>
   </div>
 
   <!-- MODAL -->
@@ -38,6 +96,10 @@
 
       <label>Trigger (palavra/expressão)</label>
       <input id="flowTrigger" style="width:100%; padding:8px; margin-bottom:8px" placeholder="ex: preço, orçamento, ajuda">
+
+      <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+        <input type="checkbox" id="flowActive" checked> Ativo
+      </label>
 
       <h4>Ações</h4>
       <div id="flowActions"></div>
@@ -59,8 +121,51 @@
     </div>
   </div>
 
+  <!-- MODAL EDITOR VISUAL -->
+  <div id="visualModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center;">
+    <div style="background:#0f172a; padding:12px; border-radius:10px; width:90vw; height:90vh; display:flex; flex-direction:column; gap:8px;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <strong id="visualTitle">Editor Visual</strong>
+          <span style="color:#94a3b8; margin-left:8px;">Arraste blocos e conecte. Salvar converte para o fluxo atual.</span>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button id="visualClose" class="btn">Fechar</button>
+          <button id="visualApply" class="btn">Aplicar ao Fluxo</button>
+        </div>
+      </div>
+      <div style="display:flex; gap:8px; flex:1; min-height:0;">
+        <div id="palette" style="width:200px; background:#111827; border:1px solid #1f2937; border-radius:8px; padding:8px; overflow:auto;">
+          <h4 style="margin:4px 0;">Blocos</h4>
+          <div class="draggable-node" data-type="start">Start</div>
+          <div class="draggable-node" data-type="send_text">Texto</div>
+          <div class="draggable-node" data-type="delay">Delay</div>
+          <div class="draggable-node" data-type="send_media">Mídia</div>
+          <div class="draggable-node" data-type="update_crm">Atualizar CRM</div>
+          <div class="draggable-node" data-type="call_webhook">Webhook</div>
+          <div class="draggable-node" data-type="branch">Branch</div>
+          <style>
+            .draggable-node { background:#1f2937; padding:8px; border-radius:6px; margin-bottom:6px; cursor:grab; }
+            .draggable-node:hover { background:#374151; }
+          </style>
+        </div>
+        <div id="drawflow-wrapper" style="flex:1; background:#0b1224; border:1px solid #1f2937; border-radius:8px; position:relative; overflow:hidden;">
+          <div id="drawflow" style="width:100%; height:100%;"></div>
+        </div>
+        <div id="nodeProps" style="width:260px; background:#111827; border:1px solid #1f2937; border-radius:8px; padding:8px; overflow:auto;">
+          <h4 style="margin:4px 0;">Propriedades</h4>
+          <div id="nodePropsContent" style="color:#cbd5e1;">Selecione um bloco.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="userdata" data-user='<%- JSON.stringify(user || {}) %>'></div>
 
+  <script src="/js/loading-utils.js"></script>
+  <script src="/js/welcome-flow.js"></script>
   <script src="/js/fluxos.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.47/dist/drawflow.min.js"></script>
+  <script src="/js/fluxos-visual.js"></script>
 </body>
 </html>

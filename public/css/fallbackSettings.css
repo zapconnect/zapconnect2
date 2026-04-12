@@ -1,4 +1,4 @@
-body {
+﻿body {
   background: #0b1224;
   color: #e2e8f0;
   font-family: "Inter","Segoe UI",system-ui,sans-serif;
@@ -38,7 +38,7 @@ body {
 .card {
   background: #0f172a;
   border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   padding: 16px 18px;
   margin-bottom: 14px;
 }
@@ -68,7 +68,7 @@ textarea,
 select {
   width: 100%;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255,255,255,0.12);
   background: #0b1224;
   color: #e2e8f0;
@@ -115,7 +115,7 @@ textarea {
   width: 100%;
   padding: 12px 16px;
   border: none;
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   font-weight: 700;
   cursor: pointer;
   background: linear-gradient(135deg, #16a085, #0ea5e9);
@@ -127,7 +127,7 @@ textarea {
   width: 100%;
   padding: 12px 16px;
   border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: #e2e8f0;
   cursor: pointer;
@@ -136,7 +136,7 @@ textarea {
 .btn-ghost.small {
   width: auto;
   padding: 10px 14px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .actions {
@@ -179,7 +179,7 @@ textarea {
   padding: 10px 12px;
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.05);
-  border-radius: 10px;
+  border-radius: var(--radius-md);
 }
 
 .table-row .actions-cell {
@@ -207,7 +207,7 @@ textarea {
 
 .status {
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   margin-bottom: 10px;
   font-size: 14px;
 }
@@ -239,3 +239,4 @@ textarea {
     width: 100%;
   }
 }
+

@@ -1,0 +1,220 @@
+﻿/* ===============================
+   Design Tokens â€” ZapConnect
+   Fonte Ãºnica de cores/spacing/raios
+   AlteraÃ§Ãµes aqui refletem em todo o app
+=============================== */
+:root {
+  /* Tipografia */
+  --font-base: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  /* Base / superfÃ­cies */
+  --bg: #0D1222;
+  --bg-main: var(--bg);
+  --bg-panel: #0D1222;
+  --bg-sidebar: #161B30;
+  --bg-chat: #0B1022;
+  --panel: #161B30;
+  --card: #161B30;
+  --card-alt: #1A1F3A;
+  --surface: #0d1224;
+  --surface-2: #111828;
+  --bg-input: #1A1F3A;
+  --input: #1A1F3A;
+  --border: #373E59;
+  --stroke: #373E59;
+  --table-head: #1E2346;
+  --shadow: rgba(108,100,239,.25);
+  --border-hover: rgba(255, 255, 255, 0.14);
+
+  /* Tipografia */
+  --text-primary: #FFFFFF;
+  --text-secondary: #AAB0D9;
+  --text: #e8eaf0;
+  --text-muted: #5a6480;
+  --text-dim: #8892aa;
+  --muted: #AAB0D9;
+
+  /* AÃ§Ãµes / feedback */
+  --accent: #6C64EF;
+  --accent-2: #8B5CF6;
+  --accent-strong: #4f6ef7; /* usado no dashboard */
+  --accent-glow: rgba(79, 110, 247, 0.25);
+  --primary: #6C64EF;
+  --primary-hover: #8B5CF6;
+  --primary-light: #CCD0F3;
+  --danger: #E54848;
+  --warning: #F2C94C;
+  --danger-hover: #FF5F5F;
+  --success: #2EE6A6;
+  --yellow: #F2C94C;
+  --blue: #3b82f6;
+  --purple: #a855f7;
+  --green: #10b981;
+  --green-bg: rgba(16, 185, 129, 0.12);
+  --yellow-bg: rgba(245, 158, 11, 0.12);
+  --red-bg: rgba(244, 63, 94, 0.12);
+  --blue-bg: rgba(59, 130, 246, 0.12);
+  --purple-bg: rgba(168, 85, 247, 0.12);
+
+  /* WhatsApp chat specifics */
+  --bubble-user: #6C64EF;
+  --bubble-bot: #161B30;
+  --scroll: #2A2F55;
+
+  /* Gradients / misc */
+  --accent-dashboard: #4f6ef7;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+
+  /* Pipeline cores CRM */
+  --p-novo: #F2C94C;
+  --p-qualificando: #F2994A;
+  --p-negociacao: #6C64EF;
+  --p-fechado: #2EE6A6;
+  --p-perdido: #FF5F5F;
+
+  /* Legacy aliases */
+  --white: #ffffff;
+  --hover: #1f2547;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+}
+
+/* ===========================
+   Loading states padronizados
+=========================== */
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.is-loading {
+  pointer-events: none;
+  opacity: 1 !important;
+}
+
+.loading-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.spinner-inline {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  display: inline-block;
+}
+
+.loading-label {
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.2px;
+}
+
+/* ===========================
+   Estados de validação
+=========================== */
+.input-error {
+  border-color: var(--danger) !important;
+  box-shadow: 0 0 0 2px rgba(229, 72, 72, 0.15);
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+/* ===========================
+   Toast global
+=========================== */
+.toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toast {
+  min-width: 260px;
+  max-width: 380px;
+  background: var(--surface-2);
+  color: var(--text-primary);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  border-left: 4px solid var(--accent);
+  animation: slideIn 0.28s ease, fadeOut 0.35s ease forwards;
+  animation-delay: 0s, 3s;
+}
+
+.toast.hide {
+  animation: fadeOut 0.25s ease forwards;
+}
+
+.toast .toast-icon {
+  font-size: 18px;
+  margin-top: 2px;
+}
+
+.toast .toast-body {
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.toast.success { border-color: var(--success); }
+.toast.error   { border-color: var(--danger); }
+.toast.warn    { border-color: var(--warning); color: #111827; background: #fff8e1; }
+.toast.info    { border-color: var(--accent); }
+
+@keyframes slideIn {
+  from { transform: translateY(-10px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; pointer-events: none; }
+}
+
+/* ===========================
+   Scrollbar global
+=========================== */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
