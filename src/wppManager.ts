@@ -13,6 +13,8 @@ import { getDB } from "./database";
 import { splitMessages, sendMessagesWithDelay } from "./util";
 import { io } from "./server";
 import { canUseIA, consumeIaMessage } from "./services/iaLimiter";
+import { assertValidPhone, buildWhatsAppJid, sanitizePhone, validatePhone } from "./utils/phoneUtils";
+import { withTimeout } from "./utils/withTimeout";
 import {
   checkFallbackTriggers,
   clearFallbackRuntime,
@@ -59,9 +61,10 @@ export async function ensureChat(
   client: any,
   number: string
 ): Promise<string> {
-  const jid = `${number}@c.us`;
+  const sanitized = assertValidPhone(number, "destinatário");
+  const jid = buildWhatsAppJid(sanitized);
 
-  const exists = await client.checkNumberStatus(jid);
+  const exists = await withTimeout(client.checkNumberStatus(jid), WPP_TIMEOUT_MS, "checkNumberStatus");
   if (!exists || !exists.canReceiveMessage) {
     throw new Error("Número inválido ou não registrado no WhatsApp");
   }
@@ -220,6 +223,7 @@ async function saveCRMClient(
 
     const avatar = msg.sender?.profilePicThumbObj?.eurl || null;
     const lastSeen = Date.now();
+    const cacheKey = `USER${userId}_${phone}`;
 
     // Verifica se o cliente já existe para ESTE userId e ESTE telefone
     const existing = await db.get<{ id: number; stage: string | null; tags: string | null }>(
@@ -228,13 +232,22 @@ async function saveCRMClient(
     );
 
     if (existing) {
-      // Atualiza nome/avatar/last_seen
-      await db.run(
-        `UPDATE crm 
-         SET name = ?, avatar = ?, last_seen = ?
-         WHERE id = ?`,
-        [name, avatar, lastSeen, existing.id]
-      );
+      const cached = crmWriteCache.get(cacheKey);
+      const withinTtl = cached && lastSeen - cached.lastWrite < CRM_UPDATE_TTL_MS;
+      const sameName = cached ? cached.name === name : false;
+      const sameAvatar = cached ? cached.avatar === avatar : false;
+
+      // Só grava se mudou algo relevante ou se TTL expirou
+      if (!withinTtl || !sameName || !sameAvatar) {
+        await db.run(
+          `UPDATE crm 
+           SET name = ?, avatar = ?, last_seen = ?
+           WHERE id = ?`,
+          [name, avatar, lastSeen, existing.id]
+        );
+        crmWriteCache.set(cacheKey, { name, avatar, lastWrite: lastSeen });
+      }
+
       let parsedTags: string[] = [];
       try { parsedTags = existing.tags ? JSON.parse(existing.tags) : []; } catch { }
       return {
@@ -262,6 +275,7 @@ async function saveCRMClient(
           lastSeen
         ]
       );
+      crmWriteCache.set(cacheKey, { name, avatar, lastWrite: lastSeen });
       return {
         isNew: true,
         crmId: result.insertId,
@@ -299,6 +313,7 @@ async function primeChatAICache(userId: number) {
     for (const r of rows) {
       const key = `USER${userId}_${r.chat_id}`;
       chatAILock.set(key, r.ai_enabled === 1);
+      chatAIActivity.set(key, Date.now());
     }
     chatAICacheLoaded.add(userId);
   } catch (err) {
@@ -308,9 +323,13 @@ async function primeChatAICache(userId: number) {
 
 async function getChatAIState(userId: number, chatId: string): Promise<boolean> {
   const key = `USER${userId}_${chatId}`;
-  if (chatAILock.has(key)) return !!chatAILock.get(key);
+  if (chatAILock.has(key)) {
+    chatAIActivity.set(key, Date.now());
+    return !!chatAILock.get(key);
+  }
   const enabled = await getChatAI(userId, chatId);
   chatAILock.set(key, enabled);
+  chatAIActivity.set(key, Date.now());
   return enabled;
 }
 
@@ -340,10 +359,72 @@ const AUDIO_TRANSCRIBE_PROVIDER = (process.env.AUDIO_TRANSCRIBE_PROVIDER || "").
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || "";
 const inboundCount = new Map<string, number>(); // chatKey -> quantidade de mensagens recebidas (para firstMessageOnly)
 const chatAICacheLoaded = new Set<number>(); // userId que já tiveram chat_ai_settings pré-carregados
+const sessionLocks = new Map<string, Promise<void>>(); // garante exclusão mútua por sessão para attach/reconnect
+const chatActivity = new Map<string, number>(); // chatKey -> last activity
+const chatAIActivity = new Map<string, number>(); // aiKey -> last activity
+const CRM_UPDATE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const crmWriteCache = new Map<string, { name: string | null; avatar: string | null; lastWrite: number }>();
+const CHAT_ACTIVITY_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+const CHAT_ACTIVITY_SWEEP_MS = 60 * 60 * 1000; // 1h
+const WPP_TIMEOUT_MS = Number(process.env.WPP_TIMEOUT_MS || 12_000);
 
 function wait(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+const touchChatActivity = (chatKey: string, aiKey?: string) => {
+  const now = Date.now();
+  chatActivity.set(chatKey, now);
+  if (aiKey) chatAIActivity.set(aiKey, now);
+};
+
+function withSessionLock(full: string, task: () => Promise<void> | void): Promise<void> {
+  const prev = sessionLocks.get(full) || Promise.resolve();
+  const next = prev
+    .catch(() => {}) // evita cancelar cadeia se tarefa anterior falhou
+    .then(() => task())
+    .finally(() => {
+      if (sessionLocks.get(full) === next) {
+        sessionLocks.delete(full);
+      }
+    });
+  sessionLocks.set(full, next);
+  return next;
+}
+
+// Limpeza periódica para evitar vazamento de memória em chats inativos
+function cleanupInactiveChats() {
+  const cutoff = Date.now() - CHAT_ACTIVITY_TTL_MS;
+
+  for (const [key, last] of Array.from(chatActivity.entries())) {
+    if (last >= cutoff) continue;
+
+    chatActivity.delete(key);
+    chatHumanLock.delete(key);
+    chatHumanDuration.delete(key);
+    chatHumanLastActivity.delete(key);
+
+    const ht = chatHumanTimer.get(key);
+    if (ht) clearTimeout(ht);
+    chatHumanTimer.delete(key);
+
+    const mt = messageTimeouts.get(key);
+    if (mt) clearTimeout(mt);
+    messageTimeouts.delete(key);
+
+    messageBuffer.delete(key);
+    inboundCount.delete(key);
+  }
+
+  for (const [key, last] of Array.from(chatAIActivity.entries())) {
+    if (last < cutoff) {
+      chatAIActivity.delete(key);
+      chatAILock.delete(key);
+    }
+  }
+}
+
+setInterval(cleanupInactiveChats, CHAT_ACTIVITY_SWEEP_MS);
 
 function getSpeechClientSafe(): SpeechClient | null {
   if (AUDIO_TRANSCRIBE_PROVIDER !== "google") return null;
@@ -529,7 +610,7 @@ async function runFlowActions(
         options.logs?.push(`send_text: ${rendered}`);
       } else {
         try {
-          await ctx.client.sendText(ctx.chatId, rendered);
+          await withTimeout(ctx.client.sendText(ctx.chatId, rendered), WPP_TIMEOUT_MS, "sendText");
           ctx.lastResponse = rendered;
         } catch { }
       }
@@ -549,7 +630,11 @@ async function runFlowActions(
         options.logs?.push(`send_media: ${String(a.payload || "")}`);
       } else {
         try {
-          await ctx.client.sendFile(ctx.chatId, String(a.payload), "arquivo", "");
+          await withTimeout(
+            ctx.client.sendFile(ctx.chatId, String(a.payload), "arquivo", ""),
+            WPP_TIMEOUT_MS,
+            "sendFile"
+          );
         } catch { }
       }
     }
@@ -583,9 +668,13 @@ async function runFlowActions(
         options.logs?.push("handover_human");
       } else {
         try {
-          await ctx.client.sendText(
-            ctx.chatId,
-            " Vou transferir você para um atendente humano. Aguarde..."
+          await withTimeout(
+            ctx.client.sendText(
+              ctx.chatId,
+              " Vou transferir você para um atendente humano. Aguarde..."
+            ),
+            WPP_TIMEOUT_MS,
+            "sendText"
           );
         } catch { }
 
@@ -1078,7 +1167,7 @@ async function handleAutomaticFallback(options: {
     try {
       const numberOnly = decision.config.alertPhone.replace(/\D/g, "");
       const targetJid = await ensureChat(client, numberOnly);
-      await client.sendText(targetJid, msg);
+      await withTimeout(client.sendText(targetJid, msg), WPP_TIMEOUT_MS, "sendText");
     } catch (err) {
       console.error("Erro ao enviar alerta de fallback por WhatsApp:", err);
     }
@@ -1241,20 +1330,24 @@ export async function deleteWppSession(userId: number, sessionName: string) {
 }
 }
 function extrairNumero(chatId: string) {
-  return chatId.replace("@c.us", "").replace("@g.us", "");
+  const raw = chatId.replace("@c.us", "").replace("@g.us", "");
+  const sanitized = sanitizePhone(raw);
+  const { ok } = validatePhone(sanitized);
+  return ok ? sanitized : "";
 }
 
 
 // ===============================
 //  FUNÇÃO QUE ANEXA EVENTOS (SEM DUPLICAR) + MODO HUMANO + IA POR CHAT + DIGITANDO
 // ===============================
-function attachEvents(
+async function attachEvents(
   client: wppconnect.Whatsapp,
   userId: number,
   shortName: string
 ) {
   const full = `USER${userId}_${shortName}`;
 
+  await withSessionLock(full, async () => {
   if (eventsAttached.has(full)) {
     console.log(`ALERTA Eventos já anexados para ${full}, ignorando...`);
     return;
@@ -1292,6 +1385,9 @@ function attachEvents(
     const fullKey = `USER${userId}_${shortName}`;
     const chatKey = `${fullKey}::${chatId}`;
     const humanKey = getHumanKey(userId, shortName, chatId);
+    const aiKey = `USER${userId}_${chatId}`;
+
+    touchChatActivity(chatKey, aiKey);
 
     // Precarrega cache de IA por chat do banco (persistência entre restarts)
     await primeChatAICache(userId);
@@ -1343,7 +1439,7 @@ function attachEvents(
       // se ainda não entendeu, avisa e sai
       if (!body) {
         try {
-          await client.sendText(chatId, "Não entendi o áudio, pode resumir em texto?");
+          await withTimeout(client.sendText(chatId, "Não entendi o áudio, pode resumir em texto?"), WPP_TIMEOUT_MS, "sendText");
         } catch { }
         return;
       }
@@ -1518,9 +1614,13 @@ function attachEvents(
           await client.stopTyping(chatId);
         } catch { }
 
-        await client.sendText(
-          chatId,
-          "ALERTA Você atingiu o limite de mensagens IA do seu plano.\n\nFaça upgrade para continuar "
+        await withTimeout(
+          client.sendText(
+            chatId,
+            "ALERTA Você atingiu o limite de mensagens IA do seu plano.\n\nFaça upgrade para continuar "
+          ),
+          WPP_TIMEOUT_MS,
+          "sendText"
         );
         return;
       }
@@ -1814,6 +1914,7 @@ function attachEvents(
     }
   });
 
+  }); // fim lock sessão
 }
 // ===========================
 //  RECONNECT SESSION
@@ -1829,38 +1930,40 @@ async function reconnectSession(userId: number, shortName: string) {
   reconnecting.add(full);
 
   try {
-    const attempts = (reconnectAttempts.get(full) || 0) + 1;
-    reconnectAttempts.set(full, attempts);
+    await withSessionLock(full, async () => {
+      const attempts = (reconnectAttempts.get(full) || 0) + 1;
+      reconnectAttempts.set(full, attempts);
 
-    // backoff simples (2s, 5s, 10s, 20s, 30s...)
-    const delay = Math.min(30000, attempts === 1 ? 2000 : attempts * 5000);
+      // backoff simples (2s, 5s, 10s, 20s, 30s...)
+      const delay = Math.min(30000, attempts === 1 ? 2000 : attempts * 5000);
 
-    console.log(` Tentando reconectar ${full} (tentativa ${attempts}) em ${delay}ms...`);
-    await wait(delay);
+      console.log(` Tentando reconectar ${full} (tentativa ${attempts}) em ${delay}ms...`);
+      await wait(delay);
 
-    // fecha client antigo se existir
-    const old = clients.get(full);
-    if (old) {
+      // fecha client antigo se existir
+      const old = clients.get(full);
+      if (old) {
+        try {
+          await old.close();
+        } catch { }
+        clients.delete(full);
+      }
+
+      // remove eventos e memória
+      eventsAttached.delete(full);
+      clearSessionMemory(full);
+
+      // atualiza status no banco
       try {
-        await old.close();
+        const db = await getDB();
+        await db.run(
+          `UPDATE sessions SET status = 'reconnecting' WHERE user_id = ? AND session_name = ?`,
+          [userId, shortName]
+        );
       } catch { }
-      clients.delete(full);
-    }
+    });
 
-    // remove eventos e memória
-    eventsAttached.delete(full);
-    clearSessionMemory(full);
-
-    // atualiza status no banco
-    try {
-      const db = await getDB();
-      await db.run(
-        `UPDATE sessions SET status = 'reconnecting' WHERE user_id = ? AND session_name = ?`,
-        [userId, shortName]
-      );
-    } catch { }
-
-    // recria sessão com o MESMO token
+    // recria sessão com o MESMO token (fora do lock para evitar deadlock com attachEvents)
     console.log(" Recriando sessão:", full);
     await createWppSession(userId, shortName);
 
@@ -2005,7 +2108,7 @@ export async function createWppSession(
 
   const client = await wppconnect.create(createOptions);
 
-  attachEvents(client, userId, shortName);
+  await attachEvents(client, userId, shortName);
 
   client.onStateChange(async (state) => {
     console.log(` Estado da sessão ${full}:`, state);
@@ -2085,7 +2188,7 @@ async function sendSystemMessage(
       return;
     }
 
-    await client.sendText(chatId, text);
+    await withTimeout(client.sendText(chatId, text), WPP_TIMEOUT_MS, "sendText");
   } catch (err) {
     console.log("ERRO Erro ao enviar mensagem do sistema:", err);
   }

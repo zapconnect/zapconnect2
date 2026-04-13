@@ -9,6 +9,7 @@ import http from "http";
 import cookieParser from "cookie-parser";
 import { Server } from "socket.io";
 import bcrypt from "bcrypt";
+import { csrfMiddleware } from "./middlewares/csrf";
 
 import subscriptionRoutes from "./routes/subscription";
 import webhookRoutes from "./routes/webhook";
@@ -38,12 +39,16 @@ import { summarizeConversationToCrm } from "./services/conversationSummary";
 import { availableTrialKeys, getTrialTemplate, saveTrialTemplate, listTrialTemplates } from "./services/trialTemplates";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
+import { validatePhone } from "./utils/phoneUtils";
+import { withTimeout } from "./utils/withTimeout";
+import { runChatHistoryCleanup } from "./services/chatHistoryCleaner";
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 const DISPARO_MIN_INTERVAL_MS = Number(process.env.DISPARO_MIN_INTERVAL_MS || 1500);
 const disparoRateLimit = new Map<number, number>();
 const MAX_CHAT_MESSAGES = Number(process.env.MAX_CHAT_MESSAGES || 500);
 const TRIAL_EMAIL_SWEEP_MS = 60 * 60 * 1000; // 1h
+const WPP_TIMEOUT_MS = Number(process.env.WPP_TIMEOUT_MS || 12_000);
 
 import { getDB } from "./database";
 
@@ -57,12 +62,13 @@ interface ScheduleRow {
   user_id: number;
   numbers: string;
   message: string;
-  file: string | null;
+  file: string | null; // caminho relativo no disco (legado: data URL)
   filename: string | null;
   send_at: number;
   recurrence: "none" | "daily" | "weekly" | "monthly";
   recurrence_end: number | null;
-  status: "pending" | "sent";
+  status: "pending" | "processing" | "sent";
+  processing_started_at: number | null;
 }
 
 import {
@@ -95,8 +101,6 @@ type PersonalizedContact = {
   vars?: Record<string, string>;
 };
 
-const sanitizeNumber = (value: any) => String(value ?? "").replace(/\D/g, "");
-
 const normalizeVars = (input: any): Record<string, string> => {
   const out: Record<string, string> = {};
   const source = typeof input?.vars === "object" && input?.vars !== null ? input.vars : input;
@@ -115,9 +119,9 @@ const normalizeVars = (input: any): Record<string, string> => {
 };
 
 const sanitizeContactPayload = (raw: any): PersonalizedContact | null => {
-  const number = sanitizeNumber(raw?.number);
-  if (!number) return null;
-  const contact: PersonalizedContact = { number };
+  const { ok, sanitized } = validatePhone(raw?.number);
+  if (!ok) return null;
+  const contact: PersonalizedContact = { number: sanitized };
 
   if (raw?.message !== undefined) contact.message = String(raw.message);
   const vars = normalizeVars(raw);
@@ -252,9 +256,12 @@ const ALLOWED_UPLOAD_MIMES = new Set<string>([
 type SanitizedFile = {
   dataUrl: string;
   base64: string;
+  buffer: Buffer;
   mime: string;
   filename: string;
 };
+
+type DBClient = ReturnType<typeof getDB>;
 
 const detectMimeFromBuffer = (buf: Buffer): string | null => {
   if (buf.length < 4) return null;
@@ -281,6 +288,45 @@ const detectMimeFromBuffer = (buf: Buffer): string | null => {
   if (header4[0] === 0x50 && header4[1] === 0x4b) return "application/zip";
 
   return null;
+};
+
+const guessMimeFromFilename = (filename: string): string | null => {
+  const ext = path.extname(filename || "").toLowerCase();
+  switch (ext) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".pdf":
+      return "application/pdf";
+    case ".txt":
+      return "text/plain";
+    case ".csv":
+      return "text/csv";
+    case ".zip":
+      return "application/zip";
+    case ".xls":
+      return "application/vnd.ms-excel";
+    case ".xlsx":
+      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    case ".mp3":
+      return "audio/mpeg";
+    case ".ogg":
+      return "audio/ogg";
+    case ".wav":
+      return "audio/wav";
+    case ".mp4":
+      return "video/mp4";
+    case ".webm":
+      return "video/webm";
+    default:
+      return null;
+  }
 };
 
 const sanitizeIncomingFile = (input: {
@@ -320,9 +366,105 @@ const sanitizeIncomingFile = (input: {
   return {
     dataUrl: `data:${finalMime};base64,${normalizedBase64}`,
     base64: normalizedBase64,
+    buffer,
     mime: finalMime,
     filename: input.filename || "arquivo",
   };
+};
+
+// ===============================
+// 💾 Armazenamento local de arquivos de agendamento
+// ===============================
+const SCHEDULE_FILES_ROOT = path.join(process.cwd(), "schedule_uploads");
+
+const isDataUrl = (val: unknown): val is string => typeof val === "string" && /^data:[^;]+;base64,/.test(String(val));
+
+const sanitizeScheduleFilename = (name: string) => {
+  const base = path.basename(name || "arquivo");
+  const cleaned = base.replace(/[^\w.\-() ]+/g, "_");
+  // evita caminhos gigantes que atrapalham o FS
+  return cleaned.slice(-180) || "arquivo";
+};
+
+const toRelativeSchedulePath = (absPath: string) =>
+  path.relative(process.cwd(), absPath).replace(/\\/g, "/");
+
+const resolveSchedulePath = (storedPath: string) =>
+  path.isAbsolute(storedPath) ? storedPath : path.join(process.cwd(), storedPath);
+
+const persistScheduleFile = (userId: number, file: SanitizedFile): string => {
+  const dir = path.join(SCHEDULE_FILES_ROOT, String(userId));
+  fs.mkdirSync(dir, { recursive: true });
+
+  const safeName = sanitizeScheduleFilename(file.filename);
+  const unique = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}-${safeName}`;
+  const absPath = path.join(dir, unique);
+
+  fs.writeFileSync(absPath, file.buffer);
+  return toRelativeSchedulePath(absPath);
+};
+
+const loadScheduleFileFromPath = (storedPath: string, filename?: string): SanitizedFile | null => {
+  try {
+    const abs = resolveSchedulePath(storedPath);
+    const buffer = fs.readFileSync(abs);
+    const detected = detectMimeFromBuffer(buffer);
+    const guessed = guessMimeFromFilename(filename || path.basename(abs));
+    const mime = detected || guessed || "application/octet-stream";
+    const base64 = buffer.toString("base64");
+
+    return {
+      dataUrl: `data:${mime};base64,${base64}`,
+      base64,
+      buffer,
+      mime,
+      filename: filename || path.basename(abs),
+    };
+  } catch (err) {
+    console.error("⚠️ Erro ao carregar arquivo de agendamento:", err);
+    return null;
+  }
+};
+
+const deleteScheduleFileIfUnused = async (db: DBClient, storedPath?: string | null) => {
+  try {
+    if (!storedPath || isDataUrl(storedPath)) return;
+    const refCount = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM schedules WHERE file = ?`,
+      [storedPath]
+    );
+    if ((refCount?.total || 0) > 1) return;
+
+    const abs = resolveSchedulePath(storedPath);
+    if (fs.existsSync(abs)) {
+      fs.unlinkSync(abs);
+    }
+  } catch (err) {
+    console.warn("⚠️ Não foi possível remover arquivo de agendamento:", err);
+  }
+};
+
+const ensureScheduleFileOnDisk = async (
+  db: DBClient,
+  row: ScheduleRow
+): Promise<{ file: SanitizedFile | null; storedPath: string | null }> => {
+  if (!row.file || !row.filename) return { file: null, storedPath: null };
+
+  // Migração automática de registros antigos em base64
+  if (isDataUrl(row.file)) {
+    try {
+      const safe = sanitizeIncomingFile({ dataUrl: row.file, filename: row.filename });
+      const storedPath = persistScheduleFile(row.user_id, safe);
+      await db.run(`UPDATE schedules SET file = ? WHERE id = ?`, [storedPath, row.id]);
+      return { file: safe, storedPath };
+    } catch (err) {
+      console.error("⚠️ Falha ao migrar arquivo de agendamento:", err);
+      return { file: null, storedPath: null };
+    }
+  }
+
+  const loaded = loadScheduleFileFromPath(row.file, row.filename);
+  return { file: loaded, storedPath: row.file };
 };
 
 const buildContactsFromStored = (raw: any, baseMessage?: string): PersonalizedContact[] => {
@@ -330,7 +472,9 @@ const buildContactsFromStored = (raw: any, baseMessage?: string): PersonalizedCo
   return raw
     .map((item) => {
       if (typeof item === "string") {
-        return { number: sanitizeNumber(item), message: baseMessage };
+        const { ok, sanitized } = validatePhone(item);
+        if (!ok) return null;
+        return { number: sanitized, message: baseMessage };
       }
       const contact = sanitizeContactPayload(item);
       if (contact && contact.message === undefined && baseMessage !== undefined) {
@@ -376,7 +520,7 @@ app.use(
     origin: true,            // Aceita qualquer domínio
     credentials: true,       // Permite cookies
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "x-csrf-token"],
   })
 );
 // ⚠️ WEBHOOK STRIPE — RAW BODY (OBRIGATÓRIO)
@@ -390,6 +534,7 @@ app.use(
 // 🌐 Middlewares globais
 // =======================================
 app.use(cookieParser());
+app.use(csrfMiddleware);
 app.use("/", emailVerifyRoutes);
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
@@ -541,11 +686,17 @@ export const io = new Server(server, {
   maxHttpBufferSize: 50 * 1024 * 1024, // 50MB — permite arquivos grandes via socket
 });
 
-io.on("connection", (socket) => {
-  console.log("🔌 Socket conectado:", socket.id);
-  socket.on("chat_ai_state_request", async (chatId) => {
-    const userId = socket.handshake.auth?.userId;
-    if (!userId || !chatId) return;
+  io.on("connection", (socket) => {
+    console.log("🔌 Socket conectado:", socket.id);
+    const uid = socket.handshake.auth?.userId;
+    if (uid) socket.join(`user:${uid}`);
+    socket.on("crm:changed_local", () => {
+      if (!uid) return;
+      io.to(`user:${uid}`).emit("crm:changed", { type: "sync" });
+    });
+    socket.on("chat_ai_state_request", async (chatId) => {
+      const userId = socket.handshake.auth?.userId;
+      if (!userId || !chatId) return;
 
     const state = await getChatAI(userId, chatId);
     socket.emit("chat_ai_state", { chatId, state });
@@ -613,7 +764,7 @@ io.on("connection", (socket) => {
           mimetype,
           filename,
         });
-        await client.sendFile(chatId, safeFile.dataUrl, safeFile.filename, body || "");
+        await withTimeout(client.sendFile(chatId, safeFile.dataUrl, safeFile.filename, body || ""), WPP_TIMEOUT_MS, "sendFile");
 
         io.to(socket.id).emit("newMessage", {
           chatId,
@@ -628,7 +779,7 @@ io.on("connection", (socket) => {
       }
 
       // 💬 ENVIO DE TEXTO
-      await client.sendText(chatId, body);
+      await withTimeout(client.sendText(chatId, body), WPP_TIMEOUT_MS, "sendText");
 
       io.to(socket.id).emit("newMessage", {
         chatId,
@@ -825,6 +976,7 @@ io.on("connection", (socket) => {
       socket.emit("mensagens_chat", { chatId, messages: [] });
       return;
     }
+    const chatIdClean = chatId.includes("@") ? chatId : `${chatId}@c.us`;
 
     const db = getDB();
 
@@ -857,7 +1009,7 @@ io.on("connection", (socket) => {
 
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
-          await client.openChat(chatId);
+          await withTimeout(client.openChat(chatIdClean), WPP_TIMEOUT_MS, "openChat");
 
           // ⏳ pequeno delay para WhatsApp carregar mensagens em memória
           await sleep(500);
@@ -865,14 +1017,32 @@ io.on("connection", (socket) => {
           // ==================================================
           // 📥 BUSCAR MENSAGENS JÁ DISPONÍVEIS
           // ==================================================
-          messages = await client.getAllMessagesInChat(
-            chatId,
-            true,   // includeMe
-            false   // includeNotifications (OBRIGATÓRIO)
+          messages = await withTimeout(
+            client.getAllMessagesInChat(
+              chatIdClean,
+              true,   // includeMe
+              false   // includeNotifications (OBRIGATÓRIO)
+            ),
+            WPP_TIMEOUT_MS,
+            "getAllMessagesInChat"
           );
           break; // sucesso
         } catch (e: any) {
           const msg = String(e?.message || e || "");
+          if (msg.includes("No LID for user")) {
+            try {
+              const numberOnly = chatIdClean.replace(/@.*/, "");
+              const status = await withTimeout(client.checkNumberStatus(numberOnly), WPP_TIMEOUT_MS, "checkNumberStatus");
+              if (!status || status.canReceiveMessage === false) {
+                socket.emit("abrir_chat_error", { chatId: chatIdClean, error: "Número não encontrado no WhatsApp." });
+                socket.emit("mensagens_chat", { chatId: chatIdClean, messages: [] });
+                return;
+              }
+            } catch { }
+            socket.emit("abrir_chat_error", { chatId: chatIdClean, error: "Não foi possível abrir o chat (LID ausente). Envie uma mensagem para iniciar a conversa." });
+            socket.emit("mensagens_chat", { chatId: chatIdClean, messages: [] });
+            return;
+          }
           const recoverable =
             msg.includes("Promise was collected") ||
             msg.includes("Execution context was destroyed") ||
@@ -889,7 +1059,7 @@ io.on("connection", (socket) => {
       }
 
       const formatted = messages.map((m: any) => ({
-        chatId,
+        chatId: chatIdClean,
         body: m.body || "",
         mimetype: m.mimetype || null,
         isMedia: !!m.mimetype,
@@ -926,7 +1096,7 @@ io.on("connection", (socket) => {
 
       if (!session) return;
 
-      stopChatSession(Number(userId), session.session_name, chatId);
+      await stopChatSession(Number(userId), session.session_name, chatId);
 
       socket.emit("ai:history_cleared", { chatId });
       console.log(`🧹 Histórico Gemini limpo — user:${userId} chat:${chatId}`);
@@ -1314,6 +1484,41 @@ app.post("/api/chat/notes", authMiddleware, async (req, res) => {
   }
 });
 
+app.delete("/api/chat/notes/:id", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const id = Number(req.params.id);
+    const sessionName = String(req.query.sessionName || "").trim();
+    const chatId = String(req.query.chatId || "").trim();
+
+    if (!id || !sessionName || !chatId) {
+      return res.status(400).json({ ok: false, error: "id, chatId e sessionName são obrigatórios" });
+    }
+
+    const db = getDB();
+    const existing = await db.get(
+      `SELECT id FROM chat_notes WHERE id = ? AND user_id = ? AND session_name = ? AND chat_id = ?`,
+      [id, user.id, sessionName, chatId]
+    );
+    if (!existing) return res.status(404).json({ ok: false, error: "Nota não encontrada" });
+
+    await db.run(`DELETE FROM chat_notes WHERE id = ? AND user_id = ?`, [id, user.id]);
+
+    const notes = await db.all(
+      `SELECT id, content, author_name, created_at
+       FROM chat_notes
+       WHERE user_id = ? AND session_name = ? AND chat_id = ?
+       ORDER BY id DESC`,
+      [user.id, sessionName, chatId]
+    );
+
+    return res.json({ ok: true, notes });
+  } catch (err) {
+    console.error("Erro ao deletar nota:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao deletar nota" });
+  }
+});
+
 // 📌 Detalhes de um cliente CRM (pipeline)
 app.get("/api/crm/client/:chatId", authMiddleware, async (req, res) => {
   try {
@@ -1632,7 +1837,11 @@ app.post(
 
     const contactList: PersonalizedContact[] = hasPersonalized
       ? buildContactsFromPayload(contactsArr)
-      : [{ number: sanitizeNumber(number), message }];
+      : (() => {
+          const { ok, sanitized } = validatePhone(number);
+          if (!ok) return [];
+          return [{ number: sanitized, message }];
+        })();
 
     if (!contactList.length) {
       return res.status(400).json({ error: "Nenhum número válido" });
@@ -1686,15 +1895,19 @@ app.post(
         const finalMessage = renderTemplate(contact.message ?? message ?? "", contact);
 
         if (!safeFile) {
-          await client.sendText(chatId, finalMessage);
+          await withTimeout(client.sendText(chatId, finalMessage), WPP_TIMEOUT_MS, "sendText");
           continue;
         }
 
-        await client.sendFile(
-          chatId,
-          safeFile.dataUrl,
-          safeFile.filename || filename || "arquivo",
-          finalMessage // legenda opcional
+        await withTimeout(
+          client.sendFile(
+            chatId,
+            safeFile.dataUrl,
+            safeFile.filename || filename || "arquivo",
+            finalMessage // legenda opcional
+          ),
+          WPP_TIMEOUT_MS,
+          "sendFile"
         );
       }
 
@@ -1769,16 +1982,30 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
 
   const normalized = hasPersonalized
     ? contactList
-    : numbersArr.map((n) => sanitizeNumber(n)).filter(Boolean);
+    : numbersArr
+        .map((n) => {
+          const { ok, sanitized } = validatePhone(n);
+          return ok ? sanitized : null;
+        })
+        .filter(Boolean);
 
   if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
 
   let safeFile: SanitizedFile | null = null;
+  let storedFilePath: string | null = null;
+  let storedFilename: string | null = null;
   if (file) {
     try {
       safeFile = sanitizeIncomingFile({ dataUrl: file as string, filename });
     } catch (err: any) {
       return res.status(400).json({ error: err?.message || "Arquivo inválido" });
+    }
+    try {
+      storedFilePath = persistScheduleFile(user.id, safeFile);
+      storedFilename = safeFile.filename;
+    } catch (err: any) {
+      console.error("⚠️ Erro ao salvar arquivo do agendamento:", err);
+      return res.status(500).json({ error: "Falha ao salvar arquivo" });
     }
   }
 
@@ -1801,7 +2028,7 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
   await db.run(
     `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [user.id, JSON.stringify(normalized), message, safeFile?.dataUrl || null, safeFile?.filename || null, sendAtMs, recurrence, recurrenceEndMs]
+    [user.id, JSON.stringify(normalized), message, storedFilePath, storedFilename, sendAtMs, recurrence, recurrenceEndMs]
   );
 
   res.json({ ok: true });
@@ -1870,7 +2097,12 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
 
   const normalized = hasPersonalized
     ? contactList
-    : numbersArr.map((n) => String(n || "").replace(/\D/g, "")).filter(Boolean);
+    : numbersArr
+        .map((n) => {
+          const { ok, sanitized } = validatePhone(n);
+          return ok ? sanitized : null;
+        })
+        .filter(Boolean);
 
   if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
 
@@ -1903,8 +2135,35 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     });
   }
 
-  const finalFile = safeFile?.dataUrl ?? (keepExistingFile ? existing.file : null);
-  const finalFilename = safeFile?.filename ?? filename ?? (keepExistingFile ? existing.filename : null);
+  const existingRow = existing as ScheduleRow;
+  let finalFilePath: string | null = null;
+  let finalFilename: string | null = null;
+
+  if (safeFile) {
+    try {
+      finalFilePath = persistScheduleFile(user.id, safeFile);
+      finalFilename = safeFile.filename;
+      await deleteScheduleFileIfUnused(db, existingRow.file);
+    } catch (err: any) {
+      console.error("⚠️ Erro ao salvar arquivo do agendamento:", err);
+      return res.status(500).json({ error: "Falha ao salvar arquivo" });
+    }
+  } else if (keepExistingFile) {
+    const ensured = await ensureScheduleFileOnDisk(db, existingRow);
+    finalFilePath = ensured.storedPath;
+    finalFilename = ensured.storedPath ? existingRow.filename : null;
+  } else {
+    await deleteScheduleFileIfUnused(db, existingRow.file);
+    finalFilePath = null;
+    finalFilename = null;
+  }
+
+  // permitir override de filename vindo do payload
+  if (filename && safeFile) {
+    finalFilename = safeFile.filename;
+  } else if (filename && !safeFile && keepExistingFile) {
+    finalFilename = filename;
+  }
 
   await db.run(
     `UPDATE schedules
@@ -1913,7 +2172,7 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     [
       JSON.stringify(normalized),
       message,
-      finalFile,
+      finalFilePath,
       finalFilename,
       sendAtMs,
       finalRecurrence,
@@ -2039,6 +2298,10 @@ app.delete("/api/agendamentos/delete/:id", authMiddleware, async (req, res) => {
   const user = (req as any).user;
   const id = req.params.id;
   const db = getDB();
+  const existing = await db.get<ScheduleRow>(`SELECT * FROM schedules WHERE id = ? AND user_id = ?`, [id, user.id]);
+  if (existing?.file) {
+    await deleteScheduleFileIfUnused(db, existing.file);
+  }
   await db.run(`DELETE FROM schedules WHERE id = ? AND user_id = ?`, [
     id,
     user.id,
@@ -2081,6 +2344,9 @@ function calculateNextSendAt(current: number, recurrence: string, recurrenceEnd?
 // ===============================
 // ⏱️ AGENDADOR — VERSÃO FINAL, ESTÁVEL E SEM "No LID for user"
 // ===============================
+const SCHEDULE_WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+const SCHEDULE_PROCESSING_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos
+
 let schedulerRunning = false;
 setInterval(async () => {
   if (schedulerRunning) return;
@@ -2098,9 +2364,12 @@ setInterval(async () => {
     for (const row of schedules) {
       try {
         // 🔒 tentativa de lock otimista: só um worker muda status para "processing"
+        const claimedAt = Date.now();
         const claimed = await db.run(
-          `UPDATE schedules SET status = 'processing' WHERE id = ? AND status = 'pending'`,
-          [row.id]
+          `UPDATE schedules
+           SET status = 'processing', processing_started_at = ?
+           WHERE id = ? AND status = 'pending'`,
+          [claimedAt, row.id]
         );
         if (!claimed.affectedRows) continue; // já foi pego por outro worker
 
@@ -2134,12 +2403,11 @@ setInterval(async () => {
         }
 
         let safeRowFile: SanitizedFile | null = null;
+        let storedFilePath: string | null = null;
         if (row.file && row.filename) {
-          try {
-            safeRowFile = sanitizeIncomingFile({ dataUrl: row.file as string, filename: row.filename as string });
-          } catch (err: any) {
-            console.error("⚠️ Arquivo inválido no agendamento", row.id, err?.message || err);
-          }
+          const ensured = await ensureScheduleFileOnDisk(db, row as ScheduleRow);
+          safeRowFile = ensured.file;
+          storedFilePath = ensured.storedPath;
         }
 
         // =========================
@@ -2153,15 +2421,19 @@ setInterval(async () => {
 
             if (safeRowFile) {
               // 📎 MÍDIA
-              await client.sendFile(
-                target,
-                safeRowFile.dataUrl,
-                safeRowFile.filename,
-                finalMessage || ""
+              await withTimeout(
+                client.sendFile(
+                  target,
+                  safeRowFile.dataUrl,
+                  safeRowFile.filename,
+                  finalMessage || ""
+                ),
+                WPP_TIMEOUT_MS,
+                "sendFile"
               );
             } else if (finalMessage) {
               // 💬 TEXTO — MÉTODO CORRETO
-              await client.sendText(target, finalMessage);
+              await withTimeout(client.sendText(target, finalMessage), WPP_TIMEOUT_MS, "sendText");
             } else {
               throw new Error("Mensagem vazia e mídia inválida");
             }
@@ -2184,7 +2456,7 @@ setInterval(async () => {
 
         // ✅ MARCAR COMO ENVIADO
         await db.run(
-          `UPDATE schedules SET status = 'sent' WHERE id = ?`,
+          `UPDATE schedules SET status = 'sent', processing_started_at = NULL WHERE id = ?`,
           [row.id]
         );
 
@@ -2239,10 +2511,12 @@ setInterval(async () => {
         }
 
         if (nextSendAt) {
+          const nextFilePath = storedFilePath ?? null;
+          const nextFilename = safeRowFile?.filename ?? row.filename ?? null;
           await db.run(
             `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [userId, row.numbers, row.message, safeRowFile?.dataUrl ?? row.file, safeRowFile?.filename ?? row.filename, nextSendAt, recurrence, recurrenceEnd]
+            [userId, row.numbers, row.message, nextFilePath, nextFilename, nextSendAt, recurrence, recurrenceEnd]
           );
         }
 
@@ -2253,7 +2527,7 @@ setInterval(async () => {
         // devolve para pending para tentar novamente depois
         try {
           await getDB().run(
-            `UPDATE schedules SET status = 'pending' WHERE id = ? AND status = 'processing'`,
+            `UPDATE schedules SET status = 'pending', processing_started_at = NULL WHERE id = ? AND status = 'processing'`,
             [row.id]
           );
         } catch { }
@@ -2265,6 +2539,27 @@ setInterval(async () => {
     schedulerRunning = false;
   }
 }, 10000);
+
+// 🛡️ Watchdog para destravar agendamentos travados em "processing"
+setInterval(async () => {
+  try {
+    const db = getDB();
+    const timeoutThreshold = Date.now() - SCHEDULE_PROCESSING_TIMEOUT_MS;
+
+    const reset = await db.run(
+      `UPDATE schedules
+       SET status = 'pending', processing_started_at = NULL
+       WHERE status = 'processing' AND (processing_started_at IS NULL OR processing_started_at <= ?)`,
+      [timeoutThreshold]
+    );
+
+    if (reset.affectedRows) {
+      console.warn(`🔁 Watchdog: ${reset.affectedRows} agendamento(s) reaberto(s) para pending`);
+    }
+  } catch (err) {
+    console.error("❌ Erro no watchdog de agendamentos:", err);
+  }
+}, SCHEDULE_WATCHDOG_INTERVAL_MS);
 
 // 🔄 Atualizar pipeline
 // Atualizar estágio do CRM Kanban
@@ -2362,14 +2657,15 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
     const db = getDB();
 
     const { name, phone, citystate, stage, tags, notes, deal_value, follow_up_date } = req.body;
+    const phoneRaw = String(phone ?? "").trim();
 
-    await db.run(
+    const result = await db.run(
       `INSERT INTO crm (user_id, name, phone, citystate, stage, tags, notes, deal_value, follow_up_date)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         user.id,
         name,
-        phone,
+        phoneRaw,
         citystate || "",
         stage || "Novo",
         tags || "[]",
@@ -2379,7 +2675,9 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
       ]
     );
 
-    res.json({ ok: true });
+    const newId = (result as any)?.lastID;
+    io.to(`user:${user.id}`).emit("crm:changed", { type: "create", id: newId });
+    res.json({ ok: true, id: newId });
   } catch (err) {
     console.error("❌ Erro criar CRM:", err);
     res.status(500).json({ ok: false });
@@ -2409,6 +2707,7 @@ app.delete("/api/crm/delete/:id", authMiddleware, async (req, res) => {
 
     await db.run(`DELETE FROM crm WHERE id = ? AND user_id = ?`, [id, user.id]);
 
+    io.to(`user:${user.id}`).emit("crm:changed", { type: "delete", id: Number(id) });
     return res.json({ ok: true });
   } catch (err) {
     console.error("❌ Erro ao deletar cliente CRM:", err);
@@ -2422,6 +2721,7 @@ app.put("/api/crm/update", authMiddleware, async (req, res) => {
     const db = getDB();
 
     const { id, name, phone, citystate, stage, tags, notes, deal_value, follow_up_date } = req.body;
+    const phoneRaw = String(phone ?? "").trim();
 
     if (!id) return res.json({ ok: false, error: "ID ausente" });
 
@@ -2429,19 +2729,20 @@ app.put("/api/crm/update", authMiddleware, async (req, res) => {
       `UPDATE crm 
        SET name = ?, phone = ?, citystate = ?, stage = ?, tags = ?, notes = ?, deal_value = ?, follow_up_date = ?
        WHERE id = ?`,
-      [
-        name,
-        phone,
-        citystate || "",
-        stage || "Novo",
-        tags || "[]",
-        notes || "[]",
-        Number(deal_value) || 0,
-        follow_up_date ? Number(follow_up_date) : null,
-        id
+    [
+      name,
+      phoneRaw,
+      citystate || "",
+      stage || "Novo",
+      tags || "[]",
+      notes || "[]",
+      Number(deal_value) || 0,
+      follow_up_date ? Number(follow_up_date) : null,
+      id
       ]
     );
 
+    io.to(`user:${(req as any).user.id}`).emit("crm:changed", { type: "update", id });
     res.json({ ok: true });
 
   } catch (err) {
@@ -3370,6 +3671,13 @@ setInterval(() => {
 // 🚀 Iniciar servidor
 // =======================================
 startTrialEmailCron();
+// Limpeza diária de históricos de chat (randomiza start em até 1h para evitar pico)
+const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+setTimeout(() => {
+  runChatHistoryCleanup();
+  setInterval(runChatHistoryCleanup, CLEANUP_INTERVAL_MS);
+}, Math.random() * 60 * 60 * 1000);
+
 server.listen(3000, () => {
   console.log("🚀 Server online em http://localhost:3000");
 });

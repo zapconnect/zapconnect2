@@ -209,18 +209,41 @@ export async function queryKb(params: {
   topK?: number;
 }): Promise<{ content: string; sourceId: number; sourceName?: string; score: number }[]> {
   const { userId, query, sessionName, chatId, topK = 5 } = params;
-  const db = getDB();
-  const now = Date.now();
-  const qVec = vectorize(query);
+  const safeQuery = String(query || "").trim();
+  if (!safeQuery) return [];
 
-  const rows = await db.all<ChunkRow & { name?: string }>(
-    `SELECT kc.id, kc.content, kc.embedding, kc.source_id, ks.name, kc.user_id
-     FROM kb_chunks kc
-     JOIN kb_sources ks ON ks.id = kc.source_id
-     WHERE kc.user_id = ? AND ks.status = 'ready' AND (kc.session_scope IS NULL OR kc.session_scope = ?)
-     LIMIT 2000`,
-    [userId, sessionName || null]
-  );
+  const PRE_FILTER_CANDIDATES = 80;
+  const candidateLimit = Math.max(PRE_FILTER_CANDIDATES, topK * 5);
+  const db = getDB();
+  const started = Date.now();
+  const qVec = vectorize(safeQuery);
+
+  let rows: (ChunkRow & { name?: string; ft_score?: number })[] = [];
+  try {
+    rows = await db.all<ChunkRow & { name?: string; ft_score?: number }>(
+      `SELECT kc.id, kc.content, kc.embedding, kc.source_id, ks.name, kc.user_id,
+              MATCH(kc.content) AGAINST (? IN NATURAL LANGUAGE MODE) AS ft_score
+       FROM kb_chunks kc
+       JOIN kb_sources ks ON ks.id = kc.source_id
+       WHERE kc.user_id = ? AND ks.status = 'ready'
+         AND (kc.session_scope IS NULL OR kc.session_scope = ?)
+         AND MATCH(kc.content) AGAINST (? IN NATURAL LANGUAGE MODE)
+       ORDER BY ft_score DESC
+       LIMIT ?`,
+      [safeQuery, userId, sessionName || null, safeQuery, candidateLimit]
+    );
+  } catch (err) {
+    console.warn("⚠️ FULLTEXT indisponível, fallback para LIMIT simples:", err);
+    rows = await db.all<ChunkRow & { name?: string }>(
+      `SELECT kc.id, kc.content, kc.embedding, kc.source_id, ks.name, kc.user_id
+       FROM kb_chunks kc
+       JOIN kb_sources ks ON ks.id = kc.source_id
+       WHERE kc.user_id = ? AND ks.status = 'ready' AND (kc.session_scope IS NULL OR kc.session_scope = ?)
+       ORDER BY kc.id DESC
+       LIMIT ?`,
+      [userId, sessionName || null, candidateLimit]
+    );
+  }
 
   const scored = rows
     .map((r) => {
@@ -241,7 +264,7 @@ export async function queryKb(params: {
   await db.run(
     `INSERT INTO kb_queries (user_id, session_name, chat_id, query, latency_ms, result_count, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [userId, sessionName || null, chatId || null, query, 0, top.length, now]
+    [userId, sessionName || null, chatId || null, query, Date.now() - started, top.length, Date.now()]
   );
 
   return top;

@@ -74,6 +74,15 @@ export async function initDB() {
   } catch {
     // já existe
   }
+  // Migração: marcação de início de processamento do agendamento
+  try {
+    await pool.query(
+      "ALTER TABLE schedules ADD COLUMN processing_started_at BIGINT DEFAULT NULL"
+    );
+    console.log("✅ Coluna processing_started_at adicionada a schedules");
+  } catch {
+    // já existe
+  }
   // Migração: tabela de itens de log de agendamento
   try {
     await pool.query(
@@ -162,6 +171,7 @@ export async function initDB() {
       recurrence VARCHAR(20) DEFAULT 'none',
       recurrence_end BIGINT DEFAULT NULL,
       status VARCHAR(50) DEFAULT 'pending',
+      processing_started_at BIGINT DEFAULT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
@@ -497,10 +507,16 @@ export async function initDB() {
 
   const indexes = [
     "CREATE INDEX IF NOT EXISTS idx_schedules_status_send_at ON schedules (status, send_at)",
+    "CREATE INDEX IF NOT EXISTS idx_schedules_status_processing_started_at ON schedules (status, processing_started_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions (user_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_histories_user_session_chat ON chat_histories (user_id, session_name, chat_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_histories_updated ON chat_histories (updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_histories_user_updated ON chat_histories (user_id, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_user_phone ON crm (user_id, phone)",
     "CREATE INDEX IF NOT EXISTS idx_chat_notes_lookup ON chat_notes (user_id, session_name, chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_sources_user ON kb_sources (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_chunks_scope ON kb_chunks (user_id, session_scope)",
+    "CREATE FULLTEXT INDEX idx_kb_chunks_content ON kb_chunks (content)",
   ];
 
   for (const sql of indexes) {

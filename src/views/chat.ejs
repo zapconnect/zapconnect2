@@ -6,6 +6,7 @@
   <title>Chats • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="icon" href="/img/favinco.png" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
@@ -14,7 +15,6 @@
   <!-- ✅ Variáveis definidas ANTES do chat.js carregar -->
   <script>
     window.USER_ID = "<%= user.id %>";
-    window.USER_TOKEN = "<%= user.token %>";
     window.SESSION_NAME = "<%= typeof sessionName !== 'undefined' ? sessionName : '' %>";
   </script>
 </head>
@@ -41,7 +41,7 @@
 
       <!-- ALERTA MODO HUMANO ATIVO -->
       <div id="humanAlert" style="display:none;">
-        👤 Atendimento humano ativo — o bot está pausado
+        <i class="fa-solid fa-user-gear"></i> Atendimento humano ativo — o bot está pausado
         <br>
         <span id="humanTimer"></span>
       </div>
@@ -58,7 +58,7 @@
           <span id="pipelineStatus" class="pipeline-status"></span>
 
           <div class="human-on-group">
-            <button id="btnHumanOn">👤 Atender</button>
+            <button id="btnHumanOn"><i class="fa-solid fa-user-check"></i> Atender</button>
             <select id="humanDuration" class="human-duration-select" title="Duração do atendimento">
               <option value="300000">5 min</option>
               <option value="900000">15 min</option>
@@ -66,13 +66,17 @@
               <option value="null">Sem limite</option>
             </select>
           </div>
-          <button id="btnHumanOff" disabled>🤖 Voltar para bot</button>
-          <button id="btnAiToggle" style="display:none;">🔵 IA ligada</button>
-          <button id="btnClearAi" title="Limpar histórico da IA" style="display:none;">🧹 Resetar IA</button>
+          <button id="btnHumanOff" disabled><i class="fa-solid fa-robot"></i> Voltar para bot</button>
+          <button id="btnAiToggle" style="display:none;"><i class="fa-solid fa-robot"></i> IA ligada</button>
+          <button id="btnClearAi" title="Limpar histórico da IA" style="display:none;"><i class="fa-solid fa-broom"></i> Resetar IA</button>
         </div>
 
-        <button id="btnNotesToggle" class="btn-notes-toggle" title="Mostrar/ocultar notas">🗒️ Notas</button>
-        <button id="btnSearch" class="btn-search-toggle" title="Buscar na conversa">🔍</button>
+        <button id="btnNotesToggle" class="btn-notes-toggle" title="Mostrar/ocultar notas">
+          <i class="fa-solid fa-note-sticky"></i>
+          <span class="btn-notes-text">Notas</span>
+          <i class="fa-solid fa-chevron-down" id="btnNotesChevron"></i>
+        </button>
+        <button id="btnSearch" class="btn-search-toggle" title="Buscar na conversa"><i class="fa-solid fa-magnifying-glass"></i></button>
       </header>
 
       <!-- Barra de busca -->
@@ -112,7 +116,7 @@
         <div class="file-preview-inner">
           <img id="filePreviewImg" src="" alt="" style="display:none;" />
           <div id="filePreviewDoc" class="file-preview-doc" style="display:none;">
-            <span class="file-preview-icon">📄</span>
+        <span class="file-preview-icon"><i class="fa-solid fa-file-lines"></i></span>
             <span id="filePreviewName"></span>
           </div>
           <button id="fileClear" class="file-clear" title="Remover arquivo">✕</button>
@@ -121,11 +125,11 @@
 
       <footer class="chat-footer">
         <div class="input-wrapper">
-          <button class="btn-emoji" title="Emojis">😊</button>
+          <button class="btn-emoji" title="Emojis"><i class="fa-regular fa-face-smile"></i></button>
 
           <!-- Input de arquivo oculto -->
           <input type="file" id="fileInput" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt" style="display:none;" />
-          <button class="btn-attach" id="btnAttach" title="Anexar arquivo">📎</button>
+          <button class="btn-attach" id="btnAttach" title="Anexar arquivo"><i class="fa-solid fa-paperclip"></i></button>
 
           <textarea id="inputMsg" class="inputMsg" placeholder="Digite uma mensagem" rows="1"></textarea>
           <button id="btnSend" class="btn-send">➤</button>
@@ -140,8 +144,8 @@
   <div id="emojiModal" class="emoji-modal">
     <div class="emoji-modal-content">
       <div class="emoji-header">
-        <span>😀 Emojis</span>
-        <button id="closeEmoji" class="close-emoji">✖</button>
+        <span><i class="fa-regular fa-face-smile"></i> Emojis</span>
+        <button id="closeEmoji" class="close-emoji"><i class="fa-solid fa-xmark"></i></button>
       </div>
       <div class="emoji-grid" id="emojiGrid"></div>
     </div>

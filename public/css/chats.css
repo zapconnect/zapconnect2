@@ -571,18 +571,15 @@ button:disabled {
   .chat-title h2{
     font-size:15px;
   }
+  /* mobile: ocultar ações do header para não quebrar layout */
   .header-actions{
-    width:100%;
-    justify-content:flex-start;
-    gap:8px;
-    flex-wrap:wrap;
+    display:none !important;
   }
-  .pipeline-status{ display:none; }
   .btn-notes-toggle,
   .btn-search-toggle{
-    padding:8px 10px;
-    font-size:13px;
+    display:none !important;
   }
+  .pipeline-status{ display:none; }
   .messages{ padding:14px 5%; }
   .msg-bubble{
     max-width:88% !important;
@@ -600,6 +597,24 @@ button:disabled {
   }
   .inputMsg{
     font-size:15px;
+  }
+  .header-actions{
+    flex-wrap:wrap;
+    gap:8px;
+  }
+  .human-on-group{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px;
+    width:100%;
+  }
+  .human-on-group button,
+  .human-on-group select,
+  #btnHumanOff,
+  #btnAiToggle,
+  #btnClearAi{
+    flex:1 1 48%;
+    min-width:140px;
   }
 }
 
@@ -1156,6 +1171,15 @@ mark.search-highlight {
   align-items: center;
   justify-content: center;
 }
+.note-delete{
+  background: none;
+  border: none;
+  color: #f87171;
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+}
+.note-delete:hover{ color:#fb7185; }
 .note-item {
   background: rgba(255,255,255,0.03);
   border: 1px solid rgba(255,255,255,0.06);
@@ -1247,5 +1271,12 @@ mark.search-highlight {
   border-color: rgba(108,100,239,0.4);
   color: #c8c5ff;
   transform: translateY(-1px);
+}
+.btn-notes-toggle i{ font-size:14px; }
+.btn-notes-toggle #btnNotesChevron{
+  transition: transform .2s ease;
+}
+.btn-notes-toggle #btnNotesChevron.rotated{
+  transform: rotate(180deg);
 }
 

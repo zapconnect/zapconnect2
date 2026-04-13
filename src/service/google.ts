@@ -17,9 +17,27 @@ type ChatHistory = {
   parts: { text: string }[];
 }[];
 
-const activeChats = new Map<string, ChatHistory>();
+type CachedHistory = { history: ChatHistory; expiresAt: number };
+
+const CHAT_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutos
+const activeChats = new Map<string, CachedHistory>();
+const PERSIST_DEBOUNCE_MS = 3000; // 3s sem novas mensagens -> grava
+const PERSIST_FORCE_EVERY = 10; // gravação forçada a cada 10 mensagens
+const CHAT_HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000; // 90 dias
+const CHAT_HISTORY_MAX_PER_USER = 500; // cap por usuário (mais recente primeiro)
+const CHAT_HISTORY_CLEAN_INTERVAL_MS = 6 * 60 * 60 * 1000; // no máx. 1x a cada 6h por usuário
+type PersistState = {
+  timer?: NodeJS.Timeout;
+  pendingCount: number;
+  lastHistory: ChatHistory;
+  userId: number | string;
+  sessionName: string;
+  chatId: string;
+};
+const persistQueue = new Map<string, PersistState>();
 const HISTORY_MAX_TURNS = 32; // user+model entries
 const HISTORY_MAX_CHARS = 12000; // heurística simples (~3k tokens)
+const historyCleanupMarkers = new Map<number, number>(); // userId -> last cleanup timestamp
 
 // =======================================
 // 🔑 Create Key: user + session + chat ID
@@ -31,6 +49,76 @@ const buildChatKey = (
   sessionName: string,
   chatId: string
 ) => `USER${normalizeUserId(userId)}_${sessionName}::${chatId}`;
+
+const getCachedHistory = (chatKey: string): ChatHistory | null => {
+  const cached = activeChats.get(chatKey);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    activeChats.delete(chatKey);
+    return null;
+  }
+  return cached.history;
+};
+
+const setCachedHistory = (chatKey: string, history: ChatHistory) => {
+  activeChats.set(chatKey, { history, expiresAt: Date.now() + CHAT_CACHE_TTL_MS });
+};
+
+const flushPersist = async (chatKey: string) => {
+  const state = persistQueue.get(chatKey);
+  if (!state) return;
+  if (state.timer) clearTimeout(state.timer);
+  persistQueue.delete(chatKey);
+  await persistHistory({
+    userId: state.userId,
+    sessionName: state.sessionName,
+    chatId: state.chatId,
+    history: state.lastHistory,
+  });
+};
+
+const queuePersist = ({
+  chatKey,
+  userId,
+  sessionName,
+  chatId,
+  history,
+}: {
+  chatKey: string;
+  userId: number | string;
+  sessionName: string;
+  chatId: string;
+  history: ChatHistory;
+}) => {
+  const trimmed = trimHistory(history);
+  setCachedHistory(chatKey, trimmed);
+
+  const existing = persistQueue.get(chatKey);
+  const pendingCount = (existing?.pendingCount ?? 0) + 1;
+
+  if (existing?.timer) clearTimeout(existing.timer);
+
+  const timer = setTimeout(() => {
+    flushPersist(chatKey).catch((err) =>
+      console.warn("Falha ao persistir histórico (debounce):", err)
+    );
+  }, PERSIST_DEBOUNCE_MS);
+
+  persistQueue.set(chatKey, {
+    userId,
+    sessionName,
+    chatId,
+    pendingCount,
+    lastHistory: trimmed,
+    timer,
+  });
+
+  if (pendingCount >= PERSIST_FORCE_EVERY) {
+    flushPersist(chatKey).catch((err) =>
+      console.warn("Falha ao persistir histórico (forçado):", err)
+    );
+  }
+};
 
 async function loadHistoryFromDB({
   userId,
@@ -81,6 +169,8 @@ async function persistHistory({
       `,
       [numericUserId, sessionName, chatId, JSON.stringify(trimmed)]
     );
+
+    maybeCleanupChatHistory(numericUserId);
   } catch (err) {
     console.warn('Não foi possível salvar histórico no banco:', err);
   }
@@ -102,15 +192,13 @@ const getOrCreateChatSession = async ({
   sessionName: string;
   chatId: string;
 }): Promise<ChatSession> => {
-  if (activeChats.has(chatKey)) {
-    return model.startChat({ history: activeChats.get(chatKey)! });
-  }
+  // Fonte primária: banco. Cache em memória só para aliviar leituras repetidas.
+  let history: ChatHistory | null = await loadHistoryFromDB({ userId, sessionName, chatId });
 
-  let history: ChatHistory | null = await loadHistoryFromDB({
-    userId,
-    sessionName,
-    chatId,
-  });
+  // Fallback para cache recente (TTL 30 min) apenas se banco não tiver nada
+  if (!history || !history.length) {
+    history = getCachedHistory(chatKey);
+  }
 
   if (!history || !history.length) {
     history = [
@@ -125,7 +213,7 @@ const getOrCreateChatSession = async ({
     ];
   }
 
-  activeChats.set(chatKey, history);
+  setCachedHistory(chatKey, history);
   return model.startChat({ history });
 };
 
@@ -152,6 +240,52 @@ function trimHistory(history: ChatHistory): ChatHistory {
   }
 
   return kept.reverse();
+}
+
+const shouldCleanupHistory = (userId: number) => {
+  const last = historyCleanupMarkers.get(userId) || 0;
+  return Date.now() - last >= CHAT_HISTORY_CLEAN_INTERVAL_MS;
+};
+
+const maybeCleanupChatHistory = (userId: number) => {
+  if (!shouldCleanupHistory(userId)) return;
+  historyCleanupMarkers.set(userId, Date.now());
+  cleanupChatHistory(userId).catch((err) => {
+    console.warn("Não foi possível limpar chat_histories:", err);
+  });
+};
+
+async function cleanupChatHistory(userId: number) {
+  const db = getDB();
+
+  // 1) Limpeza por tempo
+  const cutoffSeconds = Math.floor((Date.now() - CHAT_HISTORY_RETENTION_MS) / 1000);
+  await db.run(
+    `DELETE FROM chat_histories WHERE user_id = ? AND UNIX_TIMESTAMP(updated_at) < ?`,
+    [userId, cutoffSeconds]
+  );
+
+  // 2) Limpeza por volume (mantém os mais recentes)
+  const countRow = await db.get<{ total: number }>(
+    `SELECT COUNT(*) AS total FROM chat_histories WHERE user_id = ?`,
+    [userId]
+  );
+  const total = countRow?.total || 0;
+  if (total <= CHAT_HISTORY_MAX_PER_USER) return;
+
+  await db.run(
+    `DELETE FROM chat_histories
+     WHERE user_id = ?
+       AND id NOT IN (
+         SELECT id FROM (
+           SELECT id FROM chat_histories
+           WHERE user_id = ?
+           ORDER BY updated_at DESC
+           LIMIT ?
+         ) AS recent
+       )`,
+    [userId, userId, CHAT_HISTORY_MAX_PER_USER]
+  );
 }
 
 // =======================================
@@ -182,8 +316,19 @@ export const mainGoogle = async ({
       status === 500 ||
       status === 429 ||
       msg.includes("high demand") ||
-      msg.includes("service unavailable")
+      msg.includes("service unavailable") ||
+      msg.includes("temporarily unavailable")
     );
+  };
+
+  const computeBackoff = (attempt: number, status?: number) => {
+    if (status === 429) {
+      return GEMINI_429_BACKOFF[Math.max(0, Math.min(GEMINI_429_BACKOFF.length - 1, attempt - 1))];
+    }
+    // exponencial com jitter: base 1s * 2^(attempt-1), max 12s, random +/- 25%
+    const base = Math.min(12_000, 1000 * Math.pow(2, attempt - 1));
+    const jitter = base * 0.25;
+    return base + (Math.random() * 2 - 1) * jitter;
   };
 
   try {
@@ -222,12 +367,7 @@ export const mainGoogle = async ({
         lastErr = err;
         if (!shouldRetry(err) || attempts >= 3) break;
         const status = err?.status || err?.code || err?.response?.status;
-        const delay =
-          status === 429
-            ? GEMINI_429_BACKOFF[Math.max(0, Math.min(GEMINI_429_BACKOFF.length - 1, attempts - 1))]
-            : attempts === 1
-              ? 1200
-              : 2500;
+        const delay = computeBackoff(attempts, status);
         await new Promise((r) => setTimeout(r, delay));
       }
     }
@@ -237,15 +377,23 @@ export const mainGoogle = async ({
     }
 
     // Salvar histórico
-    const history = activeChats.get(chatKey) || [];
+    const history =
+      getCachedHistory(chatKey) ||
+      (await loadHistoryFromDB({ userId, sessionName, chatId })) ||
+      [];
     history.push(
       { role: 'user', parts: [{ text: currentMessage }] },
       { role: 'model', parts: [{ text }] }
     );
 
     const trimmed = trimHistory(history);
-    activeChats.set(chatKey, trimmed);
-    await persistHistory({ userId: Number(userId), sessionName, chatId, history: trimmed });
+    queuePersist({
+      chatKey,
+      userId: Number(userId),
+      sessionName,
+      chatId,
+      history: trimmed,
+    });
 
     console.log(`📩 Gemini Resposta (${chatKey}):`, text);
     return text;
@@ -270,11 +418,11 @@ export const mainGoogle = async ({
 // =======================================
 // 🛑 Nova função para encerrar o chat
 // =======================================
-export const stopChatSession = (
+export const stopChatSession = async (
   userId: number,
   sessionName: string,
   chatId: string
-): void => {
+): Promise<void> => {
   const chatKey = buildChatKey(userId, sessionName, chatId);
 
   if (activeChats.has(chatKey)) {
@@ -283,4 +431,7 @@ export const stopChatSession = (
   } else {
     console.log(`⚠️ Nenhuma sessão ativa encontrada para -> ${chatKey}`);
   }
+
+  // garante que histórico pendente seja salvo antes de encerrar
+  await flushPersist(chatKey);
 };

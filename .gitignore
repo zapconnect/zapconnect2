@@ -3,3 +3,4 @@ tokens
 .env
 .env.backup
 dist
+schedule_uploads
