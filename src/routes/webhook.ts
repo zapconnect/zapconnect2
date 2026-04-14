@@ -2,6 +2,7 @@
 import express from "express";
 import Stripe from "stripe";
 import { getDB } from "../database";
+import { logAudit } from "../utils/audit";
 
 const router = express.Router();
 
@@ -42,6 +43,16 @@ router.post(
 
     const db = getDB();
 
+    const resolveUserId = async (metadataUserId?: any, email?: string | null): Promise<number | null> => {
+      const numericId = Number(metadataUserId);
+      if (Number.isFinite(numericId) && numericId > 0) return numericId;
+      if (email) {
+        const userByEmail = await db.get<{ id: number }>(`SELECT id FROM users WHERE email = ?`, [email]);
+        if (userByEmail?.id) return userByEmail.id;
+      }
+      return null;
+    };
+
     // =====================================================
     // 🔁 IDEMPOTÊNCIA
     // =====================================================
@@ -64,10 +75,18 @@ router.post(
       if (event.type === "checkout.session.completed") {
         const session = event.data.object as Stripe.Checkout.Session;
 
-        const userId = Number(session.metadata?.user_id);
         const plan = session.metadata?.plan;
         const email = session.customer_email;
         const subscriptionId = session.subscription as string | null;
+        const userId = await resolveUserId(session.metadata?.user_id, email || null);
+
+        if (!userId) {
+          console.warn("[stripe] checkout.session.completed sem userId resolvido", {
+            eventId: event.id,
+            email,
+            metadata: session.metadata,
+          });
+        }
 
         // 🧲 LEAD
         await db.run(
@@ -101,6 +120,19 @@ router.post(
              WHERE id = ?`,
             [plan, subscriptionId, userId]
           );
+
+          await logAudit("stripe_checkout_completed", userId, "subscription", subscriptionId, {
+            plan,
+            email,
+            amount: (session.amount_total || 0) / 100,
+            eventId: event.id,
+          });
+        } else if (session.mode === "subscription" && !userId) {
+          console.error("[stripe] checkout.session.completed sem userId para subscription", {
+            eventId: event.id,
+            email,
+            metadata: session.metadata,
+          });
         }
       }
 
@@ -111,7 +143,7 @@ router.post(
         const invoice = event.data.object as InvoiceWithExtras;
 
         if (invoice.subscription && invoice.payment_intent) {
-          const sub = await db.get<{
+          let sub = await db.get<{
             user_id: number;
             plan: string;
           }>(
@@ -120,6 +152,42 @@ router.post(
              WHERE stripe_subscription_id = ?`,
             [invoice.subscription]
           );
+
+          // Se a subscription ainda não existir (evento chegou antes do checkout), tenta resolver user e criar
+          if (!sub) {
+            const email = invoice.customer_email || (invoice.customer as string | undefined);
+            const userId = await resolveUserId(null, email || null);
+
+            if (!userId) {
+              console.error("[stripe] invoice.payment_succeeded sem subscription e sem userId", {
+                eventId: event.id,
+                subscription: invoice.subscription,
+                email,
+              });
+            } else {
+              const planName =
+                invoice.lines?.data?.[0]?.plan?.nickname ||
+                invoice.lines?.data?.[0]?.plan?.id ||
+                "pro";
+
+              await db.run(
+                `INSERT INTO subscriptions
+                 (user_id, stripe_subscription_id, plan, status, created_at)
+                 VALUES (?, ?, ?, 'active', ?)
+                 ON DUPLICATE KEY UPDATE status = 'active'`,
+                [userId, invoice.subscription, planName, Date.now()]
+              );
+
+              sub = { user_id: userId, plan: planName };
+
+              await db.run(
+                `UPDATE users
+                 SET plan = ?, subscription_id = ?, subscription_status = 'active'
+                 WHERE id = ?`,
+                [planName, invoice.subscription, userId]
+              );
+            }
+          }
 
           if (sub) {
             await db.run(
@@ -148,6 +216,13 @@ router.post(
                 Date.now(),
               ]
             );
+
+            await logAudit("stripe_payment_succeeded", sub.user_id, "subscription", invoice.subscription, {
+              paymentId: invoice.payment_intent,
+              amount: (invoice.amount_paid || 0) / 100,
+              plan: sub.plan,
+              eventId: event.id,
+            });
           }
         }
       }
@@ -210,9 +285,15 @@ router.post(
            SET plan = 'free',
                subscription_status = 'cancelled',
                subscription_id = NULL
-           WHERE subscription_id = ?`,
+          WHERE subscription_id = ?`,
           [sub.id]
         );
+
+        await logAudit("stripe_subscription_cancelled", null, "subscription", sub.id, {
+          customer: sub.customer,
+          status: sub.status,
+          eventId: event.id,
+        });
       }
 
       // =====================================================

@@ -117,6 +117,11 @@ body {
   font-size: 13px;
 }
 
+.compact-label .btn-label { display: inline; }
+
+.back-mobile { display: none; }
+.back-desktop { display: inline-flex; }
+
 /* ================= FILTROS ================= */
 .filters {
   display: flex;
@@ -125,6 +130,57 @@ body {
   border-bottom: 1px solid var(--border);
   font-size: 14px;
   color: var(--muted);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.filters-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #0f1530;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+.filters-toggle .chevron {
+  font-size: 12px;
+  transition: transform .18s ease;
+  transform: rotate(180deg);
+}
+
+.filters-toggle:hover {
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.filters-panel {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.filters-options {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.filters.is-collapsed #filtersPanel,
+.filters-panel[hidden] {
+  display: none;
+}
+
+.filters.is-collapsed .filters-toggle .chevron {
+  transform: rotate(0deg);
 }
 
 /* ================= KANBAN ================= */
@@ -496,7 +552,8 @@ body {
   .main-header {
     flex-direction: column;
     align-items: flex-start;
-    gap: 12px;
+    gap: 10px;
+    padding: 12px 14px;
   }
 
   .main-actions {
@@ -510,21 +567,74 @@ body {
   }
 }
 @media (max-width: 700px) {
+  .main-header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .title h1 {
+    font-size: 17px;
+    gap: 8px;
+  }
+
+  .title p {
+    font-size: 12px;
+  }
+
+  .main-actions {
+    gap: 6px;
+  }
+
+  .main-actions .btn,
+  .main-actions .btn.ghost {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .compact-label .btn-label { display: none; }
+  .compact-label { padding: 8px 10px; }
+
+  .back-mobile { display: inline-flex; }
+  .back-desktop { display: none; }
+
   .filters {
-    overflow-x: auto;
-    white-space: nowrap;
-    scrollbar-width: none;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 14px;
   }
 
-  .filters::-webkit-scrollbar {
-    display: none;
+  .filters-toggle {
+    width: 100%;
+    justify-content: space-between;
+    padding: 10px 12px;
   }
 
-  .filters label {
+  .filters-panel {
+    width: 100%;
     background: #0f1530;
-    padding: 6px 10px;
-    border-radius: 999px;
     border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 10px 12px;
+    gap: 12px;
+    flex-direction: column;
+  }
+
+  .filters-options {
+    width: 100%;
+    gap: 10px 12px;
+  }
+
+  .filters-options label {
+    background: #0b1124;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
+
+  .active-tag-badge {
+    width: 100%;
+    justify-content: space-between;
   }
 }
 @media (max-width: 700px) {

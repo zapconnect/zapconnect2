@@ -114,6 +114,8 @@ export async function initDB() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
       email VARCHAR(255) UNIQUE NOT NULL,
+      email_normalized VARCHAR(255) UNIQUE,
+      signup_device_id VARCHAR(255),
       password VARCHAR(255) NOT NULL,
       prompt TEXT,
       token VARCHAR(255) UNIQUE NOT NULL,
@@ -167,6 +169,7 @@ export async function initDB() {
       message TEXT,
       file LONGTEXT,
       filename VARCHAR(255),
+      preferred_session VARCHAR(255),
       send_at BIGINT NOT NULL,
       recurrence VARCHAR(20) DEFAULT 'none',
       recurrence_end BIGINT DEFAULT NULL,
@@ -460,6 +463,21 @@ export async function initDB() {
     `,
 
     `
+    CREATE TABLE IF NOT EXISTS plan_configs (
+      plan_key VARCHAR(50) PRIMARY KEY,
+      display_name VARCHAR(80) NOT NULL,
+      badge_label VARCHAR(80),
+      price DECIMAL(10,2) NOT NULL DEFAULT 0,
+      max_sessions INT NOT NULL DEFAULT 1,
+      max_ia_messages VARCHAR(20) NOT NULL DEFAULT '0',
+      max_broadcast_numbers INT NOT NULL DEFAULT 50,
+      feature_list LONGTEXT,
+      highlight TINYINT DEFAULT 0,
+      updated_at BIGINT NOT NULL
+    )
+    `,
+
+    `
     CREATE TABLE IF NOT EXISTS ai_metrics (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
@@ -477,6 +495,44 @@ export async function initDB() {
       INDEX idx_ai_metrics_chat (chat_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NULL,
+      action VARCHAR(100) NOT NULL,
+      entity_type VARCHAR(100) NULL,
+      entity_id VARCHAR(255) NULL,
+      meta LONGTEXT NULL,
+      created_at BIGINT NOT NULL,
+      INDEX idx_audit_user_created (user_id, created_at),
+      INDEX idx_audit_action_created (action, created_at)
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS device_fingerprints (
+      device_id VARCHAR(64) PRIMARY KEY,
+      user_id INT NULL,
+      account_count INT DEFAULT 1,
+      blocked TINYINT DEFAULT 0,
+      block_reason VARCHAR(255),
+      first_seen_at BIGINT NOT NULL,
+      last_seen_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS ip_registrations (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      ip VARCHAR(45) NOT NULL,
+      user_id INT NOT NULL,
+      created_at BIGINT NOT NULL,
+      INDEX idx_ip_reg_ip_created (ip, created_at),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
     `
   ];
 
@@ -489,6 +545,9 @@ export async function initDB() {
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS triggers JSON`,
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0`,
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS active TINYINT DEFAULT 1`,
+    `ALTER TABLE schedules ADD COLUMN IF NOT EXISTS preferred_session VARCHAR(255)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_normalized VARCHAR(255)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_device_id VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_started_at BIGINT DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day1_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day3_sent TINYINT DEFAULT 0`,
@@ -516,6 +575,9 @@ export async function initDB() {
     "CREATE INDEX IF NOT EXISTS idx_chat_notes_lookup ON chat_notes (user_id, session_name, chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_sources_user ON kb_sources (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_chunks_scope ON kb_chunks (user_id, session_scope)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users (email_normalized)",
+    "CREATE INDEX IF NOT EXISTS idx_users_signup_device ON users (signup_device_id)",
+    "CREATE INDEX IF NOT EXISTS idx_device_fingerprints_blocked ON device_fingerprints (blocked)",
     "CREATE FULLTEXT INDEX idx_kb_chunks_content ON kb_chunks (content)",
   ];
 
@@ -528,6 +590,17 @@ export async function initDB() {
   }
 
   console.log("📌 Tabelas verificadas/criadas com sucesso");
+}
+
+export async function closeDB() {
+  try {
+    if (pool) {
+      await pool.end();
+      console.log("🛑 Pool MySQL fechado");
+    }
+  } catch (err) {
+    console.error("Erro ao fechar pool MySQL:", err);
+  }
 }
 
 export function getDB() {

@@ -13,6 +13,7 @@ const State = {
   page:       1,
   perPage:    15,
   charts:     {},
+  planConfigs: [],
 };
 
 /* ===========================
@@ -40,6 +41,7 @@ function ensureCanvas(wrap, id) {
 =========================== */
 document.addEventListener("DOMContentLoaded", () => {
   loadDashboard();
+  loadPlanConfigs();
   bindFilters();
   bindTableSort();
   loadTemplates();
@@ -89,12 +91,436 @@ async function loadDashboard() {
 }
 
 /* ===========================
+   DIREITOS DOS PLANOS
+=========================== */
+async function loadPlanConfigs() {
+  try {
+    const res = await fetch("/admin/plan-configs");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    State.planConfigs = Array.isArray(data.plans) ? data.plans : [];
+    renderPlanConfigs();
+  } catch (err) {
+    console.error("Erro ao carregar planos:", err);
+    const wrap = document.getElementById("plan-configs-grid");
+    renderEmptyState(wrap, "Falha ao carregar os planos", "fa-sliders");
+  }
+}
+
+function formatPlanIaLimit(value) {
+  if (String(value).toLowerCase() === "unlimited") return "unlimited";
+  return String(value ?? 0);
+}
+
+function formatPlanPrice(value) {
+  return Number(value || 0).toLocaleString("pt-BR", {
+    minimumFractionDigits: Number(value || 0) % 1 === 0 ? 0 : 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function getPlanCardData(card) {
+  const plan = card?.dataset.plan || "";
+  const displayName = card?.querySelector('[data-field="displayName"]')?.value?.trim() || "";
+  const badgeLabel = card?.querySelector('[data-field="badgeLabel"]')?.value?.trim() || "";
+  const price = Number(card?.querySelector('[data-field="price"]')?.value || 0);
+  const maxSessions = Number(card?.querySelector('[data-field="maxSessions"]')?.value || 0);
+  const maxIaMessages = card?.querySelector('[data-field="maxIaMessages"]')?.value?.trim() || "0";
+  const maxBroadcastNumbers = Number(card?.querySelector('[data-field="maxBroadcastNumbers"]')?.value || 0);
+  const featureList = (card?.querySelector('[data-field="featureList"]')?.value || "")
+    .split(/\r?\n/)
+    .map(item => item.trim())
+    .filter(Boolean);
+  const highlight = Boolean(card?.querySelector('[data-field="highlight"]')?.checked);
+
+  return {
+    plan,
+    displayName,
+    badgeLabel,
+    price,
+    maxSessions,
+    maxIaMessages,
+    maxBroadcastNumbers,
+    featureList,
+    highlight,
+  };
+}
+
+function renderPlanConfigSummary(card) {
+  const summary = card?.querySelector("[data-summary]");
+  if (!summary) return;
+
+  const data = getPlanCardData(card);
+  const iaLabel = String(data.maxIaMessages).toLowerCase() === "unlimited"
+    ? "IA ilimitada"
+    : `${data.maxIaMessages || 0} mensagens IA/mês`;
+
+  const bullets = [
+    `${data.maxSessions || 0} sessão(ões) simultâneas`,
+    iaLabel,
+    `${data.maxBroadcastNumbers || 0} número(s) por disparo/agendamento`,
+    ...data.featureList.slice(0, 4),
+  ];
+
+  summary.innerHTML = `
+    <div class="plan-config-summary-title">
+      <i class="fa-solid fa-wand-magic-sparkles"></i>
+      Preview dos direitos
+    </div>
+    <ul>
+      ${bullets.map(item => `<li>${escapeHtml(item)}</li>`).join("")}
+    </ul>
+  `;
+}
+
+function bindPlanConfigCard(card) {
+  if (!card) return;
+
+  card.querySelectorAll("[data-field]").forEach((field) => {
+    const eventName = field.type === "checkbox" ? "change" : "input";
+    field.addEventListener(eventName, () => {
+      const status = card.querySelector("[data-status]");
+      if (status) status.textContent = "";
+      card.classList.toggle("is-highlight", Boolean(card.querySelector('[data-field="highlight"]')?.checked));
+      renderPlanConfigSummary(card);
+    });
+  });
+
+  card.querySelector('[data-action="save-plan"]')?.addEventListener("click", async () => {
+    const payload = getPlanCardData(card);
+    const status = card.querySelector("[data-status]");
+    const button = card.querySelector('[data-action="save-plan"]');
+
+    if (!payload.displayName) {
+      showToast("error", "Informe o nome exibido do plano");
+      return;
+    }
+    if (!payload.featureList.length) {
+      showToast("error", "Informe ao menos um benefício para o plano");
+      return;
+    }
+
+    const iaValue = String(payload.maxIaMessages).trim().toLowerCase();
+    if (iaValue !== "unlimited" && (!Number.isFinite(Number(payload.maxIaMessages)) || Number(payload.maxIaMessages) < 0)) {
+      showToast("error", "Mensagens IA deve ser um número ou 'unlimited'");
+      return;
+    }
+
+    if (status) status.textContent = "Salvando...";
+    button?.setAttribute("disabled", "disabled");
+
+    try {
+      const res = await fetch("/admin/plan-configs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || "Falha ao salvar");
+
+      State.planConfigs = State.planConfigs.map((plan) =>
+        plan.name === data.plan.name ? data.plan : plan
+      );
+      renderPlanConfigs();
+      showToast("success", `Plano ${data.plan.displayName} salvo`);
+    } catch (err) {
+      console.error("Erro ao salvar plano:", err);
+      if (status) status.textContent = "";
+      showToast("error", err.message || "Erro ao salvar plano");
+    } finally {
+      button?.removeAttribute("disabled");
+    }
+  });
+
+  renderPlanConfigSummary(card);
+}
+
+function renderPlanConfigs() {
+  const wrap = document.getElementById("plan-configs-grid");
+  if (!wrap) return;
+
+  if (!State.planConfigs.length) {
+    renderEmptyState(wrap, "Nenhum plano configurado ainda", "fa-sliders");
+    return;
+  }
+
+  wrap.innerHTML = State.planConfigs.map((plan) => `
+    <article class="plan-config-card ${plan.highlight ? "is-highlight" : ""}" data-plan="${plan.name}">
+      <div class="plan-config-head">
+        <div>
+          <span class="plan-config-key">${escapeHtml(plan.name)}</span>
+          <h4>${escapeHtml(plan.displayName || plan.name)}</h4>
+        </div>
+        <span class="plan-config-price">R$ ${formatPlanPrice(plan.price)}${Number(plan.price || 0) > 0 ? "/mês" : ""}</span>
+      </div>
+
+      <div class="plan-config-fields">
+        <label>Nome exibido</label>
+        <input type="text" data-field="displayName" value="${escapeHtml(plan.displayName || "")}" />
+
+        <label>Texto da badge</label>
+        <input type="text" data-field="badgeLabel" value="${escapeHtml(plan.badgeLabel || "")}" placeholder="Ex: Popular" />
+
+        <div class="plan-config-inline">
+          <div>
+            <label>Preço mensal</label>
+            <input type="number" min="0" step="0.01" data-field="price" value="${Number(plan.price || 0)}" />
+          </div>
+          <div>
+            <label>Máx. sessões</label>
+            <input type="number" min="1" step="1" data-field="maxSessions" value="${Number(plan.maxSessions || 1)}" />
+          </div>
+        </div>
+
+        <div class="plan-config-inline">
+          <div>
+            <label>Mensagens IA/mês</label>
+            <input type="text" data-field="maxIaMessages" value="${escapeHtml(formatPlanIaLimit(plan.maxIaMessages))}" placeholder="500 ou unlimited" />
+          </div>
+          <div>
+            <label>Máx. números por disparo</label>
+            <input type="number" min="1" step="1" data-field="maxBroadcastNumbers" value="${Number(plan.maxBroadcastNumbers || 50)}" />
+          </div>
+        </div>
+
+        <label>Benefícios no checkout (1 por linha)</label>
+        <textarea data-field="featureList" placeholder="1 benefício por linha">${escapeHtml((plan.featureList || []).join("\n"))}</textarea>
+
+        <label class="plan-config-toggle">
+          <input type="checkbox" data-field="highlight" ${plan.highlight ? "checked" : ""} />
+          Destacar este plano no checkout
+        </label>
+
+        <div class="plan-config-summary" data-summary></div>
+
+        <div class="plan-config-actions">
+          <button class="btn-export" type="button" data-action="save-plan">
+            <i class="fa-solid fa-floppy-disk"></i> Salvar plano
+          </button>
+          <span class="plan-config-status" data-status>${plan.updatedAt ? `Atualizado em ${new Date(plan.updatedAt).toLocaleString("pt-BR")}` : ""}</span>
+        </div>
+      </div>
+    </article>
+  `).join("");
+
+  wrap.querySelectorAll(".plan-config-card").forEach(bindPlanConfigCard);
+}
+
+/* ===========================
    TEMPLATES TRIAL
 =========================== */
 const TemplateState = {
   templates: {},
   current: "trial_day1",
 };
+
+function escapeHtml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function buildTemplatePreviewDocument(subject, body, templateLabel, templateKey = "") {
+  const previewBaseUrl = window.location.origin || "http://localhost:3000";
+  const previewName = "Usuario";
+  const resolvedSubject = String(subject || "")
+    .replace(/{{\s*BASE_URL\s*}}/g, previewBaseUrl)
+    .replace(/{{\s*NAME\s*}}/g, previewName);
+  const safeSubject = escapeHtml(resolvedSubject || "Sem assunto");
+  const safeLabel = escapeHtml(templateLabel || "Template");
+  const rawContent = String(body || "").trim();
+  const bodyMatch = rawContent.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+  const extractedContent = (bodyMatch ? bodyMatch[1] : rawContent) || "<p>(vazio)</p>";
+  let content = extractedContent
+    .replace(/{{\s*BASE_URL\s*}}/g, previewBaseUrl)
+    .replace(/{{\s*NAME\s*}}/g, previewName);
+
+  if (templateKey === "trial_last") {
+    content = content.replace(
+      /<p>\s*<a\s+href="[^"]*\/checkout">\s*Fazer upgrade agora\s*<\/a>\s*<\/p>/i,
+      `<div style="margin:22px 0;text-align:center;">
+        <a href="${previewBaseUrl}/checkout"
+          style="
+            background:#6C64EF;
+            color:#ffffff;
+            padding:14px 22px;
+            border-radius:12px;
+            text-decoration:none;
+            font-weight:700;
+            display:inline-block;
+            font-size:14px;
+          ">
+          Fazer upgrade agora
+        </a>
+      </div>`
+    );
+  }
+
+  return `
+    <!DOCTYPE html>
+    <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>${safeSubject}</title>
+        <style>
+          :root { color-scheme: light; }
+          * { box-sizing: border-box; }
+          body {
+            margin: 0;
+            font-family: Arial, Helvetica, sans-serif;
+            background: #f6f7fb;
+          }
+          .preview-stage {
+            padding: 26px 14px;
+          }
+          .mail-card {
+            max-width: 560px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+          }
+          .mail-banner {
+            background: linear-gradient(135deg,#6C64EF,#4F46E5);
+            padding: 22px 26px;
+            color: #ffffff;
+          }
+          .mail-badge {
+            display: block;
+            font-size: 18px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+          }
+          .mail-banner p {
+            margin: 4px 0 0;
+            font-size: 13px;
+            opacity: 0.9;
+          }
+          .mail-content {
+            padding: 26px;
+            color: #374151;
+            font-size: 14px;
+            line-height: 1.7;
+          }
+          .mail-content h2 {
+            margin: 0 0 12px;
+            font-size: 20px;
+            line-height: 1.3;
+            color: #111827;
+          }
+          .mail-content img,
+          .mail-content video,
+          .mail-content table {
+            max-width: 100%;
+          }
+          .mail-content img {
+            height: auto;
+            border-radius: 12px;
+          }
+          .mail-content a {
+            color: #6C64EF;
+          }
+          .mail-content p {
+            margin: 0 0 16px;
+          }
+          .mail-content ul,
+          .mail-content ol {
+            margin: 0 0 16px;
+            padding-left: 22px;
+          }
+          .mail-separator {
+            border: none;
+            border-top: 1px solid #e5e7eb;
+            margin: 22px 0;
+          }
+          .mail-muted {
+            margin: 0;
+            font-size: 12px;
+            color: #9ca3af;
+            line-height: 1.5;
+          }
+          .mail-footer {
+            background: #111827;
+            padding: 14px 20px;
+            text-align: center;
+          }
+          .mail-footer p {
+            margin: 0;
+            color: #9ca3af;
+            font-size: 12px;
+          }
+          .preview-shell {
+            background: #f3f4f6;
+            padding: 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            color: #111827;
+            word-break: break-all;
+            line-height: 1.5;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="preview-stage">
+          <div class="mail-card">
+            <div class="mail-banner">
+              <span class="mail-badge">Zapconnect</span>
+              <p>${safeLabel}</p>
+            </div>
+            <div class="mail-content">
+              <h2>Ola, ${previewName} &#128075;</h2>
+              <p>Esse e o visual final do e-mail de trial com o template aplicado.</p>
+              <div>${content}</div>
+              <hr class="mail-separator" />
+              <p class="mail-muted">Se precisar de ajuda, basta responder este e-mail.</p>
+            </div>
+            <div class="mail-footer">
+              <p>&copy; ${new Date().getFullYear()} Zapconnect - Atendimento, Automacao e IA no WhatsApp.</p>
+            </div>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+function updateTemplatePreview() {
+  const select = document.getElementById("tpl-select");
+  const subject = document.getElementById("tpl-subject");
+  const body = document.getElementById("tpl-body");
+  const preview = document.getElementById("tpl-preview");
+  const previewSubject = document.getElementById("tpl-preview-subject");
+  const previewTemplate = document.getElementById("tpl-preview-template");
+  const previewDate = document.getElementById("tpl-preview-date");
+  const previewWhen = document.getElementById("tpl-preview-when");
+
+  if (!select || !subject || !body || !preview) return;
+
+  const templateLabel = select.options[select.selectedIndex]?.text || "Template";
+  const templateKey = select.value || "";
+  const nextSubject = subject.value.trim() || "Sem assunto";
+  const stamp = new Date();
+  const dateLabel = stamp.toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric"
+  });
+  const timeLabel = stamp.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+
+  if (previewSubject) previewSubject.textContent = nextSubject;
+  if (previewTemplate) previewTemplate.textContent = templateLabel;
+  if (previewDate) previewDate.textContent = `${dateLabel} • ${timeLabel}`;
+  if (previewWhen) previewWhen.textContent = `${dateLabel}, ${timeLabel}`;
+  preview.srcdoc = buildTemplatePreviewDocument(nextSubject, body.value, templateLabel, templateKey);
+}
 
 async function loadTemplates() {
   try {
@@ -126,13 +552,15 @@ function bindTemplateForm() {
     renderTemplateForm();
   };
 
-  const updatePreview = () => {
-    preview.srcdoc = body.value || "<p>(vazio)</p>";
-  };
-  body.addEventListener("input", updatePreview);
+  body.addEventListener("input", () => {
+    const st = document.getElementById("tpl-status");
+    if (st) st.textContent = "";
+    updateTemplatePreview();
+  });
   subject.addEventListener("input", () => {
     const st = document.getElementById("tpl-status");
     if (st) st.textContent = "";
+    updateTemplatePreview();
   });
 
   saveBtn.onclick = async () => {
@@ -174,7 +602,7 @@ function renderTemplateForm() {
   const status = document.getElementById("tpl-status");
   if (subject) subject.value = tpl.subject || "";
   if (body) body.value = tpl.body || "";
-  if (preview) preview.srcdoc = tpl.body || "";
+  if (preview) updateTemplatePreview();
   if (status) status.textContent = tpl.updated_at ? ("Última edição: " + new Date(tpl.updated_at).toLocaleString()) : "Default";
 }
 

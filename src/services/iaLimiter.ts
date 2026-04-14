@@ -1,6 +1,7 @@
 // src/services/iaLimiter.ts
 import { getDB } from "../database";
-import { PLANS, PlanName } from "../config/plans";
+import { PlanName } from "../config/plans";
+import { getPlanConfig } from "./planConfigs";
 
 const ONE_MONTH = 30 * 24 * 60 * 60 * 1000;
 
@@ -41,7 +42,7 @@ export async function canUseIA(userId: number): Promise<boolean> {
     return false;
   }
 
-  const planConfig = PLANS[user.plan];
+  const planConfig = await getPlanConfig(user.plan);
   if (!planConfig) return false;
 
   const now = Date.now();

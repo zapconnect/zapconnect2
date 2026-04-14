@@ -1,7 +1,8 @@
 // src/middlewares/subscriptionGuard.ts
 import { Request, Response, NextFunction } from "express";
 import { getDB } from "../database";
-import { PLANS, PlanName } from "../config/plans";
+import { PlanName } from "../config/plans";
+import { getPlanConfig } from "../services/planConfigs";
 
 interface AuthUser {
   id: number;
@@ -33,11 +34,11 @@ export async function subscriptionGuard(
 
   const plan = user.plan;
 
-  if (!plan || !PLANS[plan]) {
+  const planConfig = await getPlanConfig(plan);
+
+  if (!plan || !planConfig) {
     return res.redirect("/checkout");
   }
-
-  const planConfig = PLANS[plan];
 
   // ===============================
   // ⏱ EXPIRAÇÃO DO TRIAL

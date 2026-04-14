@@ -16,6 +16,7 @@
   <link rel="icon" href="/img/favinco.png" />
   <script src="/js/loading-utils.js"></script>
   <script src="/js/toast.js"></script>
+  <script src="/js/deviceFingerprint.js"></script>
 
   <style>
     :root {
@@ -246,6 +247,15 @@
         return showNotification("As senhas não coincidem.", "error");
       }
 
+      let deviceId = null;
+      try {
+        if (window.getDeviceFingerprint) {
+          deviceId = await window.getDeviceFingerprint();
+        }
+      } catch (err) {
+        console.warn("fingerprint_unavailable", err);
+      }
+
       try {
         const res = await fetch("/register", {
           method: "POST",
@@ -254,7 +264,8 @@
             name: name.value.trim(),
             email: email.value.trim(),
             password: password.value,
-            prompt
+            prompt,
+            deviceId
           })
         });
 

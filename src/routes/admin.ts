@@ -1,9 +1,19 @@
 import express from "express";
 import { getDB } from "../database";
+import { PLAN_NAMES } from "../config/plans";
+import { listPlanConfigs, savePlanConfig } from "../services/planConfigs";
 import { availableTrialKeys, listTrialTemplates, saveTrialTemplate } from "../services/trialTemplates";
 
 const router = express.Router();
 const email = "viniciussowza16@gmail.com";
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+const getRequestIp = (req: any): string | null => {
+  const forwarded = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const ip = raw?.toString().split(",")[0].trim() || req.socket?.remoteAddress || null;
+  return ip ? ip.replace(/^::ffff:/, "") : null;
+};
 
 router.get("/", (req, res) => {
   const user = (req as any).user;
@@ -158,6 +168,75 @@ router.get("/dashboard-data", async (req, res) => {
   });
 });
 
+router.get("/plan-configs", async (req, res) => {
+  const user = (req as any).user;
+  if (user.email !== email) return res.status(403).json({ error: "Acesso negado" });
+
+  try {
+    const plans = await listPlanConfigs();
+    return res.json({ ok: true, plans });
+  } catch (err) {
+    console.error("Erro ao listar configurações de plano:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao listar configurações" });
+  }
+});
+
+router.post("/plan-configs", async (req, res) => {
+  const user = (req as any).user;
+  if (user.email !== email) return res.status(403).json({ error: "Acesso negado" });
+
+  try {
+    const {
+      plan,
+      displayName,
+      badgeLabel,
+      price,
+      maxSessions,
+      maxIaMessages,
+      maxBroadcastNumbers,
+      featureList,
+      highlight,
+    } = req.body || {};
+
+    const safePlan = String(plan || "").trim().toLowerCase();
+    if (!PLAN_NAMES.includes(safePlan as any)) {
+      return res.status(400).json({ ok: false, error: "Plano inválido" });
+    }
+
+    const normalizedFeatures = Array.isArray(featureList)
+      ? featureList
+      : String(featureList || "")
+          .split(/\r?\n/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+
+    if (!String(displayName || "").trim()) {
+      return res.status(400).json({ ok: false, error: "Nome exibido é obrigatório" });
+    }
+
+    if (!normalizedFeatures.length) {
+      return res.status(400).json({ ok: false, error: "Informe ao menos um benefício do plano" });
+    }
+
+    const saved = await savePlanConfig({
+      plan: safePlan as any,
+      displayName,
+      badgeLabel,
+      price,
+      maxSessions,
+      maxIaMessages,
+      maxBroadcastNumbers,
+      featureList: normalizedFeatures,
+      highlight,
+    });
+
+    return res.json({ ok: true, plan: saved });
+  } catch (err) {
+    console.error("Erro ao salvar configuração de plano:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao salvar configuração" });
+  }
+});
+
 // Templates de e-mail do trial
 router.get("/email-templates", async (req, res) => {
   const user = (req as any).user;
@@ -199,6 +278,124 @@ router.post("/email-templates", async (req, res) => {
   } catch (err) {
     console.error("Erro ao salvar template:", err);
     return res.status(500).json({ ok: false, error: "Erro ao salvar" });
+  }
+});
+
+router.get("/abuse-report", async (req, res) => {
+  const user = (req as any).user;
+  if (user.email !== email) return res.status(403).json({ error: "Acesso negado" });
+
+  try {
+    const db = getDB();
+    const since = Date.now() - THIRTY_DAYS_MS;
+
+    const devices = await db.all(`
+      SELECT device_id, user_id, account_count, blocked, block_reason, first_seen_at, last_seen_at
+      FROM device_fingerprints
+      WHERE account_count > 1
+      ORDER BY account_count DESC, last_seen_at DESC
+    `);
+
+    const ips = await db.all(
+      `
+      SELECT
+        ip,
+        COUNT(DISTINCT user_id) AS accounts,
+        MAX(created_at) AS last_seen
+      FROM ip_registrations
+      WHERE created_at >= ?
+      GROUP BY ip
+      HAVING accounts > 2
+      ORDER BY accounts DESC, last_seen DESC
+      `,
+      [since]
+    );
+
+    const emails = await db.all(`
+      SELECT email_normalized, COUNT(*) AS accounts
+      FROM users
+      WHERE email_normalized IS NOT NULL AND email_normalized <> ''
+      GROUP BY email_normalized
+      HAVING accounts > 1
+      ORDER BY accounts DESC, email_normalized ASC
+    `);
+
+    return res.json({ ok: true, devices, ips, emails });
+  } catch (err) {
+    console.error("Erro ao gerar abuse-report:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
+  }
+});
+
+router.post("/block-device", async (req, res) => {
+  const user = (req as any).user;
+  if (user.email !== email) return res.status(403).json({ error: "Acesso negado" });
+
+  const deviceId = String(req.body?.deviceId || "").trim();
+  const reasonRaw = String(req.body?.reason || "").trim();
+  const reason = reasonRaw ? reasonRaw.slice(0, 255) : "Bloqueado manualmente";
+
+  if (!deviceId) {
+    return res.status(400).json({ error: "deviceId é obrigatório" });
+  }
+
+  try {
+    const db = getDB();
+    const device = await db.get<{ device_id: string }>(
+      `SELECT device_id FROM device_fingerprints WHERE device_id = ?`,
+      [deviceId]
+    );
+
+    if (!device) {
+      return res.status(404).json({ error: "Dispositivo não encontrado" });
+    }
+
+    const now = Date.now();
+    await db.run(
+      `
+      UPDATE device_fingerprints
+      SET blocked = 1,
+          block_reason = ?,
+          last_seen_at = ?
+      WHERE device_id = ?
+      `,
+      [reason, now, deviceId]
+    );
+
+    const trialUsers = await db.all<{ id: number }>(
+      `
+      SELECT id
+      FROM users
+      WHERE signup_device_id = ?
+        AND subscription_status = 'trial'
+      `,
+      [deviceId]
+    );
+
+    for (const u of trialUsers) {
+      await db.run(
+        `
+        UPDATE users
+        SET subscription_status = 'cancelled',
+            plan = 'free',
+            plan_expires_at = ?
+        WHERE id = ?
+        `,
+        [now, u.id]
+      );
+    }
+
+    console.warn("device_blocked_admin", {
+      reason,
+      deviceId: deviceId.slice(0, 8),
+      ip: getRequestIp(req),
+      cancelledTrials: trialUsers.length,
+    });
+
+    return res.json({ ok: true, blocked: true, cancelledTrials: trialUsers.length });
+  } catch (err) {
+    console.error("Erro ao bloquear dispositivo:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
   }
 });
 

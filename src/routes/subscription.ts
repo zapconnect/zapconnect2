@@ -2,7 +2,8 @@
 import express, { Request, Response } from "express";
 import { stripe } from "../lib/stripe";
 import { authMiddleware } from "../middlewares/authMiddleware";
-import { PLANS, PlanName } from "../config/plans";
+import { PlanName } from "../config/plans";
+import { getPlanConfig } from "../services/planConfigs";
 
 const router = express.Router();
 
@@ -18,7 +19,7 @@ router.post(
         return res.status(400).json({ error: "Plano não informado" });
       }
 
-      const selectedPlan = PLANS[plan];
+      const selectedPlan = await getPlanConfig(plan);
 
       if (!selectedPlan) {
         return res.status(400).json({ error: "Plano inválido" });
@@ -46,9 +47,7 @@ router.post(
               recurring: { interval: "month" },
               product_data: {
                 name:
-                  plan === "starter"
-                    ? "Plano Starter"
-                    : "Plano Pro",
+                  `Plano ${selectedPlan.displayName}`,
               },
               unit_amount: amountInCents,
             },

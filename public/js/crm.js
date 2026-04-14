@@ -11,6 +11,27 @@ let activeTag = null; // tag clicada para filtrar
 let modalTags = [];
 let modalNotes = [];
 let viewMode = "kanban"; // "kanban" | "list"
+let currentPage = 1;
+let totalPages = 1;
+let isLoading = false;
+const PAGE_SIZE = 100;
+
+// ------------------------------------------------------
+// SOCKET.IO (atualização em tempo real)
+// ------------------------------------------------------
+let socket = null;
+try {
+    socket = io({ auth: { userId: window.USER_ID } });
+    socket.on("crm:changed", () => {
+        loadClients();
+    });
+} catch (err) {
+    console.warn("Socket CRM indisponível:", err);
+}
+
+function notifyCrmChanged() {
+    try { socket?.emit("crm:changed_local"); } catch { /* ignore */ }
+}
 
 function normalizeStage(stage) {
     const s = (stage || "Novo")
@@ -46,6 +67,43 @@ const filterQualificando = document.getElementById("filterQualificando");
 const filterNegociacao = document.getElementById("filterNegociacao");
 const filterFechado = document.getElementById("filterFechado");
 const filterPerdido = document.getElementById("filterPerdido");
+const filtersWrap = document.getElementById("filters");
+const filtersToggle = document.getElementById("filtersToggle");
+const filtersPanel = document.getElementById("filtersPanel");
+let filtersManual = false; // usuário já interagiu
+
+function setFiltersOpen(isOpen) {
+    if (!filtersWrap) return;
+    filtersWrap.classList.toggle("is-collapsed", !isOpen);
+    filtersToggle?.setAttribute("aria-expanded", String(isOpen));
+    if (filtersPanel) filtersPanel.hidden = !isOpen;
+}
+
+filtersToggle?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    filtersManual = true;
+    const willOpen = filtersWrap?.classList.contains("is-collapsed");
+    setFiltersOpen(Boolean(willOpen));
+});
+
+document.addEventListener("click", (e) => {
+    if (!filtersWrap || filtersWrap.classList.contains("is-collapsed")) return;
+    if (!filtersWrap.contains(e.target)) setFiltersOpen(false);
+});
+
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") setFiltersOpen(false);
+});
+
+function autoFiltersByWidth() {
+    if (filtersManual) return;
+    const isSmall = window.innerWidth <= 700;
+    setFiltersOpen(!isSmall);
+}
+
+setFiltersOpen(true);
+window.addEventListener("resize", autoFiltersByWidth);
+window.addEventListener("load", autoFiltersByWidth);
 
 // Modal inputs
 const modalName = document.getElementById("modalName");
@@ -97,6 +155,13 @@ function autoViewByWidth() {
 window.addEventListener("resize", autoViewByWidth);
 window.addEventListener("load", autoViewByWidth);
 
+// Busca com debounce
+let searchDebounce = null;
+searchInput?.addEventListener("input", () => {
+    clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(() => loadClients(true), 250);
+});
+
 // ------------------------------------------------------
 // RENDER TAGS DO MODAL
 // ------------------------------------------------------
@@ -145,18 +210,54 @@ function renderModalNotes() {
 // ------------------------------------------------------
 // LOAD CLIENTS
 // ------------------------------------------------------
-async function loadClients() {
+async function loadClients(reset = false) {
+  if (isLoading) return;
+  if (reset) {
+    currentPage = 1;
+    totalPages = 1;
+    clients = [];
+    renderBoard();
+  }
+
+  if (currentPage > totalPages) return;
+
+  isLoading = true;
   try {
-    const res = await fetch("/api/crm/list");
+    const term = (searchInput?.value || "").trim();
+    const qs = new URLSearchParams({
+      page: String(currentPage),
+      pageSize: String(PAGE_SIZE),
+    });
+    if (term) qs.set("term", term);
+
+    const res = await fetch(`/api/crm/list?${qs.toString()}`);
     const data = await res.json();
 
-    clients = data.clients || [];   // ok
-    console.log("CRM: clientes carregados", clients.length);
+    if (reset) clients = [];
+    clients = clients.concat(data.clients || []);
+    currentPage = data.page || currentPage;
+    totalPages = data.totalPages || 1;
+
+    toggleLoadMore();
     renderBoard();
   } catch (err) {
     console.error(err);
     showToast("Erro ao carregar clientes", "error");
+  } finally {
+    isLoading = false;
   }
+}
+
+function loadMoreClients() {
+  if (currentPage >= totalPages) return;
+  currentPage += 1;
+  loadClients();
+}
+
+function toggleLoadMore() {
+  const btn = document.getElementById("crmLoadMore");
+  if (!btn) return;
+  btn.style.display = currentPage < totalPages ? "inline-flex" : "none";
 }
 
 // ------------------------------------------------------
@@ -397,13 +498,6 @@ function renderBoard() {
         zone.appendChild(card);
     });
 
-    if (!rendered) {
-        const empty = document.createElement("div");
-        empty.className = "kanban-empty";
-        empty.innerHTML = `<i class="fa-regular fa-circle-question"></i><p>Nenhum cliente encontrado.<br><small>Revise filtros ou cadastre um novo.</small></p>`;
-        document.getElementById("kanbanBoard")?.appendChild(empty);
-    }
-
     // contadores e valores por coluna
     for (const k in counts) {
         const el = document.getElementById("count-" + k);
@@ -457,7 +551,16 @@ function selectClient(id) {
     modalCity.value = selectedClient.citystate;
     modalStage.value = selectedClient.stage;
 
-    if (modalValue) modalValue.value = selectedClient.deal_value ?? "";
+    if (modalValue) {
+        if (selectedClient.deal_value != null && selectedClient.deal_value !== "") {
+            const num = Number(selectedClient.deal_value);
+            const safeNum = Number.isFinite(num) ? num : 0;
+            // input type="number" precisa de ponto decimal (não vírgula)
+            modalValue.value = safeNum.toFixed(2);
+        } else {
+            modalValue.value = "";
+        }
+    }
     if (modalFollowUp) {
         if (selectedClient.follow_up_date) {
             // Converter timestamp (ms) para formato YYYY-MM-DD do input date
@@ -563,6 +666,7 @@ modalDelete?.addEventListener("click", async () => {
     }
 
         showToast("Cliente excluído!");
+        notifyCrmChanged();
         closeClientModal();
         loadClients();
 
@@ -576,10 +680,14 @@ modalDelete?.addEventListener("click", async () => {
 // ------------------------------------------------------
 function parseDealValue(rawInput) {
     const raw = String(rawInput ?? "").trim();
-    if (!raw) return 0;
-    const normalized = raw.replace(/\s+/g, "").replace(/\./g, "").replace(",", ".");
+    if (!raw) return null;
+    // aceita formatos "1.234,56" ou "1234.56"
+    const normalized = raw
+        .replace(/\s+/g, "")
+        .replace(/\.(?=\d{3}(,|$))/g, "") // remove pontos de milhar
+        .replace(",", ".");
     const n = Number(normalized);
-    return Number.isFinite(n) ? n : 0;
+    return Number.isFinite(n) ? n : null;
 }
 
 modalSave.addEventListener("click", async () => {
@@ -630,6 +738,7 @@ modalSave.addEventListener("click", async () => {
             if (!res.ok || data.ok === false) throw new Error(data.error || "Erro ao atualizar cliente");
             showToast("Cliente atualizado!");
             savedOk = true;
+            notifyCrmChanged();
         } else {
             const res = await fetch("/api/crm/create", {
                 method: "POST",
@@ -640,6 +749,7 @@ modalSave.addEventListener("click", async () => {
             if (!res.ok || data.ok === false) throw new Error(data.error || "Erro ao criar cliente");
             showToast("Cliente criado!");
             savedOk = true;
+            notifyCrmChanged();
         }
 
     } catch (err) {
@@ -692,6 +802,7 @@ document.querySelectorAll(".kanban-dropzone").forEach(zone => {
             if (c) c.stage = stage;
 
             renderBoard();
+            notifyCrmChanged();
 
         } catch (err) {
             showToast("Erro ao atualizar estágio", "error");
@@ -738,7 +849,7 @@ Object.entries(stageMap).forEach(([checkboxId, stage]) => {
 // ------------------------------------------------------
 // EVENTOS
 // ------------------------------------------------------
-refreshBtn?.addEventListener("click", loadClients);
+refreshBtn?.addEventListener("click", () => loadClients(true));
 searchInput?.addEventListener("input", renderBoard);
 
 [
@@ -864,6 +975,8 @@ sortDirBtn?.addEventListener("click", () => {
     sortDirBtn.textContent = sortDir === "asc" ? "↑ Asc" : "↓ Desc";
     renderBoard();
 });
+
+document.getElementById("crmLoadMore")?.addEventListener("click", loadMoreClients);
 
 // ------------------------------------------------------
 // INIT

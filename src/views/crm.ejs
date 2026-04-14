@@ -31,6 +31,9 @@
 
         <div class="title">
           <h1>
+            <a href="/painel" class="btn ghost back-mobile" aria-label="Voltar para o painel">
+              <i class="fa-solid fa-arrow-left"></i>
+            </a>
             <i class="fa-solid fa-chart-column"></i>
             Pipeline de Vendas
           </h1>
@@ -58,17 +61,22 @@
             <i class="fa-solid fa-rotate"></i>
           </button>
 
-          <button id="exportBtn" class="btn ghost" title="Exportar clientes filtrados como CSV">
+          <button id="exportBtn" class="btn ghost compact-label" title="Exportar clientes filtrados como CSV">
             <i class="fa-solid fa-file-csv"></i>
-            Exportar CSV
+            <span class="btn-label">Exportar CSV</span>
           </button>
 
-          <button id="addClientBtn" class="btn">
+          <button id="addClientBtn" class="btn compact-label">
             <i class="fa-solid fa-user-plus"></i>
-            Novo Cliente
+            <span class="btn-label">Novo Cliente</span>
           </button>
 
-          <a href="/painel" class="btn ghost">
+          <button id="crmLoadMore" class="btn ghost" style="display:none">
+            <i class="fa-solid fa-angles-down"></i>
+            Carregar mais
+          </button>
+
+          <a href="/painel" class="btn ghost back-desktop">
             <i class="fa-solid fa-arrow-left"></i>
             Voltar
           </a>
@@ -79,12 +87,22 @@
       <!-- =============================
          🔎 FILTROS
     ============================== -->
-      <div class="filters">
-        <label><input type="checkbox" id="filterNovo" checked> Novo</label>
-        <label><input type="checkbox" id="filterQualificando" checked> Qualificando</label>
-        <label><input type="checkbox" id="filterNegociacao" checked> Negociação</label>
-        <label><input type="checkbox" id="filterFechado" checked> Fechado</label>
-        <label><input type="checkbox" id="filterPerdido" checked> Perdido</label>
+      <div class="filters" id="filters">
+        <button type="button" class="filters-toggle" id="filtersToggle" aria-expanded="true">
+          <i class="fa-solid fa-filter"></i>
+          Filtros
+          <i class="fa-solid fa-chevron-down chevron"></i>
+        </button>
+
+        <div class="filters-panel" id="filtersPanel">
+          <div class="filters-options">
+            <label><input type="checkbox" id="filterNovo" checked> Novo</label>
+            <label><input type="checkbox" id="filterQualificando" checked> Qualificando</label>
+            <label><input type="checkbox" id="filterNegociacao" checked> Negociação</label>
+            <label><input type="checkbox" id="filterFechado" checked> Fechado</label>
+            <label><input type="checkbox" id="filterPerdido" checked> Perdido</label>
+          </div>
+        </div>
 
         <!-- Badge de tag ativa -->
         <div id="activeTagBadge" class="active-tag-badge" style="display:none;">

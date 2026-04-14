@@ -35,12 +35,27 @@ import {
   ingestFileSource,
 } from "./services/kbService";
 import { summarizeConversationToCrm } from "./services/conversationSummary";
-import { availableTrialKeys, getTrialTemplate, saveTrialTemplate, listTrialTemplates } from "./services/trialTemplates";
+import {
+  availableTrialKeys,
+  getTrialTemplate,
+  saveTrialTemplate,
+  listTrialTemplates,
+  renderTrialEmailTemplate,
+} from "./services/trialTemplates";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
 import { validatePhone } from "./utils/phoneUtils";
 import { withTimeout } from "./utils/withTimeout";
 import { runChatHistoryCleanup } from "./services/chatHistoryCleaner";
+import { getPlanConfig, listPlanConfigs } from "./services/planConfigs";
+import { logAudit } from "./utils/audit";
+import {
+  loginLimiter,
+  registerLimiter,
+  forgotPasswordLimiter,
+  resendEmailLimiter,
+} from "./middlewares/rateLimiter";
+// setupLogging é chamado em index.ts antes de carregar o servidor
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 const DISPARO_MIN_INTERVAL_MS = Number(process.env.DISPARO_MIN_INTERVAL_MS || 1500);
@@ -48,10 +63,34 @@ const disparoRateLimit = new Map<number, number>();
 const MAX_CHAT_MESSAGES = Number(process.env.MAX_CHAT_MESSAGES || 500);
 const TRIAL_EMAIL_SWEEP_MS = 60 * 60 * 1000; // 1h
 const WPP_TIMEOUT_MS = Number(process.env.WPP_TIMEOUT_MS || 12_000);
+const GRACEFUL_TIMEOUT_MS = Number(process.env.GRACEFUL_TIMEOUT_MS || 10_000);
+let shuttingDown = false;
+let appReady = false;
 
-import { getDB } from "./database";
+import { getDB, closeDB } from "./database";
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+async function listConnectedSessions(userId: number): Promise<string[]> {
+  const db = getDB();
+  const rows = await db.all<{ session_name: string }>(
+    `SELECT session_name
+     FROM sessions
+     WHERE user_id = ? AND status = 'connected'
+     ORDER BY created_at DESC, id DESC`,
+    [userId]
+  );
+  return rows.map(r => r.session_name);
+}
+
+function buildSessionCandidates(preferred: string | null | undefined, connected: string[]): string[] {
+  const list = [...connected];
+  const normPref = (preferred || "").trim();
+  if (normPref && list.includes(normPref)) {
+    return [normPref, ...list.filter((s) => s !== normPref)];
+  }
+  return list;
+}
 
 // ===============================
 // 📦 TIPAGEM DE AGENDAMENTOS
@@ -63,6 +102,7 @@ interface ScheduleRow {
   message: string;
   file: string | null; // caminho relativo no disco (legado: data URL)
   filename: string | null;
+  preferred_session?: string | null;
   send_at: number;
   recurrence: "none" | "daily" | "weekly" | "monthly";
   recurrence_end: number | null;
@@ -82,6 +122,8 @@ import {
   cancelAIDebounce,
   chatHumanLastActivity,
   chatHumanDuration,
+  invalidateChatAICache,
+  shutdownWppClients,
 } from "./wppManager";
 import { simulateFlowRun, simulateWelcomeFlow } from "./wppManager";
 
@@ -90,6 +132,9 @@ import { User } from "./database/types";
 
 
 const app = express();
+export function markAppReady(flag = true) {
+  appReady = flag;
+}
 
 // ===============================
 // 🧩 Utilitário de template simples para mensagens
@@ -166,6 +211,7 @@ async function sendTrialEmail(
 }
 
 async function runTrialEmailSweep() {
+  if (shuttingDown) return;
   let db;
   try {
     db = getDB();
@@ -198,29 +244,56 @@ async function runTrialEmailSweep() {
       // Dia 1
       if (daysElapsed >= 1 && !user.trial_email_day1_sent) {
         const tpl = await getTrialTemplate("trial_day1");
-        await sendTrialEmail(user, tpl.subject, tpl.body, "trial_email_day1_sent");
+        const mail = renderTrialEmailTemplate({
+          key: "trial_day1",
+          subject: tpl.subject,
+          body: tpl.body,
+          baseUrl: BASE_URL,
+          name: user.name,
+        });
+        await sendTrialEmail(user, mail.subject, mail.html, "trial_email_day1_sent");
         continue;
       }
 
       // Dia 3
       if (daysElapsed >= 3 && !user.trial_email_day3_sent) {
         const tpl = await getTrialTemplate("trial_day3");
-        await sendTrialEmail(user, tpl.subject, tpl.body, "trial_email_day3_sent");
+        const mail = renderTrialEmailTemplate({
+          key: "trial_day3",
+          subject: tpl.subject,
+          body: tpl.body,
+          baseUrl: BASE_URL,
+          name: user.name,
+        });
+        await sendTrialEmail(user, mail.subject, mail.html, "trial_email_day3_sent");
         continue;
       }
 
       // Dia 6
       if (daysElapsed >= 6 && !user.trial_email_day6_sent) {
         const tpl = await getTrialTemplate("trial_day6");
-        await sendTrialEmail(user, tpl.subject, tpl.body, "trial_email_day6_sent");
+        const mail = renderTrialEmailTemplate({
+          key: "trial_day6",
+          subject: tpl.subject,
+          body: tpl.body,
+          baseUrl: BASE_URL,
+          name: user.name,
+        });
+        await sendTrialEmail(user, mail.subject, mail.html, "trial_email_day6_sent");
         continue;
       }
 
       // Último dia (<=1 dia restante)
   if (daysLeft <= 1 && !user.trial_email_last_sent) {
         const tpl = await getTrialTemplate("trial_last");
-        const html = tpl.body.replace(/{{BASE_URL}}/g, BASE_URL);
-        await sendTrialEmail(user, tpl.subject, html, "trial_email_last_sent");
+        const mail = renderTrialEmailTemplate({
+          key: "trial_last",
+          subject: tpl.subject,
+          body: tpl.body,
+          baseUrl: BASE_URL,
+          name: user.name,
+        });
+        await sendTrialEmail(user, mail.subject, mail.html, "trial_email_last_sent");
       }
     }
   } catch (err) {
@@ -522,6 +595,35 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
+// ===============================
+// 🔎 Health / Readiness
+// ===============================
+app.get("/health", (_req, res) => {
+  return res.json({
+    ok: true,
+    uptime: Math.round(process.uptime() * 1000),
+    shuttingDown,
+  });
+});
+
+app.get("/ready", async (_req, res) => {
+  if (shuttingDown) {
+    return res.status(503).json({ ok: false, status: "shutting_down" });
+  }
+  if (!appReady) {
+    return res.status(503).json({ ok: false, status: "starting" });
+  }
+
+  try {
+    const db = getDB();
+    await db.get("SELECT 1 as ok");
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Readiness check falhou:", err);
+    return res.status(503).json({ ok: false, status: "db_unreachable" });
+  }
+});
 // ⚠️ WEBHOOK STRIPE — RAW BODY (OBRIGATÓRIO)
 // ⚠️ WEBHOOK STRIPE — RAW BODY (OBRIGATÓRIO)
 app.use(
@@ -612,7 +714,7 @@ app.get(
   authMiddleware,
   subscriptionGuard,
   async (req: Request, res: Response) => {
-    const user = (req as any).user as User;
+    const user = (req as any).user as User & { plan?: string };
     const db = getDB();
 
     const sessions = await db.all(
@@ -684,51 +786,82 @@ export const io = new Server(server, {
   maxHttpBufferSize: 50 * 1024 * 1024, // 50MB — permite arquivos grandes via socket
 });
 
-  io.on("connection", (socket) => {
-    console.log("🔌 Socket conectado:", socket.id);
-    const uid = socket.handshake.auth?.userId;
-    if (uid) socket.join(`user:${uid}`);
-    socket.on("crm:changed_local", () => {
-      if (!uid) return;
-      io.to(`user:${uid}`).emit("crm:changed", { type: "sync" });
-    });
-    socket.on("chat_ai_state_request", async (chatId) => {
-      const userId = socket.handshake.auth?.userId;
-      if (!userId || !chatId) return;
+const parseCookies = (cookieHeader: string | undefined) => {
+  if (!cookieHeader) return {};
+  return Object.fromEntries(
+    cookieHeader.split(";").map((c) => {
+      const [k, ...v] = c.trim().split("=");
+      return [k, decodeURIComponent(v.join("="))];
+    })
+  );
+};
+
+// Autenticação via cookie (mesma lógica do authMiddleware)
+io.use(async (socket, next) => {
+  try {
+    const cookies = parseCookies(socket.handshake.headers.cookie as string | undefined);
+    const token = cookies?.token;
+    if (!token) return next(new Error("unauthorized"));
+
+    const db = getDB();
+    const user = await db.get<{ id: number }>("SELECT id FROM users WHERE token = ?", [token]);
+    if (!user) return next(new Error("unauthorized"));
+
+    socket.data.userId = user.id;
+    next();
+  } catch (err) {
+    next(new Error("unauthorized"));
+  }
+});
+
+io.on("connection", (socket) => {
+  console.log("🔌 Socket conectado:", socket.id);
+  const uid = socket.data.userId as number | undefined;
+  if (uid) socket.join(`user:${uid}`);
+
+  socket.on("crm:changed_local", () => {
+    if (!uid) return;
+    io.to(`user:${uid}`).emit("crm:changed", { type: "sync" });
+  });
+
+  socket.on("chat_ai_state_request", async (chatId) => {
+    const userId = socket.data.userId as number | undefined;
+    if (!userId || !chatId) return;
 
     const state = await getChatAI(userId, chatId);
     socket.emit("chat_ai_state", { chatId, state });
   });
 
-
   socket.on("chat_ai_off", async (chatId) => {
-    const userId = socket.handshake.auth?.userId;
+    const userId = socket.data.userId as number | undefined;
     if (!userId) return;
 
     await setChatAI(userId, chatId, false);
 
     const key = `USER${userId}_${chatId}`;
     chatAILock.set(key, false);
+    invalidateChatAICache(userId, chatId);
 
-    io.emit("chat_ai_state", { chatId, state: false });
+    io.to(`user:${userId}`).emit("chat_ai_state", { chatId, state: false });
   });
 
 
   socket.on("chat_ai_on", async (chatId) => {
-    const userId = socket.handshake.auth?.userId;
+    const userId = socket.data.userId as number | undefined;
     if (!userId) return;
 
     await setChatAI(userId, chatId, true);
 
     const key = `USER${userId}_${chatId}`;
     chatAILock.set(key, true);
+    invalidateChatAICache(userId, chatId);
 
-    io.emit("chat_ai_state", { chatId, state: true });
+    io.to(`user:${userId}`).emit("chat_ai_state", { chatId, state: true });
   });
 
   socket.on("admin_send_message", async ({ chatId, body, file, filename, mimetype }) => {
     try {
-      const userId = socket.handshake.auth?.userId;
+      const userId = socket.data.userId as number | undefined;
       if (!userId || !chatId) return;
       if (!body && !file) return;
 
@@ -794,7 +927,7 @@ export const io = new Server(server, {
 
   socket.on("chat_human_state", async (data: any) => {
     const { chatId, state, sessionName } = data;
-    const userId = socket.handshake.auth?.userId;
+    const userId = socket.data.userId as number | undefined;
     if (!userId || !chatId || !sessionName) return;
 
     const fullKey = `USER${userId}_${sessionName}`;
@@ -812,6 +945,11 @@ export const io = new Server(server, {
       // 🔥 cancela IA já armada
       cancelAIDebounce(chatKey);
 
+      await logAudit("human_mode_on", userId, "chat", chatId, {
+        sessionName,
+        durationMs,
+      });
+
     } else {
       const humanKey = `${fullKey}::${chatId}`;
 
@@ -820,18 +958,33 @@ export const io = new Server(server, {
 
       cancelAIDebounce(chatKey);
 
-      io.emit("human_state_changed", {
+      io.to(`user:${userId}`).emit("human_state_changed", {
         chatId,
         userId,
         sessionName,
         state: false,
       });
 
-      // 📄 Resumo automático da conversa salvo como nota no CRM
-      summarizeConversationToCrm({
-        userId: Number(userId),
+      // 📄 Resumo automático da conversa salvo como nota no CRM (off-thread + timeout)
+      setImmediate(() => {
+        const timer = setTimeout(() => {
+          console.warn("Resumo de conversa expirou após 15s", { chatId, userId });
+        }, 15000).unref();
+
+        Promise.race([
+          summarizeConversationToCrm({
+            userId: Number(userId),
+            sessionName,
+            chatId,
+          }),
+          new Promise<void>((resolve) => setTimeout(resolve, 15000)),
+        ])
+          .catch((err: any) => console.error("Erro ao resumir conversa (assíncrono):", err))
+          .finally(() => clearTimeout(timer));
+      });
+
+      await logAudit("human_mode_off", userId, "chat", chatId, {
         sessionName,
-        chatId,
       });
     }
 
@@ -844,7 +997,7 @@ export const io = new Server(server, {
    */
   socket.on("listar_chats", async () => {
     try {
-      const userId = socket.handshake.auth?.userId;
+      const userId = socket.data.userId as number | undefined;
       if (!userId) {
         socket.emit("lista_chats", []);
         return;
@@ -969,7 +1122,7 @@ export const io = new Server(server, {
    */
   socket.on("abrir_chat", async (chatId: string) => {
     try {
-      const userId = socket.handshake.auth?.userId;
+      const userId = socket.data.userId as number | undefined;
       if (!userId || !chatId) {
       socket.emit("mensagens_chat", { chatId, messages: [] });
       return;
@@ -1083,7 +1236,7 @@ export const io = new Server(server, {
   // 🧹 LIMPAR HISTÓRICO DA IA (GEMINI) POR CHAT
   socket.on("ai:clear_history", async ({ chatId }) => {
     try {
-      const userId = socket.handshake.auth?.userId;
+      const userId = socket.data.userId as number | undefined;
       if (!userId || !chatId) return;
 
       const db = getDB();
@@ -1220,9 +1373,11 @@ app.get("/user", authMiddleware, async (req, res) => {
 // 💳 Página de Checkout
 app.get("/checkout", authMiddleware, async (req, res) => {
   const user = (req as any).user;
+  const plans = await listPlanConfigs();
 
   res.render("checkout", {
-    user
+    user,
+    plans,
   });
 });
 
@@ -1298,9 +1453,38 @@ app.get("/api/crm/list", authMiddleware, async (req, res) => {
     const user = (req as any).user;
     const db = getDB();
 
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSizeRaw = Number(req.query.pageSize) || 100;
+    const pageSize = Math.min(200, Math.max(10, pageSizeRaw));
+    const term = String(req.query.term || "").trim();
+
+    const where: string[] = ["user_id = ?"];
+    const params: any[] = [user.id];
+
+    if (term) {
+      where.push(`(name LIKE ? OR phone LIKE ? OR citystate LIKE ? OR tags LIKE ? OR notes LIKE ?)`);
+      const like = `%${term}%`;
+      params.push(like, like, like, like, like);
+    }
+
+    const whereSql = where.join(" AND ");
+
+    const totalRow = await db.get<{ total: number }>(
+      `SELECT COUNT(*) as total FROM crm WHERE ${whereSql}`,
+      params
+    );
+    const total = totalRow?.total || 0;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * pageSize;
+
     const rows = await db.all(
-      `SELECT * FROM crm WHERE user_id = ? ORDER BY id DESC`,
-      [user.id]
+      `SELECT id, user_id, name, phone, citystate, stage, tags, notes, deal_value, follow_up_date, avatar, last_seen
+       FROM crm
+       WHERE ${whereSql}
+       ORDER BY last_seen DESC, id DESC
+       LIMIT ? OFFSET ?`,
+      [...params, pageSize, offset]
     );
 
     const clients = rows.map((r: any) => ({
@@ -1309,10 +1493,18 @@ app.get("/api/crm/list", authMiddleware, async (req, res) => {
       notes: typeof r.notes === "string" ? JSON.parse(r.notes) : [],
     }));
 
-    res.json({ ok: true, clients }); // ✅
+    res.json({
+      ok: true,
+      clients,
+      page: safePage,
+      pageSize,
+      total,
+      totalPages,
+      hasMore: safePage < totalPages,
+    });
   } catch (err) {
     console.error("❌ Erro ao listar CRM:", err);
-    res.json({ ok: false, clients: [] });
+    res.json({ ok: false, clients: [], page: 1, pageSize: 0, total: 0, totalPages: 1 });
   }
 });
 
@@ -1591,9 +1783,10 @@ app.get("/disparo", authMiddleware, (req, res) => {
   const user = (req as any).user;
   res.render("disparo", { user });
 });
-app.get("/agendamentos", authMiddleware, (req, res) => {
+app.get("/agendamentos", authMiddleware, async (req, res) => {
   const user = (req as any).user;
-  res.render("agendamentos", { user });
+  const planConfig = await getPlanConfig(user.plan);
+  res.render("agendamentos", { user, planConfig });
 });
 app.get("/verify-email", async (req, res) => {
   try {
@@ -1750,7 +1943,7 @@ app.post("/auth/reset-password", async (req, res) => {
   }
 });
 
-app.post("/auth/forgot-password", async (req, res) => {
+app.post("/auth/forgot-password", forgotPasswordLimiter, async (req, res) => {
   try {
     const { email } = req.body;
 
@@ -1775,7 +1968,7 @@ app.post("/auth/forgot-password", async (req, res) => {
   }
 });
 
-app.post("/auth/resend-verify-email", authMiddleware, async (req, res) => {
+app.post("/auth/resend-verify-email", authMiddleware, resendEmailLimiter, async (req, res) => {
   try {
     const user = (req as any).user;
 
@@ -1813,8 +2006,8 @@ app.post(
   subscriptionGuard,
   async (req: Request, res: Response) => {
 
-    const { number, message, file, filename, contacts } = req.body;
-    const user = (req as any).user as User;
+    const { number, message, file, filename, contacts, session_name, sessionName } = req.body;
+    const user = (req as any).user as User & { plan?: string };
 
     // rate limit mínimo
     const now = Date.now();
@@ -1845,6 +2038,14 @@ app.post(
       return res.status(400).json({ error: "Nenhum número válido" });
     }
 
+    const planConfig = await getPlanConfig(user.plan);
+    const maxBroadcastNumbers = planConfig?.maxBroadcastNumbers ?? 50;
+    if (contactList.length > maxBroadcastNumbers) {
+      return res.status(400).json({
+        error: `Seu plano permite até ${maxBroadcastNumbers} número(s) por disparo.`,
+      });
+    }
+
     const hasTextMessage = contactList.some((c) => (c.message ?? message ?? "").trim().length > 0);
     if (!file && !hasTextMessage) {
       return res.status(400).json({
@@ -1863,53 +2064,68 @@ app.post(
 
     try {
       const db = getDB();
-
-      // 🔎 Buscar sessão conectada
-      const session = await db.get(
-        `SELECT session_name
-         FROM sessions
-         WHERE user_id = ? AND status = 'connected'
-         LIMIT 1`,
-        [user.id]
-      );
-
-      if (!session) {
-        return res.status(400).json({
-          error: "Nenhuma sessão ativa para este usuário"
-        });
+      const connected = await listConnectedSessions(user.id);
+      if (!connected.length) {
+        return res.status(400).json({ error: "Nenhuma sessão ativa para este usuário" });
       }
 
-      const full = `USER${user.id}_${session.session_name}`;
-      const client = getClient(full);
+      const preferred = (session_name || sessionName || "").trim();
+      const candidates = buildSessionCandidates(preferred, connected);
 
-      if (!client) {
-        return res.status(400).json({
-          error: "Sessão não encontrada ou desconectada"
-        });
-      }
-
-      for (const contact of contactList) {
-        const chatId = `${contact.number}@c.us`;
-        const finalMessage = renderTemplate(contact.message ?? message ?? "", contact);
-
-        if (!safeFile) {
-          await withTimeout(client.sendText(chatId, finalMessage), WPP_TIMEOUT_MS, "sendText");
+      let lastError: any = null;
+      for (const shortName of candidates) {
+        const full = `USER${user.id}_${shortName}`;
+        const client = getClient(full);
+        if (!client) {
+          lastError = `Sessão ${shortName} indisponível`;
           continue;
         }
 
-        await withTimeout(
-          client.sendFile(
-            chatId,
-            safeFile.dataUrl,
-            safeFile.filename || filename || "arquivo",
-            finalMessage // legenda opcional
-          ),
-          WPP_TIMEOUT_MS,
-          "sendFile"
-        );
+        let sent = 0;
+        let errors = 0;
+        try {
+          for (const contact of contactList) {
+            const chatId = `${contact.number}@c.us`;
+            const finalMessage = renderTemplate(contact.message ?? message ?? "", contact);
+
+            if (!safeFile) {
+              await withTimeout(client.sendText(chatId, finalMessage), WPP_TIMEOUT_MS, "sendText");
+            } else {
+              await withTimeout(
+                client.sendFile(
+                  chatId,
+                  safeFile.dataUrl,
+                  safeFile.filename || filename || "arquivo",
+                  finalMessage // legenda opcional
+                ),
+                WPP_TIMEOUT_MS,
+                "sendFile"
+              );
+            }
+            sent += 1;
+          }
+        } catch (err: any) {
+          console.error(`⚠️ Erro no disparo pela sessão ${shortName}:`, err);
+          errors += 1;
+          lastError = err?.message || err;
+        }
+
+        // Se conseguimos enviar pelo menos uma, não tentamos outras para evitar duplicidade
+        if (sent > 0) {
+          await logAudit("broadcast_send", user.id, "session", shortName, {
+            sent,
+            errors,
+            contacts: contactList.length,
+            file: Boolean(file),
+          });
+          return res.json({ ok: true, session: shortName, sent, errors });
+        }
       }
 
-      return res.json({ ok: true });
+      return res.status(500).json({
+        error: "Não foi possível enviar por nenhuma sessão conectada",
+        detail: lastError || null,
+      });
 
     } catch (err) {
       console.error("⚠️ Erro no disparo:", err);
@@ -1927,7 +2143,7 @@ app.post(
 // Criar agendamento
 app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (req, res) => {
   const user = (req as any).user;
-  const { numbers, contacts, message, file, filename, sendAt, recurrenceEnd } = req.body;
+  const { numbers, contacts, message, file, filename, sendAt, recurrenceEnd, session_name, sessionName } = req.body;
   const recurrenceRaw = (req.body?.recurrence || "none") as string;
   const recurrenceAllowed = ["none", "daily", "weekly", "monthly"];
   const recurrence = recurrenceAllowed.includes(recurrenceRaw) ? recurrenceRaw : "none";
@@ -1963,18 +2179,13 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
     return res.status(400).json({ error: "Mensagem ou arquivo é obrigatório" });
   }
 
-  const planLimits: Record<string, number> = {
-    free: 50,
-    trial: 50,
-    starter: 50,
-    pro: 200,
-  };
-  const plan = String(user.plan || "").toLowerCase();
-  const maxNumbers = planLimits[plan] ?? 50;
+  const planConfig = await getPlanConfig(user.plan);
+  const planLabel = planConfig?.displayName || String(user.plan || "starter");
+  const maxNumbers = planConfig?.maxBroadcastNumbers ?? 50;
   const totalCount = hasPersonalized ? contactsArr.length : numbersArr.length;
   if (totalCount > maxNumbers) {
     return res.status(400).json({
-      error: `Limite de ${maxNumbers} números para seu plano (${plan || "starter"}). Reduza a lista.`,
+      error: `Limite de ${maxNumbers} números para seu plano (${planLabel}). Reduza a lista.`,
     });
   }
 
@@ -2023,10 +2234,12 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
     });
   }
 
+  const preferredSession = (session_name || sessionName || "").trim() || null;
+
   await db.run(
-    `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [user.id, JSON.stringify(normalized), message, storedFilePath, storedFilename, sendAtMs, recurrence, recurrenceEndMs]
+    `INSERT INTO schedules (user_id, numbers, message, file, filename, preferred_session, send_at, recurrence, recurrence_end)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [user.id, JSON.stringify(normalized), message, storedFilePath, storedFilename, preferredSession, sendAtMs, recurrence, recurrenceEndMs]
   );
 
   res.json({ ok: true });
@@ -2036,7 +2249,19 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
 app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async (req, res) => {
   const user = (req as any).user;
   const id = Number(req.params.id);
-  const { numbers, contacts, message, file, filename, sendAt, keepExistingFile, recurrence, recurrenceEnd } = req.body || {};
+  const {
+    numbers,
+    contacts,
+    message,
+    file,
+    filename,
+    sendAt,
+    keepExistingFile,
+    recurrence,
+    recurrenceEnd,
+    session_name,
+    sessionName,
+  } = req.body || {};
 
   const sendAtMs = Number(sendAt);
   const recurrenceEndMs = recurrenceEnd ? Number(recurrenceEnd) : null;
@@ -2078,18 +2303,13 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     return res.status(400).json({ error: "Mensagem ou arquivo é obrigatório" });
   }
 
-  const planLimits: Record<string, number> = {
-    free: 50,
-    trial: 50,
-    starter: 50,
-    pro: 200,
-  };
-  const plan = String(user.plan || "").toLowerCase();
-  const maxNumbers = planLimits[plan] ?? 50;
+  const planConfig = await getPlanConfig(user.plan);
+  const planLabel = planConfig?.displayName || String(user.plan || "starter");
+  const maxNumbers = planConfig?.maxBroadcastNumbers ?? 50;
   const totalCount = hasPersonalized ? contactsArr.length : numbersArr.length;
   if (totalCount > maxNumbers) {
     return res.status(400).json({
-      error: `Limite de ${maxNumbers} números para seu plano (${plan || "starter"}). Reduza a lista.`,
+      error: `Limite de ${maxNumbers} números para seu plano (${planLabel}). Reduza a lista.`,
     });
   }
 
@@ -2163,15 +2383,18 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     finalFilename = filename;
   }
 
+  const preferredSession = (session_name || sessionName || existingRow.preferred_session || "").trim() || null;
+
   await db.run(
     `UPDATE schedules
-     SET numbers = ?, message = ?, file = ?, filename = ?, send_at = ?, recurrence = ?, recurrence_end = ?
+     SET numbers = ?, message = ?, file = ?, filename = ?, preferred_session = ?, send_at = ?, recurrence = ?, recurrence_end = ?
      WHERE id = ? AND user_id = ?`,
     [
       JSON.stringify(normalized),
       message,
       finalFilePath,
       finalFilename,
+      preferredSession,
       sendAtMs,
       finalRecurrence,
       finalRecurrenceEnd,
@@ -2347,6 +2570,7 @@ const SCHEDULE_PROCESSING_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos
 
 let schedulerRunning = false;
 setInterval(async () => {
+  if (shuttingDown) return;
   if (schedulerRunning) return;
   schedulerRunning = true;
   try {
@@ -2376,29 +2600,16 @@ setInterval(async () => {
         const userId = row.user_id;
         let successCount = 0;
         let failureCount = 0;
-        const itemLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
+        let itemLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
 
-        // 🔎 Buscar UMA sessão conectada
-        const sessions = await db.all(
-          `SELECT session_name
-           FROM sessions
-           WHERE user_id = ? AND status = 'connected'
-           LIMIT 1`,
-          [userId]
-        );
-
-        if (!sessions.length) {
+        // 🔎 Buscar sessões conectadas (com preferência do agendamento)
+        const connectedSessions = await listConnectedSessions(userId);
+        if (!connectedSessions.length) {
           console.warn("⚠️ Nenhuma sessão conectada para user:", userId);
           continue;
         }
-
-        const full = `USER${userId}_${sessions[0].session_name}`;
-        const client = getClient(full);
-
-        if (!client) {
-          console.warn("⚠️ Client não encontrado:", full);
-          continue;
-        }
+        const preferredSession = (row as any).preferred_session as string | null;
+        const sessionCandidates = buildSessionCandidates(preferredSession, connectedSessions);
 
         let safeRowFile: SanitizedFile | null = null;
         let storedFilePath: string | null = null;
@@ -2408,48 +2619,75 @@ setInterval(async () => {
           storedFilePath = ensured.storedPath;
         }
 
-        // =========================
-        // 📤 ENVIO DAS MENSAGENS
-        // =========================
-        for (const contact of contactsList) {
-          try {
-            // ✅ valida número (SEM @c.us)
-            const target = await ensureChat(client, contact.number);
-            const finalMessage = renderTemplate(contact.message ?? row.message ?? "", contact);
+        let sessionUsed: string | null = null;
+        let lastSendError: any = null;
 
-            if (safeRowFile) {
-              // 📎 MÍDIA
-              await withTimeout(
-                client.sendFile(
-                  target,
-                  safeRowFile.dataUrl,
-                  safeRowFile.filename,
-                  finalMessage || ""
-                ),
-                WPP_TIMEOUT_MS,
-                "sendFile"
+        for (const shortName of sessionCandidates) {
+          const client = getClient(`USER${userId}_${shortName}`);
+          if (!client) continue;
+
+          let tempSuccess = 0;
+          let tempFailure = 0;
+          const tempLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
+
+          for (const contact of contactsList) {
+            try {
+              // ✅ valida número (SEM @c.us)
+              const target = await ensureChat(client, contact.number);
+              const finalMessage = renderTemplate(contact.message ?? row.message ?? "", contact);
+
+              if (safeRowFile) {
+                // 📎 MÍDIA
+                await withTimeout(
+                  client.sendFile(
+                    target,
+                    safeRowFile.dataUrl,
+                    safeRowFile.filename,
+                    finalMessage || ""
+                  ),
+                  WPP_TIMEOUT_MS,
+                  "sendFile"
+                );
+              } else if (finalMessage) {
+                // 💬 TEXTO — MÉTODO CORRETO
+                await withTimeout(client.sendText(target, finalMessage), WPP_TIMEOUT_MS, "sendText");
+              } else {
+                throw new Error("Mensagem vazia e mídia inválida");
+              }
+              tempSuccess += 1;
+              tempLogs.push({ number: contact.number, status: "sent", sentAt: Date.now() });
+
+              // ⏳ delay anti-ban
+              await new Promise(r => setTimeout(r, 1200));
+
+            } catch (err: any) {
+              console.error(
+                "⚠️ Erro envio agendado (número):",
+                contact.number,
+                err?.message || err
               );
-            } else if (finalMessage) {
-              // 💬 TEXTO — MÉTODO CORRETO
-              await withTimeout(client.sendText(target, finalMessage), WPP_TIMEOUT_MS, "sendText");
-            } else {
-              throw new Error("Mensagem vazia e mídia inválida");
+              tempFailure += 1;
+              tempLogs.push({ number: contact.number, status: "error", error: String(err?.message || err), sentAt: Date.now() });
+              lastSendError = err?.message || err;
             }
-            successCount += 1;
-            itemLogs.push({ number: contact.number, status: "sent", sentAt: Date.now() });
-
-            // ⏳ delay anti-ban
-            await new Promise(r => setTimeout(r, 1200));
-
-          } catch (err: any) {
-            console.error(
-              "⚠️ Erro envio agendado (número):",
-              contact.number,
-              err?.message || err
-            );
-            failureCount += 1;
-            itemLogs.push({ number: contact.number, status: "error", error: String(err?.message || err), sentAt: Date.now() });
           }
+
+          if (tempSuccess > 0) {
+            sessionUsed = shortName;
+            successCount = tempSuccess;
+            failureCount = tempFailure;
+            itemLogs = tempLogs;
+            break;
+          }
+        }
+
+        if (!sessionUsed) {
+          console.warn("⚠️ Nenhuma sessão conseguiu enviar o agendamento:", row.id, sessionCandidates);
+          await db.run(
+            `UPDATE schedules SET status = 'pending', processing_started_at = NULL WHERE id = ?`,
+            [row.id]
+          );
+          continue;
         }
 
         // ✅ MARCAR COMO ENVIADO
@@ -2512,9 +2750,9 @@ setInterval(async () => {
           const nextFilePath = storedFilePath ?? null;
           const nextFilename = safeRowFile?.filename ?? row.filename ?? null;
           await db.run(
-            `INSERT INTO schedules (user_id, numbers, message, file, filename, send_at, recurrence, recurrence_end)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [userId, row.numbers, row.message, nextFilePath, nextFilename, nextSendAt, recurrence, recurrenceEnd]
+            `INSERT INTO schedules (user_id, numbers, message, file, filename, preferred_session, send_at, recurrence, recurrence_end)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [userId, row.numbers, row.message, nextFilePath, nextFilename, preferredSession ?? null, nextSendAt, recurrence, recurrenceEnd]
           );
         }
 
@@ -2540,6 +2778,7 @@ setInterval(async () => {
 
 // 🛡️ Watchdog para destravar agendamentos travados em "processing"
 setInterval(async () => {
+  if (shuttingDown) return;
   try {
     const db = getDB();
     const timeoutThreshold = Date.now() - SCHEDULE_PROCESSING_TIMEOUT_MS;
@@ -3196,78 +3435,205 @@ app.delete("/api/fallback-settings", authMiddleware, async (req, res) => {
 // =======================================
 
 // Registro
+const REGISTRATION_GENERIC_ERROR = "Não foi possível criar sua conta. Entre em contato com o suporte.";
+const IP_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
-app.post("/register", async (req, res) => {
+function normalizeEmail(rawEmail: string): string {
+  const email = String(rawEmail || "").trim().toLowerCase();
+  const [localPart, domain] = email.split("@");
+  if (!localPart || !domain) return email;
+
+  const withoutAlias = localPart.split("+")[0];
+  const domainsWithoutDots = new Set([
+    "gmail.com",
+    "googlemail.com",
+    "outlook.com",
+    "outlook.com.br",
+    "hotmail.com",
+    "hotmail.com.br",
+    "live.com",
+    "live.com.br",
+    "msn.com",
+  ]);
+
+  const cleanedLocal = domainsWithoutDots.has(domain)
+    ? withoutAlias.replace(/\./g, "")
+    : withoutAlias;
+
+  return `${cleanedLocal}@${domain}`;
+}
+
+function getClientIp(req: Request): string | null {
+  const forwarded = req.headers["x-forwarded-for"];
+  const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  const ip = raw?.toString().split(",")[0].trim() || req.socket?.remoteAddress || null;
+  if (!ip) return null;
+  return ip.replace(/^::ffff:/, "");
+}
+
+const shortDeviceId = (deviceId?: string | null) =>
+  deviceId ? deviceId.slice(0, 8) : null;
+
+app.post("/register", registerLimiter, async (req, res) => {
   const { name, email, password, prompt } = req.body;
+  const deviceId: string = typeof req.body?.deviceId === "string" ? req.body.deviceId.trim() : "";
   if (requireFields(res, { name, email, password })) return;
 
   const db = getDB();
-
-  const exists = await db.get(
-    "SELECT id FROM users WHERE email = ?",
-    [email]
-  );
-
-  if (exists) {
-    return res.json({ error: "Email já cadastrado" });
-  }
-
-  const hash = await bcrypt.hash(password, 10);
-  const token = genToken();
-
-  const trialDays = 7;
+  const normalizedEmail = normalizeEmail(email);
+  const ip = getClientIp(req);
   const now = Date.now();
+  const trialDays = 7;
 
-  // 🔥 cria usuário
-  await db.run(
-    `INSERT INTO users (
-      name, email, password, prompt, token,
-      plan, subscription_status, plan_expires_at, trial_started_at,
-      email_verified, email_verify_token, email_verify_expires
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      name,
-      email,
-      hash,
-      prompt || "",
-      token,
-      "free",
-      "trial",
-      now + trialDays * 24 * 60 * 60 * 1000,
-      now,
-
-      0, // email_verified
-      null,
-      null
-    ]
-  );
-
-  // 🔥 buscar o usuário recém criado (pra pegar id)
-  const newUser = await db.get<any>(
-    `SELECT id FROM users WHERE email = ?`,
-    [email]
-  );
-
-  if (!newUser) {
-    return res.status(500).json({ error: "Erro ao criar usuário" });
-  }
-
-  // 🔥 enviar email com token + salvar no banco
   try {
-    await sendVerifyEmail(newUser.id);
-  } catch (err) {
-    console.error("❌ Erro ao enviar email:", err);
-  }
+    const existingUsers = await db.all<{ id: number; email: string; email_normalized: string | null }>(
+      `SELECT id, email, email_normalized FROM users WHERE email = ? OR email_normalized = ?`,
+      [email, normalizedEmail]
+    );
 
-  return res.json({
-    ok: true,
-    message: "Cadastro realizado! Verifique seu e-mail para ativar a conta."
-  });
+    const conflict = existingUsers.find((row) => {
+      const storedNorm = row.email_normalized || normalizeEmail(row.email);
+      return storedNorm === normalizedEmail;
+    });
+
+    if (conflict) {
+      console.warn("register_block_email", {
+        reason: "email_normalized_conflict",
+        ip,
+        deviceId: shortDeviceId(deviceId),
+      });
+      return res.status(400).json({ error: REGISTRATION_GENERIC_ERROR });
+    }
+
+    if (ip) {
+      const limitRow = await db.get<{ total: number }>(
+        `
+        SELECT COUNT(DISTINCT user_id) AS total
+        FROM ip_registrations
+        WHERE ip = ?
+          AND created_at >= ?
+        `,
+        [ip, now - IP_WINDOW_MS]
+      );
+      const ipTotal = Number(limitRow?.total || 0);
+      if (ipTotal >= 3) {
+        console.warn("register_block_ip", {
+          reason: "ip_limit",
+          ip,
+          deviceId: shortDeviceId(deviceId),
+          total: ipTotal,
+        });
+        return res.status(400).json({ error: REGISTRATION_GENERIC_ERROR });
+      }
+    }
+
+    let deviceRow: { account_count: number; blocked: number; block_reason?: string; first_seen_at?: number } | null = null;
+
+    if (deviceId) {
+      deviceRow = await db.get(
+        `SELECT account_count, blocked, block_reason, first_seen_at FROM device_fingerprints WHERE device_id = ?`,
+        [deviceId]
+      );
+
+      if (deviceRow?.blocked) {
+        console.warn("register_block_device", {
+          reason: "device_blocked",
+          ip,
+          deviceId: shortDeviceId(deviceId),
+          blockReason: deviceRow.block_reason,
+        });
+        return res.status(400).json({ error: REGISTRATION_GENERIC_ERROR });
+      }
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    const token = genToken();
+
+    const userResult = await db.run(
+      `INSERT INTO users (
+        name, email, email_normalized, password, prompt, token,
+        plan, subscription_status, plan_expires_at, trial_started_at,
+        email_verified, email_verify_token, email_verify_expires,
+        signup_device_id
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        name,
+        email,
+        normalizedEmail,
+        hash,
+        prompt || "",
+        token,
+        "free",
+        "trial",
+        now + trialDays * 24 * 60 * 60 * 1000,
+        now,
+
+        0, // email_verified
+        null,
+        null,
+        deviceId || null,
+      ]
+    );
+
+    const userId = Number(userResult.insertId || 0);
+    if (!userId) {
+      console.error("register_insert_missing_id", { ip, deviceId: shortDeviceId(deviceId) });
+      return res.status(400).json({ error: REGISTRATION_GENERIC_ERROR });
+    }
+
+    if (deviceId) {
+      const nextCount = (deviceRow?.account_count || 0) + 1;
+      await db.run(
+        `
+        INSERT INTO device_fingerprints (
+          device_id, user_id, account_count, blocked, block_reason, first_seen_at, last_seen_at
+        )
+        VALUES (?, ?, 1, 0, NULL, ?, ?)
+        ON DUPLICATE KEY UPDATE
+          user_id = VALUES(user_id),
+          account_count = device_fingerprints.account_count + 1,
+          last_seen_at = VALUES(last_seen_at)
+        `,
+        [deviceId, userId, deviceRow?.first_seen_at ?? now, now]
+      );
+
+      if (nextCount >= 2) {
+        console.warn("register_device_multiple_accounts", {
+          reason: "device_multiple_accounts",
+          ip,
+          deviceId: shortDeviceId(deviceId),
+          accounts: nextCount,
+        });
+      }
+    }
+
+    if (ip) {
+      await db.run(
+        `INSERT INTO ip_registrations (ip, user_id, created_at) VALUES (?, ?, ?)`,
+        [ip, userId, now]
+      );
+    }
+
+    // 🔥 enviar email com token + salvar no banco
+    try {
+      await sendVerifyEmail(userId);
+    } catch (err) {
+      console.error("❌ Erro ao enviar email:", err);
+    }
+
+    return res.json({
+      ok: true,
+      message: "Cadastro realizado! Verifique seu e-mail para ativar a conta."
+    });
+  } catch (err) {
+    console.error("Erro no registro:", err);
+    return res.status(400).json({ error: REGISTRATION_GENERIC_ERROR });
+  }
 });
 
 // Login
-app.post("/auth/login", async (req, res) => {
+app.post("/auth/login", loginLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   if (requireFields(res, { email, password })) return;
@@ -3378,6 +3744,8 @@ app.post("/user/update-prompt", authMiddleware, async (req, res) => {
     [prompt || "", user.id]
   );
 
+  await logAudit("prompt_update", user.id, "user", user.id, { length: (prompt || "").length });
+
   res.json({ ok: true });
 });
 
@@ -3404,26 +3772,13 @@ app.post(
     );
 
     const totalSessions = Number(row?.total || 0);
-
-    const maxSessions =
-      user.plan === "free" ? 1 :
-        user.plan === "starter" ? 1 :
-          user.plan === "pro" ? 3 :
-            0;
-
+    const planConfig = await getPlanConfig(user.plan);
+    const maxSessions = planConfig?.maxSessions ?? 0;
 
     if (totalSessions >= maxSessions) {
       let message = "Limite de sessões atingido.";
-
-      if (user.plan === "free") {
-        message = "O plano Free permite apenas 1 sessão de WhatsApp. Faça upgrade para liberar mais.";
-      }
-      else if (user.plan === "starter") {
-        message = "O plano Starter permite apenas 1 sessão de WhatsApp.";
-      }
-      else if (user.plan === "pro") {
-        message = "O plano Pro permite até 3 sessões de WhatsApp.";
-      }
+      const displayName = planConfig?.displayName || String(user.plan || "seu plano");
+      message = `O plano ${displayName} permite até ${maxSessions} sessão(ões) de WhatsApp.`;
 
       return res.status(403).json({ error: message });
     }
@@ -3439,7 +3794,7 @@ app.post(
 
     const result = await createWppSession(user.id, sessionName);
 
-    io.emit("sessions:changed", { userId: user.id });
+    io.to(`user:${user.id}`).emit("sessions:changed", { userId: user.id });
 
     return res.json({ session: result.sessionName });
   }
@@ -3482,7 +3837,7 @@ app.delete("/sessions/delete", authMiddleware, async (req, res) => {
   const user = (req as any).user;
 
   await deleteWppSession(user.id, sessionName);
-  io.emit("sessions:changed", { userId: user.id });
+  io.to(`user:${user.id}`).emit("sessions:changed", { userId: user.id });
 
   res.json({ ok: true });
 });
@@ -3499,7 +3854,7 @@ app.post("/sessions/restart", async (req, res) => {
   await deleteWppSession(user.id, sessionName);
   await createWppSession(user.id, sessionName);
 
-  io.emit("sessions:changed", { userId: user.id });
+  io.to(`user:${user.id}`).emit("sessions:changed", { userId: user.id });
   res.json({ ok: true, message: "Sessão reiniciada com sucesso" });
 });
 
@@ -3607,13 +3962,28 @@ export async function restoreSessionsOnStartup() {
 
   console.log(`🔄 Restaurando ${sessions.length} sessões conectadas...`);
 
+  const concurrency = Math.max(1, Number(process.env.RESTORE_CONCURRENCY || 3));
+  const executing = new Set<Promise<void>>();
+
   for (const s of sessions) {
-    try {
-      await createWppSession(s.user_id, s.session_name);
-    } catch {
-      console.warn(`⚠️ Falhou ao restaurar ${s.session_name}`);
+    const task = (async () => {
+      try {
+        await createWppSession(s.user_id, s.session_name);
+      } catch (err) {
+        console.warn(`⚠️ Falhou ao restaurar ${s.session_name}`, err);
+      }
+    })();
+
+    executing.add(task);
+    task.finally(() => executing.delete(task));
+
+    if (executing.size >= concurrency) {
+      await Promise.race(executing).catch(() => {});
     }
   }
+
+  // aguardar tarefas restantes
+  await Promise.allSettled(Array.from(executing));
 
   console.log("✅ Restauração concluída.");
 }
@@ -3625,6 +3995,7 @@ export async function restoreSessionsOnStartup() {
 // =======================================================
 
 setInterval(() => {
+  if (shuttingDown) return;
   const now = Date.now();
 
   for (const [key, last] of chatHumanLastActivity.entries()) {
@@ -3653,7 +4024,9 @@ setInterval(() => {
       const parts = key.split("::");
       const chatId = parts[1];
 
-      io.emit("human_state_changed", {
+      const fullKey = parts[0] || "";
+      const userId = Number(fullKey.replace(/^USER/, "").split("_")[0]);
+      io.to(`user:${userId}`).emit("human_state_changed", {
         chatId,
         state: false,
       });
@@ -3664,6 +4037,69 @@ setInterval(() => {
 }, 5000);
 
 
+async function gracefulShutdown(signal?: NodeJS.Signals | string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  appReady = false;
+  console.log(`\n🛑 Recebido ${signal || "shutdown"} - finalizando com segurança...`);
+
+  const tasks: Promise<any>[] = [];
+
+  // Fecha novas conexões HTTP
+  tasks.push(
+    new Promise<void>((resolve) => {
+      try {
+        server.close((err) => {
+          if (err) console.error("Erro ao fechar HTTP server:", err);
+          resolve();
+        });
+      } catch (err) {
+        console.error("Erro ao acionar close do HTTP server:", err);
+        resolve();
+      }
+    })
+  );
+
+  // Fecha sockets
+  tasks.push(
+    new Promise<void>((resolve) => {
+      try {
+        io.close(() => resolve());
+      } catch (err) {
+        console.error("Erro ao fechar Socket.io:", err);
+        resolve();
+      }
+    })
+  );
+
+  // Fecha sessões WPPConnect (sem apagar tokens)
+  try {
+    tasks.push(shutdownWppClients());
+  } catch (err) {
+    console.error("Erro ao fechar sessões WPP:", err);
+  }
+
+  // Fecha pool do MySQL
+  try {
+    tasks.push(closeDB());
+  } catch (err) {
+    console.error("Erro ao fechar pool do MySQL:", err);
+  }
+
+  // timeout de segurança
+  const timeout = new Promise<void>((resolve) =>
+    setTimeout(resolve, GRACEFUL_TIMEOUT_MS).unref()
+  );
+
+  await Promise.race([Promise.allSettled(tasks), timeout]);
+
+  console.log("✅ Encerramento concluído. Saindo.");
+  process.exit(0);
+}
+
+process.on("SIGTERM", (signal) => gracefulShutdown(signal));
+process.on("SIGINT", (signal) => gracefulShutdown(signal));
+
 
 // =======================================
 // 🚀 Iniciar servidor
@@ -3672,8 +4108,12 @@ startTrialEmailCron();
 // Limpeza diária de históricos de chat (randomiza start em até 1h para evitar pico)
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 setTimeout(() => {
+  if (shuttingDown) return;
   runChatHistoryCleanup();
-  setInterval(runChatHistoryCleanup, CLEANUP_INTERVAL_MS);
+  setInterval(() => {
+    if (shuttingDown) return;
+    runChatHistoryCleanup();
+  }, CLEANUP_INTERVAL_MS);
 }, Math.random() * 60 * 60 * 1000);
 
 server.listen(3000, () => {

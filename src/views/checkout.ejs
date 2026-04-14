@@ -32,75 +32,53 @@
 
   <!-- PLANOS -->
   <main class="plans">
+    <% 
+      const planMeta = {
+        free: { icon: "fa-gift", buttonIcon: "fa-lock", cta: "Ativado automaticamente" },
+        starter: { icon: "fa-rocket", buttonIcon: "fa-credit-card", cta: "Assinar agora" },
+        pro: { icon: "fa-crown", buttonIcon: "fa-bolt", cta: "Assinar Pro" }
+      };
+      const planList = Array.isArray(plans) ? plans : [];
+    %>
 
-    <!-- FREE -->
-    <div class="plan free">
-      <span class="badge">Free</span>
+    <% planList.forEach(plan => { 
+      const meta = planMeta[plan.name] || { icon: "fa-box", buttonIcon: "fa-credit-card", cta: `Assinar ${plan.displayName}` };
+      const isFree = plan.name === "free" || Number(plan.price || 0) === 0;
+      const badgeClass = plan.name === "pro" ? "pro" : (plan.highlight ? "primary" : "");
+      const formattedPrice = Number(plan.price || 0).toLocaleString("pt-BR", {
+        minimumFractionDigits: Number(plan.price || 0) % 1 === 0 ? 0 : 2,
+        maximumFractionDigits: 2
+      });
+    %>
+      <div class="plan <%= plan.highlight ? 'highlight' : '' %> <%= plan.name === 'free' ? 'free' : '' %>">
+        <span class="badge <%= badgeClass %>"><%= plan.badgeLabel || plan.displayName %></span>
 
-      <h3>
-        <i class="fa-solid fa-gift"></i>
-        Plano Free
-      </h3>
+        <h3>
+          <i class="fa-solid <%= meta.icon %>"></i>
+          <%= plan.displayName %>
+        </h3>
 
-      <div class="price">R$ 0</div>
+        <div class="price">R$ <%= formattedPrice %><% if (!isFree) { %><span>/mês</span><% } %></div>
 
-      <ul class="features">
-        <li><i class="fa-solid fa-check"></i> 1 sessão de WhatsApp</li>
-        <li><i class="fa-solid fa-robot"></i> 500 mensagens IA</li>
-        <li><i class="fa-solid fa-clock"></i> 7 dias grátis</li>
-      </ul>
+        <ul class="features">
+          <% (plan.featureList || []).forEach(feature => { %>
+            <li><i class="fa-solid fa-check"></i> <%= feature %></li>
+          <% }) %>
+        </ul>
 
-      <button class="btn" disabled>
-        <i class="fa-solid fa-lock"></i>
-        Ativado automaticamente
-      </button>
-    </div>
-
-    <!-- STARTER -->
-    <div class="plan highlight">
-      <span class="badge primary">Popular</span>
-
-      <h3>
-        <i class="fa-solid fa-rocket"></i>
-        Starter
-      </h3>
-
-      <div class="price">R$ 97<span>/mês</span></div>
-
-      <ul class="features">
-        <li><i class="fa-solid fa-check"></i> 1 sessão de WhatsApp</li>
-        <li><i class="fa-solid fa-robot"></i> 500 mensagens IA / mês</li>
-        <li><i class="fa-solid fa-headset"></i> Suporte completo</li>
-      </ul>
-
-      <button class="btn btn-primary" onclick="assinar('starter', this)">
-        <i class="fa-solid fa-credit-card"></i>
-        Assinar agora
-      </button>
-    </div>
-
-    <!-- PRO -->
-    <div class="plan">
-      <span class="badge pro">Pro</span>
-
-      <h3>
-        <i class="fa-solid fa-crown"></i>
-        Pro
-      </h3>
-
-      <div class="price">R$ 197<span>/mês</span></div>
-
-      <ul class="features">
-        <li><i class="fa-solid fa-layer-group"></i> Até 3 sessões</li>
-        <li><i class="fa-solid fa-infinity"></i> IA ilimitada</li>
-        <li><i class="fa-solid fa-star"></i> Recursos avançados</li>
-      </ul>
-
-      <button class="btn btn-primary" onclick="assinar('pro', this)">
-        <i class="fa-solid fa-bolt"></i>
-        Assinar Pro
-      </button>
-    </div>
+        <% if (isFree) { %>
+          <button class="btn" disabled>
+            <i class="fa-solid <%= meta.buttonIcon %>"></i>
+            <%= meta.cta %>
+          </button>
+        <% } else { %>
+          <button class="btn btn-primary" onclick="assinar('<%= plan.name %>', this)">
+            <i class="fa-solid <%= meta.buttonIcon %>"></i>
+            <%= meta.cta %>
+          </button>
+        <% } %>
+      </div>
+    <% }) %>
 
   </main>
 

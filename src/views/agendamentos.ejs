@@ -273,8 +273,7 @@
     let existingFilename = null;
     let contactsData = [];
     const plan = "<%= (user.plan || 'starter').toLowerCase() %>";
-    const PLAN_LIMITS = { free: 50, trial: 50, starter: 50, pro: 200 };
-    const MAX_NUMBERS = PLAN_LIMITS[plan] ?? 50;
+    const MAX_NUMBERS = <%= Number(planConfig?.maxBroadcastNumbers ?? 50) %>;
     const WARN_THRESHOLD = 0.8; // 80%
     let agRows = [];
     let agPage = 1;

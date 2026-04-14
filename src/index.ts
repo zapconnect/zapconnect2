@@ -3,14 +3,16 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import { initDB } from "./database";
-import { restoreSessionsOnStartup } from "./server";
-import { cleanupInactiveTokens } from "./wppManager"; // 👈 NOVO
+import { restoreSessionsOnStartup, markAppReady } from "./server";
+import { cleanupInactiveTokens } from "./wppManager"; // 👉 NOVO
+import { setupLogging } from "./utils/logger";
 
 async function start() {
   try {
+    setupLogging();
     // 1️⃣ Banco
     await initDB();
-    console.log("📌 Banco de dados inicializado");
+    console.log("📄 Banco de dados inicializado");
 
     // 2️⃣ Limpar tokens órfãos
     await cleanupInactiveTokens();
@@ -19,6 +21,9 @@ async function start() {
     // 3️⃣ Restaurar sessões válidas
     await restoreSessionsOnStartup();
     console.log("♻️ Sessões restauradas");
+
+    // 4️⃣ Sinalizar readiness
+    markAppReady(true);
 
   } catch (err) {
     console.error("❌ Erro ao iniciar aplicação:", err);

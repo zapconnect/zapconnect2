@@ -142,14 +142,19 @@
 
   <!-- MODAL DE EMOJIS -->
   <div id="emojiModal" class="emoji-modal">
-    <div class="emoji-modal-content">
-      <div class="emoji-header">
-        <span><i class="fa-regular fa-face-smile"></i> Emojis</span>
-        <button id="closeEmoji" class="close-emoji"><i class="fa-solid fa-xmark"></i></button>
+      <div class="emoji-modal-content">
+        <div class="emoji-header">
+          <span><i class="fa-regular fa-face-smile"></i> Emojis</span>
+          <button id="closeEmoji" class="close-emoji"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="emoji-search">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input id="emojiSearch" type="text" placeholder="Pesquisar emoji" autocomplete="off">
+        </div>
+        <div class="emoji-tabs" id="emojiTabs"></div>
+        <div class="emoji-scroll" id="emojiScroll"></div>
       </div>
-      <div class="emoji-grid" id="emojiGrid"></div>
     </div>
-  </div>
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/loading-utils.js"></script>

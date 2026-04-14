@@ -153,6 +153,20 @@
 
   </section>
 
+  <section class="chart-card span3" style="margin-top:24px">
+    <div class="chart-card-header">
+      <div>
+        <h3><i class="fa-solid fa-sliders"></i> Direitos por Plano</h3>
+        <p class="chart-subtitle">Defina preço, limites e benefícios exibidos para cada plano</p>
+      </div>
+      <div class="legend">
+        <span class="leg-item"><span class="leg-dot" style="background:#22c55e"></span>Salva e aplica nos limites reais</span>
+      </div>
+    </div>
+
+    <div id="plan-configs-grid" class="plan-configs-grid"></div>
+  </section>
+
   <!-- TEMPLATES TRIAL -->
   <section class="chart-card span3" style="margin-top:24px">
     <div class="chart-card-header">
@@ -186,8 +200,49 @@
         </div>
       </div>
       <div class="template-preview">
-        <div class="preview-header">Preview rápido</div>
-        <iframe id="tpl-preview"></iframe>
+        <div class="preview-header">
+          <span><i class="fa-regular fa-envelope-open"></i> Preview estilo Gmail</span>
+          <span class="preview-badge">Leitura</span>
+        </div>
+        <div class="gmail-preview-toolbar" aria-hidden="true">
+          <div class="gmail-toolbar-group">
+            <button type="button" class="gmail-tool-btn" tabindex="-1"><i class="fa-solid fa-arrow-left"></i></button>
+            <button type="button" class="gmail-tool-btn" tabindex="-1"><i class="fa-solid fa-box-archive"></i></button>
+            <button type="button" class="gmail-tool-btn" tabindex="-1"><i class="fa-solid fa-trash-can"></i></button>
+            <button type="button" class="gmail-tool-btn" tabindex="-1"><i class="fa-solid fa-envelope-open-text"></i></button>
+          </div>
+          <div class="gmail-toolbar-meta">
+            <span class="gmail-toolbar-pill">Caixa de entrada</span>
+            <span id="tpl-preview-date">Agora mesmo</span>
+          </div>
+        </div>
+        <div class="gmail-preview-envelope">
+          <div class="gmail-mail-head">
+            <div class="gmail-mail-head-copy">
+              <span id="tpl-preview-template" class="gmail-template-chip">Dia 1 — boas-vindas</span>
+              <h4 id="tpl-preview-subject">Assunto do e-mail</h4>
+            </div>
+            <div class="gmail-mail-head-actions" aria-hidden="true">
+              <button type="button" class="gmail-tool-btn" tabindex="-1"><i class="fa-regular fa-star"></i></button>
+              <button type="button" class="gmail-tool-btn" tabindex="-1"><i class="fa-solid fa-reply"></i></button>
+              <button type="button" class="gmail-tool-btn" tabindex="-1"><i class="fa-solid fa-ellipsis-vertical"></i></button>
+            </div>
+          </div>
+          <div class="gmail-mail-meta">
+            <div class="gmail-avatar">Z</div>
+            <div class="gmail-sender-copy">
+              <div class="gmail-sender-line">
+                <strong>ZapConnect Trial</strong>
+                <span>&lt;trial@zapconnect.app&gt;</span>
+              </div>
+              <div class="gmail-recipient-line">para cliente@exemplo.com</div>
+            </div>
+            <div id="tpl-preview-when" class="gmail-mail-when">Agora</div>
+          </div>
+          <div class="gmail-preview-body">
+            <iframe id="tpl-preview" title="Preview do template de email"></iframe>
+          </div>
+        </div>
       </div>
     </div>
   </section>

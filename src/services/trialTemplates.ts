@@ -1,4 +1,8 @@
 import { getDB } from "../database";
+import {
+  buildZapconnectEmailShell,
+  replaceEmailTemplateVariables,
+} from "../utils/zapconnectEmailShell";
 
 export type TrialTemplateKey = "trial_day1" | "trial_day3" | "trial_day6" | "trial_last";
 
@@ -32,9 +36,77 @@ const defaults: Record<TrialTemplateKey, { subject: string; body: string }> = {
     subject: "Oferta de upgrade exclusiva - termina hoje",
     body: `<h2>Último dia do seu trial</h2>
 <p>Aproveite 20% off no primeiro mês usando o cupom <strong>UPGRADE20</strong> até hoje.</p>
-<p><a href="{{BASE_URL}}/checkout">Fazer upgrade agora</a></p>`,
+<div style="margin:22px 0;text-align:center;">
+  <a href="{{BASE_URL}}/checkout"
+    style="
+      background:#6C64EF;
+      color:#ffffff;
+      padding:14px 22px;
+      border-radius:12px;
+      text-decoration:none;
+      font-weight:700;
+      display:inline-block;
+      font-size:14px;
+    ">
+    Fazer upgrade agora
+  </a>
+</div>`,
   },
 };
+
+const trialEmailMeta: Record<
+  TrialTemplateKey,
+  { subtitle: string; leadText: string; outroText: string }
+> = {
+  trial_day1: {
+    subtitle: "Boas-vindas ao trial",
+    leadText: "Seu periodo de teste comecou. Aqui estao os primeiros passos para voce gerar resultado rapido com o Zapconnect.",
+    outroText: "Se quiser ajuda para configurar sua operacao, basta responder este e-mail.",
+  },
+  trial_day3: {
+    subtitle: "Dica pratica do trial",
+    leadText: "Passamos aqui no meio do trial com uma dica pratica para voce ganhar tempo e acelerar seu atendimento.",
+    outroText: "Se quiser, podemos te ajudar a montar o melhor fluxo para o seu caso.",
+  },
+  trial_day6: {
+    subtitle: "Ajustes finais do trial",
+    leadText: "Seu trial esta quase no fim, entao este e um bom momento para fazer os ultimos ajustes e extrair mais valor da IA.",
+    outroText: "Se quiser calibrar melhor sua base ou seus fluxos, e so responder este e-mail.",
+  },
+  trial_last: {
+    subtitle: "Ultimo dia do trial",
+    leadText: "Seu periodo de teste esta terminando. Este e o melhor momento para manter tudo ativo sem perder sua operacao.",
+    outroText: "Se tiver qualquer duvida sobre planos ou upgrade, nossa equipe pode te ajudar.",
+  },
+};
+
+function buildTrialUpgradeButton(url: string) {
+  return `<div style="margin:22px 0;text-align:center;">
+  <a href="${url}"
+    style="
+      background:#6C64EF;
+      color:#ffffff;
+      padding:14px 22px;
+      border-radius:12px;
+      text-decoration:none;
+      font-weight:700;
+      display:inline-block;
+      font-size:14px;
+    ">
+    Fazer upgrade agora
+  </a>
+</div>`;
+}
+
+function normalizeTrialEmailBody(key: TrialTemplateKey, body: string, baseUrl: string) {
+  if (key !== "trial_last") return body;
+
+  const checkoutUrl = `${baseUrl}/checkout`;
+  return body.replace(
+    /<p>\s*<a\s+href="[^"]*\/checkout">\s*Fazer upgrade agora\s*<\/a>\s*<\/p>/i,
+    buildTrialUpgradeButton(checkoutUrl)
+  );
+}
 
 export async function listTrialTemplates(): Promise<TemplateRow[]> {
   const db = getDB();
@@ -59,6 +131,39 @@ export async function getTrialTemplate(key: TrialTemplateKey): Promise<{ subject
   );
   if (row) return { subject: row.subject, body: row.body };
   return defaults[key];
+}
+
+export function renderTrialEmailTemplate(params: {
+  key: TrialTemplateKey;
+  subject: string;
+  body: string;
+  baseUrl: string;
+  name?: string | null;
+}) {
+  const { key, subject, body, baseUrl, name } = params;
+  const greetingName = String(name || "usuario").trim() || "usuario";
+  const templateVars = {
+    BASE_URL: baseUrl,
+    NAME: greetingName,
+  };
+  const meta = trialEmailMeta[key];
+  const resolvedSubject = replaceEmailTemplateVariables(subject, templateVars);
+  const resolvedBody = normalizeTrialEmailBody(
+    key,
+    replaceEmailTemplateVariables(body, templateVars),
+    baseUrl
+  );
+
+  return {
+    subject: resolvedSubject,
+    html: buildZapconnectEmailShell({
+      subtitle: meta.subtitle,
+      greetingName,
+      leadText: meta.leadText,
+      contentHtml: resolvedBody,
+      outroText: meta.outroText,
+    }),
+  };
 }
 
 export async function saveTrialTemplate(params: { key: TrialTemplateKey; subject: string; body: string }) {

@@ -6,7 +6,7 @@
 /* ==========================================================
    🔗 SOCKET.IO COM AUTENTICAÇÃO DO USUÁRIO
    ========================================================== */
-if (!window.USER_ID || !window.USER_TOKEN) {
+if (!window.USER_ID) {
     alert("Sessão expirada. Faça login novamente.");
     window.location.href = "/login";
 }
@@ -393,6 +393,21 @@ function fmtTime(ts) {
     return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
 }
 
+function fmtDateLabel(ts) {
+    const d = new Date(ts);
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const sameDay = (a, b) => a.getFullYear() === b.getFullYear() &&
+        a.getMonth() === b.getMonth() &&
+        a.getDate() === b.getDate();
+
+    if (sameDay(d, today)) return "Hoje";
+    if (sameDay(d, yesterday)) return "Ontem";
+    return d.toLocaleDateString("pt-BR");
+}
+
 /* ==========================================================
    🔦 HIGHLIGHT DE TEXTO NA BUSCA
    ========================================================== */
@@ -420,9 +435,21 @@ function renderMessages(chatId) {
     box.innerHTML = "";
     searchMatches = [];
 
+    let lastDateKey = null;
+
     chats[chatId].msgs.forEach((msg, idx) => {
         msg.timestamp = msg.timestamp || Date.now();
         const fromMe = resolveIsFromMe(msg);
+        const dateKey = new Date(msg.timestamp).toDateString();
+
+        // Divider de data (estilo WhatsApp)
+        if (dateKey !== lastDateKey) {
+            const divider = document.createElement("div");
+            divider.className = "msg-divider";
+            divider.innerHTML = `<span>${fmtDateLabel(msg.timestamp)}</span>`;
+            box.appendChild(divider);
+            lastDateKey = dateKey;
+        }
 
         const row = document.createElement("div");
         const isSystem = msg.system === true;
@@ -437,12 +464,13 @@ function renderMessages(chatId) {
         } else if (msg.isMedia || msg.mimetype) {
             msg.isMedia = true;
             const mime = msg.mimetype || "";
+            const mediaBase64 = msg.mediaBase64 || msg.body || "";
 
             if (mime.startsWith("image/")) {
                 row.classList.add("msg-photo");
                 bubble.classList.add("msg-bubble-media");
                 bubble.innerHTML = `
-                    <img class="msg-img" src="data:${mime};base64,${msg.body}" alt="imagem enviada">
+                    <img class="msg-img" src="data:${mime};base64,${mediaBase64}" alt="imagem enviada">
                 `;
             } else if (mime.startsWith("audio/") || mime.includes("opus")) {
                 row.classList.add("msg-audio-row");
@@ -455,14 +483,15 @@ function renderMessages(chatId) {
                     <div class="audio-card">
                         <div class="audio-wave">${bars}</div>
                         <audio controls class="msg-audio">
-                            <source src="data:${mime};base64,${msg.body}" type="${mime}">
+                            <source src="data:${mime};base64,${mediaBase64}" type="${mime}">
                         </audio>
+                        ${msg.mediaText ? `<p class="audio-caption">${msg.mediaText}</p>` : ""}
                     </div>
                 `;
             } else if (mime.startsWith("video/")) {
                 row.classList.add("msg-video-row");
                 bubble.classList.add("msg-bubble-media");
-                bubble.innerHTML = `<video controls class="msg-video" src="data:${mime};base64,${msg.body}"></video>`;
+                bubble.innerHTML = `<video controls class="msg-video" src="data:${mime};base64,${mediaBase64}"></video>`;
             } else {
                 row.classList.add("msg-doc-row");
                 bubble.classList.add("msg-doc-card");
@@ -1284,26 +1313,202 @@ searchBox.addEventListener("input", e => renderChatList(e.target.value));
    😀 MODAL DE EMOJIS
    ========================================================== */
 const emojiModal = document.getElementById("emojiModal");
-const emojiGrid = document.getElementById("emojiGrid");
+const emojiTabs = document.getElementById("emojiTabs");
+const emojiScroll = document.getElementById("emojiScroll");
+const emojiSearch = document.getElementById("emojiSearch");
 const btnEmoji = document.querySelector(".btn-emoji");
 const closeEmoji = document.getElementById("closeEmoji");
 
-const emojis = ["😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂", "🙂", "🙃", "😉", "😊", "😍", "🤩", "😘", "😗", "😚", "😋", "😜", "🤪", "😝", "🤑", "🤯", "🥶", "🥵", "😎", "🤓", "🤫", "😕", "😟", "🙁", "😢", "😭", "😱", "😖", "😡", "🤬", "👍", "👌", "👏", "🙏", "🔥", "❤️", "💙", "💚", "💛", "💜", "🤍", "🤎", "🖤", "⭐", "💥", "💯", "🚀"];
+// Palavras-chave básicas para busca (pt/br + aliases simples)
+const emojiKeywords = {
+    "🔥": ["fogo", "fire"],
+    "❤️": ["coração", "coracao", "amor", "love", "heart"],
+    "💙": ["coração", "coracao", "azul", "amor"],
+    "💚": ["coração", "coracao", "verde", "amor"],
+    "💛": ["coração", "coracao", "amarelo", "amor"],
+    "💜": ["coração", "coracao", "roxo", "amor"],
+    "🖤": ["coração", "coracao", "preto"],
+    "🤍": ["coração", "coracao", "branco"],
+    "🤎": ["coração", "coracao", "marrom"],
+    "👍": ["joinha", "ok", "like", "positivo", "beleza", "confirmar"],
+    "👌": ["ok", "perfeito", "certo"],
+    "🙏": ["oração", "rezar", "obrigado", "gratidão", "grato"],
+    "😂": ["risada", "rindo", "kkk", "haha", "chorando"],
+    "🤣": ["risada", "rindo", "rolando", "lol"],
+    "😊": ["feliz", "sorriso", "smile"],
+    "😉": ["piscar", "wink", "brincadeira"],
+    "😭": ["choro", "chorando", "triste"],
+    "😢": ["triste", "chorando"],
+    "😡": ["bravo", "raiva", "irritado"],
+    "🤬": ["xingar", "raiva"],
+    "😍": ["apaixonado", "love", "amor"],
+    "😘": ["beijo", "kiss"],
+    "😎": ["cool", "óculos", "oculos", "style"],
+    "🤯": ["mindblown", "explodiu", "chocado"],
+    "😱": ["susto", "grito", "assustado"],
+    "🤔": ["pensando", "thinking"],
+    "🤫": ["silêncio", "silencio", "shh"],
+    "👏": ["palmas", "aplauso"],
+    "🙌": ["uhul", "celebrar", "palmas"],
+    "💯": ["100", "perfeito", "top"],
+    "🚀": ["foguete", "rocket", "decolar", "crescer"],
+    "⭐": ["estrela", "star", "favorito"],
+    "✅": ["check", "ok", "confirmado"],
+    "❌": ["erro", "x", "cancelar"]
+};
 
-emojis.forEach(e => {
-    const span = document.createElement("span");
-    span.textContent = e;
-    span.onclick = () => {
-        inputMsg.value += e;
-        inputMsg.focus();
-    };
-    emojiGrid.appendChild(span);
+const emojiCategories = [
+    {
+        id: "smileys",
+        label: "Rostos",
+        icon: "😊",
+        list: "😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😗 😚 😙 🥲 😋 😜 🤪 😝 🤑 🤗 🤭 🤫 🤔 🤐 🤨 😐 😑 😶 😏 😒 🙄 😬 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 🥵 🥶 🥴 😵 🤯 🤠 😎 🥳 😕 😟 🙁 😮 😯 😲 😳 🥺 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 🥱 😤 😡 🤬 😈 👿 💀 ☠️ 🤡 👽 🤖 💩".split(" ")
+    },
+    {
+        id: "gestures",
+        label: "Mãos",
+        icon: "👍",
+        list: "👍 👎 👌 🤌 🤏 ✌️ 🤞 🤟 🤘 🤙 👈 👉 👆 👇 🖕 ✋ 🤚 🖐 🖖 👋 🤝 🙏 🤲 👐 ✊ 👊 🤛 🤜 👏 🙌 🫶 🤲🏻 🫶🏾 🫱 🫲 🫸 🫷 🫳 🫴 🤳 💪 🦾 🖍️".split(" ")
+    },
+    {
+        id: "people",
+        label: "Pessoas",
+        icon: "🧑",
+        list: "👶 👧 🧒 👦 👩 👨 🧑 👩‍🦱 👨‍🦱 👩‍🦳 👨‍🦳 👩‍🦰 👨‍🦰 👩‍🦲 👨‍🦲 🧔 🧕 👮 👷 🧑‍⚕️ 🧑‍🍳 🧑‍🎓 🧑‍🏫 🧑‍⚖️ 🧑‍🌾 🧑‍🔧 🧑‍🏭 🧑‍💻 🧑‍🎤 🧑‍🎨 🧑‍✈️ 🧑‍🚀 🧑‍🚒 🕵️ 🧙 🧛 🧜 🧚 🧞 🧝 🧟".split(" ")
+    },
+    {
+        id: "animals",
+        label: "Animais",
+        icon: "🐶",
+        list: "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐽 🐸 🐵 🙈 🙉 🙊 🐒 🐔 🐧 🐦 🐤 🐣 🐥 🦆 🦅 🦉 🦇 🐺 🐗 🐴 🦄 🐝 🐛 🐌 🦋 🐞 🐜 🦂 🦟 🦗 🕷 🐢 🐍 🦎 🦂 🐙 🦑 🦀 🐡 🐠 🐟 🐬 🐳 🐋 🐊 🐆".split(" ")
+    },
+    {
+        id: "food",
+        label: "Comida",
+        icon: "🍔",
+        list: "🍏 🍎 🍐 🍊 🍋 🍌 🍉 🍇 🍓 🫐 🍈 🍒 🍑 🥭 🍍 🥥 🥝 🍅 🫒 🥑 🍆 🥔 🥕 🌽 🌶 🫑 🥒 🧄 🧅 🥬 🥦 🍄 🥜 🌰 🍞 🥐 🥖 🧀 🥚 🍳 🧇 🥞 🧈 🥩 🍗 🍖 🌭 🍔 🍟 🍕 🥪 🌮 🌯 🥙 🧆 🥘 🍝 🍜 🍲 🍛 🍣 🍱 🍤 🍚 🍙 🍘 🍥 🧁 🍰 🎂 🍮 🍭 🍬 🍫 🍿 🧋 ☕ 🍺 🍻 🍷 🥂 🥃".split(" ")
+    },
+    {
+        id: "objects",
+        label: "Objetos",
+        icon: "🎁",
+        list: "⌚ 📱 💻 ⌨️ 🖱️ 🖥️ 🖨️ 🕹️ 💽 💾 📼 📷 🎥 📞 📟 📠 📺 📻 🎙️ 🎚️ 🎛️ ⏱️ ⏲️ ⏰ 🧭 🔋 🔌 💡 🔦 🕯️ 🧯 🛢️ 🧨 🎆 🎇 🧸 🎈 🎁 🧿 🪔 🧧 🎀 🎗️ 🧵 🧶 🪡 🪢".split(" ")
+    },
+    {
+        id: "symbols",
+        label: "Símbolos",
+        icon: "❤️",
+        list: "❤️ 🧡 💛 💚 💙 💜 🤎 🖤 🤍 💔 ❣️ 💕 💞 💓 💗 💖 💘 💝 💟 ☮️ ✝️ ☪️ ✡️ ☸️ 🕉️ ☯️ ☦️ 🛐 ⛎ ♈ ♉ ♊ ♋ ♌ ♍ ♎ ♏ ♐ ♑ ♒ ♓ 🔯 🕎 🔀 🔁 🔂 ▶️ ⏩ ⏭️ ⏯️ ⏮️ ⏪ ◀️ 🔼 🔽 ⏫ ⏬ ➡️ ⬅️ ⬆️ ⬇️ ↔️ ↕️ ⚠️ ⛔ 🚫 ❌ ✅ ✔️ ☑️ 🔘 ⚪ ⚫ 🔴 🟠 🟡 🟢 🔵 🟣 🟤 ⚫️".split(" ")
+    },
+    {
+        id: "flags",
+        label: "Bandeiras",
+        icon: "🏳️",
+        list: "🏳️ 🏴 🏁 🚩 🏳️‍🌈 🏳️‍⚧️ 🇧🇷 🇵🇹 🇪🇸 🇬🇧 🇫🇷 🇮🇹 🇩🇪 🇺🇸 🇨🇦 🇲🇽 🇦🇷 🇨🇱 🇨🇴 🇵🇪 🇺🇾 🇵🇾 🇧🇴 🇻🇪 🇯🇵 🇨🇳 🇰🇷 🇮🇳 🇦🇪 🇸🇦 🇹🇷 🇿🇦 🇳🇬 🇦🇺 🇳🇿".split(" ")
+    }
+];
+
+function buildEmojiPicker(term = "") {
+    if (!emojiTabs || !emojiScroll) return;
+
+    const query = term.trim().toLowerCase();
+
+    emojiTabs.innerHTML = "";
+    emojiScroll.innerHTML = "";
+
+    const sections = [];
+
+    emojiCategories.forEach(cat => {
+        const filtered = cat.list.filter(e => {
+            if (!query) return true;
+            if (e.toLowerCase().includes(query)) return true; // usuário digitou o próprio emoji
+            const keywords = emojiKeywords[e] || [];
+            const haystack = `${cat.label.toLowerCase()} ${keywords.join(" ").toLowerCase()}`;
+            return haystack.includes(query);
+        });
+        if (!filtered.length) return;
+
+        const btn = document.createElement("button");
+        btn.className = "emoji-tab";
+        btn.dataset.target = cat.id;
+        btn.innerHTML = `${cat.icon}<span>${cat.label}</span>`;
+        btn.onclick = () => {
+            const sec = document.getElementById(`emoji-${cat.id}`);
+            sec?.scrollIntoView({ behavior: "smooth", block: "start" });
+        };
+        emojiTabs.appendChild(btn);
+
+        const section = document.createElement("section");
+        section.id = `emoji-${cat.id}`;
+        section.className = "emoji-section";
+        section.innerHTML = `<div class="emoji-section-title">${cat.icon} ${cat.label}</div>`;
+
+        const grid = document.createElement("div");
+        grid.className = "emoji-section-grid";
+
+        filtered.forEach(e => {
+            const span = document.createElement("span");
+            span.textContent = e;
+            span.onclick = () => {
+                inputMsg.value += e;
+                inputMsg.focus();
+            };
+            grid.appendChild(span);
+        });
+
+        section.appendChild(grid);
+        emojiScroll.appendChild(section);
+        sections.push(section);
+    });
+
+    // fallback sem resultados
+    if (!sections.length) {
+        const empty = document.createElement("div");
+        empty.className = "emoji-empty";
+        empty.textContent = "Nada encontrado 😔";
+        emojiScroll.appendChild(empty);
+        return;
+    }
+
+    setActiveTab(sections[0].id.replace("emoji-", ""));
+    observeSections();
+}
+
+function setActiveTab(id) {
+    emojiTabs.querySelectorAll(".emoji-tab").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.target === id);
+    });
+}
+
+let emojiObserver = null;
+function observeSections() {
+    emojiObserver?.disconnect();
+    const options = { root: emojiScroll, threshold: [0.2, 0.6] };
+    emojiObserver = new IntersectionObserver((entries) => {
+        const visible = entries
+            .filter(e => e.isIntersecting)
+            .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible[0]) {
+            const id = visible[0].target.id.replace("emoji-", "");
+            setActiveTab(id);
+        }
+    }, options);
+
+    emojiScroll.querySelectorAll(".emoji-section").forEach(sec => emojiObserver.observe(sec));
+}
+
+btnEmoji.addEventListener("click", () => {
+    buildEmojiPicker(emojiSearch?.value || "");
+    emojiModal.style.display = "flex";
+    emojiSearch?.focus();
 });
-
-btnEmoji.addEventListener("click", () => emojiModal.style.display = "flex");
 closeEmoji.addEventListener("click", () => emojiModal.style.display = "none");
 emojiModal.addEventListener("click", e => {
     if (e.target === emojiModal) emojiModal.style.display = "none";
+});
+
+emojiSearch?.addEventListener("input", (e) => {
+    buildEmojiPicker(e.target.value);
 });
 
 /* ==========================================================

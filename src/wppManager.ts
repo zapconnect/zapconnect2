@@ -25,6 +25,7 @@ import {
 import { generateAIResponse } from "./services/aiHandler";
 import { getChatAI } from "./services/chatAiService";
 import { isInSilenceWindow } from "./services/silenceUtils";
+import { logAudit } from "./utils/audit";
 
 
 
@@ -57,6 +58,9 @@ function ensureDir(dir: string) {
  * Compatível com versões antigas do WPPConnect
  * Não tenta forçar LID manualmente
  */
+const NUMBER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
+const numberValidationCache = new Map<string, number>(); // jid -> timestamp
+
 export async function ensureChat(
   client: any,
   number: string
@@ -64,11 +68,27 @@ export async function ensureChat(
   const sanitized = assertValidPhone(number, "destinatário");
   const jid = buildWhatsAppJid(sanitized);
 
+  const cachedTs = numberValidationCache.get(jid);
+  if (cachedTs && Date.now() - cachedTs < NUMBER_CACHE_TTL_MS) {
+    return jid;
+  }
+
+  // Se já temos CRM/IA cache, assumimos válido para quem já interagiu
+  // (chaves no formato USER{userId}_{chatId})
+  const seenInChat = Array.from(chatActivity.keys()).some((key) =>
+    key.endsWith(`::${jid}`)
+  );
+  if (seenInChat) {
+    numberValidationCache.set(jid, Date.now());
+    return jid;
+  }
+
   const exists = await withTimeout(client.checkNumberStatus(jid), WPP_TIMEOUT_MS, "checkNumberStatus");
   if (!exists || !exists.canReceiveMessage) {
     throw new Error("Número inválido ou não registrado no WhatsApp");
   }
 
+  numberValidationCache.set(jid, Date.now());
   // ✅ Retorna sempre JID completo para consistência de chaves (@c.us)
   return jid;
 }
@@ -302,8 +322,19 @@ export const chatAILock = new Map<string, boolean>();
 // ⏱️ Controle de humano / tempo
 
 
-async function primeChatAICache(userId: number) {
-  if (chatAICacheLoaded.has(userId)) return;
+async function primeChatAICache(userId: number, forceReload = false) {
+  const now = Date.now();
+  const last = chatAICacheLoaded.get(userId);
+  if (!forceReload && last && now - last < CHAT_AI_CACHE_TTL_MS) return;
+
+  // Limpa cache existente daquele usuário antes de recarregar
+  for (const key of Array.from(chatAILock.keys())) {
+    if (key.startsWith(`USER${userId}_`)) {
+      chatAILock.delete(key);
+      chatAIActivity.delete(key);
+    }
+  }
+
   try {
     const db = await getDB();
     const rows = await db.all<{ chat_id: string; ai_enabled: number }>(
@@ -315,13 +346,17 @@ async function primeChatAICache(userId: number) {
       chatAILock.set(key, r.ai_enabled === 1);
       chatAIActivity.set(key, Date.now());
     }
-    chatAICacheLoaded.add(userId);
+    chatAICacheLoaded.set(userId, now);
   } catch (err) {
     console.warn("Não foi possível carregar cache de chat AI:", err);
   }
 }
 
 async function getChatAIState(userId: number, chatId: string): Promise<boolean> {
+  const last = chatAICacheLoaded.get(userId);
+  const needsRefresh = !last || Date.now() - last >= CHAT_AI_CACHE_TTL_MS;
+  await primeChatAICache(userId, needsRefresh);
+
   const key = `USER${userId}_${chatId}`;
   if (chatAILock.has(key)) {
     chatAIActivity.set(key, Date.now());
@@ -358,11 +393,12 @@ let speechClient: SpeechClient | null = null;
 const AUDIO_TRANSCRIBE_PROVIDER = (process.env.AUDIO_TRANSCRIBE_PROVIDER || "").toLowerCase(); // "google", "deepgram" ou vazio (desativado)
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || "";
 const inboundCount = new Map<string, number>(); // chatKey -> quantidade de mensagens recebidas (para firstMessageOnly)
-const chatAICacheLoaded = new Set<number>(); // userId que já tiveram chat_ai_settings pré-carregados
+const chatAICacheLoaded = new Map<number, number>(); // userId -> timestamp do último preload
 const sessionLocks = new Map<string, Promise<void>>(); // garante exclusão mútua por sessão para attach/reconnect
 const chatActivity = new Map<string, number>(); // chatKey -> last activity
 const chatAIActivity = new Map<string, number>(); // aiKey -> last activity
 const CRM_UPDATE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const CHAT_AI_CACHE_TTL_MS = 5 * 60 * 1000; // recarrega configurações de IA a cada 5 minutos
 const crmWriteCache = new Map<string, { name: string | null; avatar: string | null; lastWrite: number }>();
 const CHAT_ACTIVITY_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const CHAT_ACTIVITY_SWEEP_MS = 60 * 60 * 1000; // 1h
@@ -420,6 +456,14 @@ function cleanupInactiveChats() {
     if (last < cutoff) {
       chatAIActivity.delete(key);
       chatAILock.delete(key);
+    }
+  }
+
+  // Expira marcação de preload de IA para permitir reload periódico
+  const preloadCutoff = Date.now() - CHAT_AI_CACHE_TTL_MS;
+  for (const [userId, ts] of Array.from(chatAICacheLoaded.entries())) {
+    if (ts < preloadCutoff) {
+      chatAICacheLoaded.delete(userId);
     }
   }
 }
@@ -591,6 +635,8 @@ function matchesBranchCondition(cond: BranchCondition | null, ctx: FlowContext):
 }
 
 type RunOptions = { simulate?: boolean; logs?: string[] };
+const FLOW_MAX_ACTIONS = 100; // limite de ações por execução para evitar loops abusivos
+const FLOW_MAX_MESSAGE_CHARS = 4000; // limite de tamanho do texto enviado em send_text
 
 async function runFlowActions(
   actions: any[],
@@ -601,17 +647,32 @@ async function runFlowActions(
   if (!Array.isArray(actions) || !actions.length) return;
   if (depth > 5) return; // safety guard
 
+  let executed = 0;
   for (const a of actions) {
+    executed += 1;
+    if (executed > FLOW_MAX_ACTIONS) {
+      console.warn("Flow abortado: limite de ações excedido", {
+        userId: ctx.userId,
+        chatId: ctx.chatId,
+        session: ctx.sessionName,
+        limit: FLOW_MAX_ACTIONS,
+      });
+      break;
+    }
+
     if (!a?.type) continue;
 
     if (a.type === "send_text") {
       const rendered = renderFlowTemplate(String(a.payload || ""), ctx);
+      const trimmed = rendered.length > FLOW_MAX_MESSAGE_CHARS
+        ? rendered.slice(0, FLOW_MAX_MESSAGE_CHARS)
+        : rendered;
       if (options.simulate) {
-        options.logs?.push(`send_text: ${rendered}`);
+        options.logs?.push(`send_text: ${trimmed}` + (trimmed.length < rendered.length ? " [truncated]" : ""));
       } else {
         try {
-          await withTimeout(ctx.client.sendText(ctx.chatId, rendered), WPP_TIMEOUT_MS, "sendText");
-          ctx.lastResponse = rendered;
+          await withTimeout(ctx.client.sendText(ctx.chatId, trimmed), WPP_TIMEOUT_MS, "sendText");
+          ctx.lastResponse = trimmed;
         } catch { }
       }
     }
@@ -635,7 +696,9 @@ async function runFlowActions(
             WPP_TIMEOUT_MS,
             "sendFile"
           );
-        } catch { }
+        } catch (err) {
+          console.warn("Erro ao enviar mídia em flow:", err);
+        }
       }
     }
 
@@ -1127,7 +1190,7 @@ async function handleAutomaticFallback(options: {
 
   if (decision.config.notifyPanel !== false) {
     try {
-      io.emit("fallback_triggered", {
+      io.to(`user:${userId}`).emit("fallback_triggered", {
         chatId,
         userId,
         sessionName,
@@ -1322,6 +1385,7 @@ export async function deleteWppSession(userId: number, sessionName: string) {
     );
 
   console.log("OK Sessão totalmente removida:", full);
+  logAudit("session_deleted", userId, "session", sessionName);
   return true;
 
 } catch (err) {
@@ -1517,23 +1581,42 @@ async function attachEvents(
       // =================================================
       //  ENVIAR PARA O PAINEL (REALTIME)
       // =================================================
+      let mediaBase64: string | null = null;
+      let mediaMime: string | undefined = msg.mimetype || undefined;
+
+      // Se for áudio, já decripta para permitir reprodução no painel
+      if (isAudio) {
+        try {
+          const audioBuffer = await client.decryptFile(msg);
+          mediaBase64 = audioBuffer.toString("base64");
+          mediaMime = msg.mimetype || "audio/ogg";
+        } catch (err) {
+          console.error("Erro ao obter áudio para painel:", err);
+        }
+      }
+
       try {
         const { io } = await import("./server");
-        io.emit("newMessage", {
+        const payload: any = {
           chatId,
           name:
             msg.sender?.pushname ||
             msg.sender?.name ||
             msg.sender?.shortName ||
             chatId.replace("@c.us", ""),
-          body: msg.body,
-          mimetype: msg.mimetype,
-          isMedia: !!msg.mimetype,
+          body,
+          mimetype: mediaMime || msg.mimetype,
+          isMedia: !!(msg.mimetype || mediaBase64),
           timestamp: (msg.timestamp || Date.now()) * 1000,
           fromMe: !!msg.fromMe,
           _isFromMe: !!msg.fromMe,
           avatar: msg.sender?.profilePicThumbObj?.eurl || null,
-        });
+        };
+        if (mediaBase64) {
+          payload.mediaBase64 = mediaBase64;
+          payload.mediaText = body; // transcrição/texto original
+        }
+        io.to(`user:${userId}`).emit("newMessage", payload);
       } catch { }
 
       // =================================================
@@ -1781,7 +1864,7 @@ async function attachEvents(
           //  Avisar o painel que a IA está digitando
           try {
             const { io } = await import("./server");
-            io.emit("typing:start", { chatId, userId, sessionName: shortName });
+            io.to(`user:${userId}`).emit("typing:start", { chatId, userId, sessionName: shortName });
           } catch { }
 
           typingTimeout = setTimeout(() => {
@@ -1805,7 +1888,7 @@ async function attachEvents(
                 onStream: async (delta: string) => {
                   try {
                     const { io } = await import("./server");
-                    io.emit("ai:stream", {
+                    io.to(`user:${userId}`).emit("ai:stream", {
                       chatId,
                       userId,
                       sessionName: shortName,
@@ -1898,7 +1981,7 @@ async function attachEvents(
           //  Avisar o painel que a IA parou de digitar
           try {
             const { io } = await import("./server");
-            io.emit("typing:stop", { chatId, userId, sessionName: shortName });
+            io.to(`user:${userId}`).emit("typing:stop", { chatId, userId, sessionName: shortName });
           } catch { }
         }
       }, 1000);
@@ -2054,7 +2137,7 @@ export async function createWppSession(
 
       try {
         const { io } = await import("./server");
-        io.emit("session:qr", { userId, sessionName: shortName, full });
+        io.to(`user:${userId}`).emit("session:qr", { userId, sessionName: shortName, full });
       } catch { }
 
       if (urlCode) term(await qrcode.toString(urlCode, { type: "terminal" }));
@@ -2075,7 +2158,7 @@ export async function createWppSession(
         try {
           const { io } = await import("./server");
           console.log(" io existe?", !!io);
-          io.emit("server:online", { userId });
+          io.to(`user:${userId}`).emit("server:online", { userId });
         } catch (err) {
           console.error("ERRO ERRO AO EMITIR server:online", err);
         }
@@ -2091,7 +2174,7 @@ export async function createWppSession(
 
         try {
           const { io } = await import("./server");
-          io.emit("server:offline", { userId });
+          io.to(`user:${userId}`).emit("server:offline", { userId });
         } catch (err) {
           console.error("ERRO ERRO AO EMITIR server:offline", err);
         }
@@ -2116,7 +2199,7 @@ export async function createWppSession(
     //  Emitir estado exato (conexão, reconexão, etc.)
     try {
       const { io } = await import("./server");
-      io.emit("session:stateChange", {
+      io.to(`user:${userId}`).emit("session:stateChange", {
         userId,
         sessionName: shortName,
         full,
@@ -2143,7 +2226,7 @@ export async function createWppSession(
         // emite offline
         try {
           const { io } = await import("./server");
-          io.emit("server:offline", { userId });
+          io.to(`user:${userId}`).emit("server:offline", { userId });
         } catch { }
 
         // tenta reconectar
@@ -2161,6 +2244,7 @@ export async function createWppSession(
   clients.set(full, client);
   await primeFallbackCache(userId, shortName);
   await primeChatAICache(userId);
+  logAudit("session_created", userId, "session", shortName);
   return { sessionName: full };
 }
 
@@ -2171,6 +2255,43 @@ export async function createWppSession(
 // ===========================
 export function getClient(full: string) {
   return clients.get(full);
+}
+
+// Invalida cache de IA em memória (preload + estado do chat específico)
+export function invalidateChatAICache(userId: number, chatId?: string) {
+  chatAICacheLoaded.delete(userId);
+  if (chatId) {
+    const key = `USER${userId}_${chatId}`;
+    chatAILock.delete(key);
+    chatAIActivity.delete(key);
+  }
+}
+
+// Fecha todas as sessões WPP sem apagar tokens (para shutdown gracioso)
+export async function shutdownWppClients(): Promise<void> {
+  const total = clients.size;
+  const closures: Promise<any>[] = [];
+
+  for (const [full, client] of clients.entries()) {
+    try {
+      const closeResult = client?.close?.();
+      if (closeResult && typeof closeResult.then === "function") {
+        closures.push(
+          closeResult.catch((err: any) => {
+            console.warn("Falha ao fechar sessão", full, err?.message || err);
+          })
+        );
+      }
+    } catch (err: any) {
+      console.warn("Erro ao fechar sessão", full, err?.message || err);
+    }
+  }
+
+  if (closures.length) {
+    await Promise.allSettled(closures);
+  }
+
+  console.log(`🔌 WPPConnect: ${total} sessão(ões) finalizadas para shutdown`);
 }
 
 async function sendSystemMessage(
