@@ -3,6 +3,85 @@ import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
 
 let pool: mysql.Pool;
 
+type IndexRow = RowDataPacket & {
+  Key_name: string;
+  Column_name: string;
+  Seq_in_index: number;
+};
+
+async function getIndexColumns(tableName: string, indexName: string): Promise<string[]> {
+  const [rows] = await pool.query<RowDataPacket[]>(`SHOW INDEX FROM ${tableName}`);
+  return (rows as IndexRow[])
+    .filter((row) => row.Key_name === indexName)
+    .sort((a, b) => Number(a.Seq_in_index) - Number(b.Seq_in_index))
+    .map((row) => String(row.Column_name));
+}
+
+async function migrateChatHistoriesToSharedScope() {
+  try {
+    await pool.query(
+      "ALTER TABLE chat_histories MODIFY COLUMN session_name VARCHAR(255) NULL"
+    );
+  } catch {
+    // coluna já está compatível
+  }
+
+  const uniqueColumns = await getIndexColumns("chat_histories", "uniq_chat_history");
+  const alreadyShared =
+    uniqueColumns.length === 2 &&
+    uniqueColumns[0] === "user_id" &&
+    uniqueColumns[1] === "chat_id";
+
+  if (!alreadyShared) {
+    const [duplicates] = await pool.query<RowDataPacket[]>(
+      `SELECT user_id, chat_id, COUNT(*) AS total
+       FROM chat_histories
+       GROUP BY user_id, chat_id
+       HAVING COUNT(*) > 1
+       LIMIT 1`
+    );
+
+    if ((duplicates as RowDataPacket[]).length) {
+      const [cleanupResult] = await pool.query<ResultSetHeader>(
+        `DELETE older
+         FROM chat_histories older
+         INNER JOIN chat_histories newer
+           ON older.user_id = newer.user_id
+          AND older.chat_id = newer.chat_id
+          AND (
+            older.updated_at < newer.updated_at OR
+            (older.updated_at = newer.updated_at AND older.id < newer.id)
+          )`
+      );
+
+      if (cleanupResult.affectedRows) {
+        console.log(
+          `✅ chat_histories consolidado: ${cleanupResult.affectedRows} registro(s) antigo(s) removido(s) para unificar por user_id + chat_id`
+        );
+      }
+    }
+
+    try {
+      await pool.query("ALTER TABLE chat_histories DROP INDEX uniq_chat_history");
+    } catch {
+      // índice antigo já não existe
+    }
+
+    await pool.query(
+      "ALTER TABLE chat_histories ADD UNIQUE KEY uniq_chat_history (user_id, chat_id)"
+    );
+    console.log("✅ chat_histories agora usa chave única por user_id + chat_id");
+  }
+
+  try {
+    await pool.query(
+      "ALTER TABLE chat_histories DROP INDEX idx_chat_histories_user_session_chat"
+    );
+  } catch {
+    // índice legado pode não existir
+  }
+}
+
 export async function initDB() {
   console.log("DB_HOST =", process.env.DB_HOST);
   console.log("DB_PORT =", process.env.DB_PORT);
@@ -119,6 +198,7 @@ export async function initDB() {
       password VARCHAR(255) NOT NULL,
       prompt TEXT,
       token VARCHAR(255) UNIQUE NOT NULL,
+      token_expires_at BIGINT DEFAULT NULL,
 
       -- 🔐 CONFIRMAÇÃO DE EMAIL
       email_verified TINYINT DEFAULT 0,
@@ -333,6 +413,39 @@ export async function initDB() {
     `,
 
     `
+    CREATE TABLE IF NOT EXISTS dispatch_suppressions (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      phone VARCHAR(30) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      reason VARCHAR(100) NOT NULL,
+      source VARCHAR(50) NOT NULL,
+      notes TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      UNIQUE KEY uniq_dispatch_suppression (user_id, phone),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS dispatch_contact_events (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      session_name VARCHAR(255),
+      campaign_kind VARCHAR(20) NOT NULL,
+      campaign_ref VARCHAR(64),
+      phone VARCHAR(30) NOT NULL,
+      status VARCHAR(20) NOT NULL,
+      error_code VARCHAR(64),
+      error_message TEXT,
+      metadata LONGTEXT,
+      created_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
     CREATE TABLE IF NOT EXISTS rate_limits (
       rate_key VARCHAR(255) PRIMARY KEY,
       count INT DEFAULT 0,
@@ -350,6 +463,8 @@ export async function initDB() {
 
       enable_fallback BOOLEAN DEFAULT TRUE,
       fallback_message TEXT,
+      send_transfer_message BOOLEAN DEFAULT FALSE,
+      internal_note_only BOOLEAN DEFAULT TRUE,
 
       fallback_sensitivity VARCHAR(10),
 
@@ -383,11 +498,11 @@ export async function initDB() {
     CREATE TABLE IF NOT EXISTS chat_histories (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
-      session_name VARCHAR(255) NOT NULL,
+      session_name VARCHAR(255),
       chat_id VARCHAR(255) NOT NULL,
       history JSON NOT NULL,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      UNIQUE KEY uniq_chat_history (user_id, session_name, chat_id),
+      UNIQUE KEY uniq_chat_history (user_id, chat_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
@@ -416,6 +531,7 @@ export async function initDB() {
       source_url TEXT,
       status VARCHAR(20) DEFAULT 'pending',
       error TEXT,
+      embedding_version INT DEFAULT 1,
       tokens INT DEFAULT 0,
       chunks INT DEFAULT 0,
       created_at BIGINT NOT NULL,
@@ -533,6 +649,36 @@ export async function initDB() {
       INDEX idx_ip_reg_ip_created (ip, created_at),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS worker_locks (
+      lock_key VARCHAR(100) PRIMARY KEY,
+      owner_id VARCHAR(255) NOT NULL,
+      expires_at BIGINT NOT NULL,
+      heartbeat_at BIGINT NOT NULL,
+      created_at BIGINT NOT NULL
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS webhook_delivery_failures (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      event_type VARCHAR(50) NOT NULL,
+      target_url TEXT NOT NULL,
+      payload LONGTEXT NOT NULL,
+      attempts INT NOT NULL DEFAULT 0,
+      max_attempts INT NOT NULL DEFAULT 3,
+      status VARCHAR(20) NOT NULL DEFAULT 'dead_letter',
+      last_error TEXT,
+      last_attempt_at BIGINT DEFAULT NULL,
+      next_retry_at BIGINT DEFAULT NULL,
+      resolved_at BIGINT DEFAULT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
     `
   ];
 
@@ -541,6 +687,8 @@ export async function initDB() {
     `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS alert_phone VARCHAR(32)`,
     `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS alert_message TEXT`,
     `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS fallback_cooldown_minutes INT`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS send_transfer_message BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS internal_note_only BOOLEAN DEFAULT TRUE`,
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS conditions JSON`,
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS triggers JSON`,
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0`,
@@ -548,12 +696,14 @@ export async function initDB() {
     `ALTER TABLE schedules ADD COLUMN IF NOT EXISTS preferred_session VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_normalized VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_device_id VARCHAR(255)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at BIGINT DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_started_at BIGINT DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day1_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day3_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day6_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_last_sent TINYINT DEFAULT 0`,
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_onboarding_done TINYINT DEFAULT 0`
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_onboarding_done TINYINT DEFAULT 0`,
+    `ALTER TABLE kb_sources ADD COLUMN IF NOT EXISTS embedding_version INT DEFAULT 1`
   ];
 
   for (const sql of tables) {
@@ -564,20 +714,28 @@ export async function initDB() {
     await pool.query(sql);
   }
 
+  await migrateChatHistoriesToSharedScope();
+
   const indexes = [
     "CREATE INDEX IF NOT EXISTS idx_schedules_status_send_at ON schedules (status, send_at)",
     "CREATE INDEX IF NOT EXISTS idx_schedules_status_processing_started_at ON schedules (status, processing_started_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions (user_id, status)",
-    "CREATE INDEX IF NOT EXISTS idx_chat_histories_user_session_chat ON chat_histories (user_id, session_name, chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_chat_histories_updated ON chat_histories (updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_chat_histories_user_updated ON chat_histories (user_id, updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_crm_user_phone ON crm (user_id, phone)",
+    "CREATE INDEX IF NOT EXISTS idx_dispatch_suppressions_user_status_phone ON dispatch_suppressions (user_id, status, phone)",
+    "CREATE INDEX IF NOT EXISTS idx_dispatch_contact_events_user_phone_created ON dispatch_contact_events (user_id, phone, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_dispatch_contact_events_user_session_created ON dispatch_contact_events (user_id, session_name, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_dispatch_contact_events_user_status_created ON dispatch_contact_events (user_id, status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_chat_notes_lookup ON chat_notes (user_id, session_name, chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_sources_user ON kb_sources (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_chunks_scope ON kb_chunks (user_id, session_scope)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users (email_normalized)",
     "CREATE INDEX IF NOT EXISTS idx_users_signup_device ON users (signup_device_id)",
     "CREATE INDEX IF NOT EXISTS idx_device_fingerprints_blocked ON device_fingerprints (blocked)",
+    "CREATE INDEX IF NOT EXISTS idx_worker_locks_expires_at ON worker_locks (expires_at)",
+    "CREATE INDEX IF NOT EXISTS idx_webhook_delivery_failures_user_created ON webhook_delivery_failures (user_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_webhook_delivery_failures_status_created ON webhook_delivery_failures (status, created_at)",
     "CREATE FULLTEXT INDEX idx_kb_chunks_content ON kb_chunks (content)",
   ];
 

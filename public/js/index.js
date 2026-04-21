@@ -55,19 +55,19 @@ async function loadUser() {
     const res = await fetch(API + "/auth/me", { credentials: "include" });
     if (!res.ok) return location.href = "/login";
 
-    const { user } = await res.json();
-    currentUser = user;
+    const { user, planConfig } = await res.json();
+    currentUser = { ...user, planConfig: planConfig || null };
 
-    document.getElementById("user-id").innerText = user.id;
-    document.getElementById("user-name").innerText = user.name;
-    document.getElementById("user-prompt").value = user.prompt;
+    document.getElementById("user-id").innerText = currentUser.id;
+    document.getElementById("user-name").innerText = currentUser.name;
+    document.getElementById("user-prompt").value = currentUser.prompt;
     updateCharCount(); // Atualizar contador ao carregar
 
     // Renderizar indicador de uso de IA
-    renderIaUsage(user);
+    renderIaUsage(currentUser);
 
     // Carregar configuração de silêncio
-    renderSilenceConfig(user);
+    renderSilenceConfig(currentUser);
 
     // 🔒 garante que QR e loading começam escondidos
     hideQrUI();
@@ -88,18 +88,28 @@ function renderIaUsage(user) {
 
     if (!wrap) return;
 
-    const used  = Number(user.ia_messages_used) || 0;
-    const plan  = user.plan || "free";
-    const limit = LIMITS[plan] ?? null;
+    const used = Number(user.ia_messages_used) || 0;
+    const plan = user.plan || "free";
+    const rawLimit = user?.planConfig?.maxIaMessages;
+    const normalizedRawLimit = String(rawLimit ?? "").trim().toLowerCase();
+    const fallbackLimit = Object.prototype.hasOwnProperty.call(LIMITS, plan)
+        ? LIMITS[plan]
+        : null;
+    const numericLimit = Number(rawLimit);
+    const limit = normalizedRawLimit === "unlimited"
+        ? null
+        : Number.isFinite(numericLimit) && numericLimit >= 0
+            ? numericLimit
+            : fallbackLimit;
 
     wrap.style.display = "block";
 
     if (limit === null) {
-        // Plano ilimitado
-        countEl.textContent   = used + " / ∞";
+        const planLabel = String(user?.planConfig?.displayName || plan || "Pro");
+        countEl.textContent   = used + " / ilimitado";
         barEl.style.width     = "100%";
         barEl.className       = "ia-progress-bar bar-unlimited";
-        remaining.textContent = "Plano Pro — mensagens ilimitadas 🚀";
+        remaining.textContent = `Plano ${planLabel} - mensagens ilimitadas`;
         return;
     }
 
@@ -113,8 +123,8 @@ function renderIaUsage(user) {
         (pct >= 90 ? "bar-danger" : pct >= 70 ? "bar-warning" : "bar-ok");
 
     remaining.textContent = left > 0
-        ? `${left} mensagens restantes este mês`
-        : "⚠️ Limite atingido — faça upgrade para continuar";
+        ? `${left} mensagens restantes este mes`
+        : "Limite atingido - faca upgrade para continuar";
 
     if (left === 0) remaining.style.color = "#e54848";
 }
@@ -365,18 +375,33 @@ async function listSessions() {
 
   sessions.forEach(s => {
     const isConnected    = s.status === "connected";
+        const isBanned      = s.status === "banned";
+        const isReauthRequired = s.status === "reauth_required";
         const isReconnecting = s.status === "reconnecting";
         const isPending      = s.status === "pending";
+        const isCircuitOpen  = s.status === "circuit_open";
 
         const badgeClass = isConnected    ? "badge-connected"
+                         : isBanned      ? "badge-banned"
+                         : isReauthRequired ? "badge-circuit-open"
                          : isReconnecting ? "badge-reconnecting"
+                         : isCircuitOpen  ? "badge-circuit-open"
                          : isPending      ? "badge-pending"
                          : "badge-disconnected";
 
         const badgeLabel = isConnected    ? "Conectado"
+                         : isBanned      ? "Possivel banimento"
+                         : isReauthRequired ? "Autenticacao manual"
                          : isReconnecting ? "Reconectando..."
+                         : isCircuitOpen  ? "Ação necessária"
                          : isPending      ? "Aguardando QR"
                          : "Desconectado";
+
+        const sessionNote = isBanned
+                         ? `<div class="session-note session-note-warning">Reconexao automatica pausada. Aguarde e procure suporte antes de autenticar novamente.</div>`
+                         : isReauthRequired
+                         ? `<div class="session-note session-note-warning">A restauracao automatica foi interrompida para evitar loop. Clique em Reconectar quando quiser gerar um novo QR.</div>`
+                         : "";
 
         const div = document.createElement("div");
         div.className = "session-card";
@@ -389,10 +414,11 @@ async function listSessions() {
                 <div class="session-info">
                     <div class="session-name">${s.session_name}</div>
                     <span class="session-badge ${badgeClass}">${badgeLabel}</span>
+                    ${sessionNote}
                 </div>
             </div>
             <div class="session-actions">
-                ${!isConnected ? `
+                ${!isConnected && !isBanned ? `
                 <button class="btn-session-action btn-reconnect"
                     onclick="restartSession('${s.session_name}')"
                     title="Reconectar">
@@ -418,6 +444,15 @@ async function listSessions() {
 }
 
 async function restartSession(name) {
+    const session = (window._cachedSessions || []).find(s => s.session_name === name);
+    if (session?.status === "banned") {
+        notify(
+            "Esta sessao foi marcada com possivel banimento. Aguarde e procure suporte antes de tentar reconectar.",
+            "warning",
+            7000
+        );
+        return;
+    }
     if (!confirm(`Reconectar a sessão "${name}"?`)) return;
 
     try {
@@ -513,6 +548,48 @@ socket.on("session:qr", ({ userId, sessionName, full }) => {
             }
         }, 1000);
     }
+});
+
+socket.on("sessions:changed", ({ userId }) => {
+    if (!currentUser) return;
+    if (String(userId) !== String(currentUser.id)) return;
+    listSessions().catch(() => {});
+});
+
+socket.on("session:circuitOpen", ({ userId, sessionName, attempts }) => {
+    if (!currentUser) return;
+    if (String(userId) !== String(currentUser.id)) return;
+
+    notify(
+        `A sessão "${sessionName}" parou a reconexão automática após ${attempts} tentativa(s). Reinicie ou recrie a sessão.`,
+        "warning",
+        7000
+    );
+    listSessions().catch(() => {});
+});
+
+socket.on("session:banned", ({ userId, message }) => {
+    if (!currentUser) return;
+    if (String(userId) !== String(currentUser.id)) return;
+
+    notify(
+        message || "Possivel banimento detectado na sessao. A reconexao automatica foi pausada.",
+        "warning",
+        9000
+    );
+    listSessions().catch(() => {});
+});
+
+socket.on("session:reauthRequired", ({ userId, message }) => {
+    if (!currentUser) return;
+    if (String(userId) !== String(currentUser.id)) return;
+
+    notify(
+        message || "A sessao precisa de autenticacao manual. A recuperacao automatica foi interrompida para evitar loop.",
+        "warning",
+        9000
+    );
+    listSessions().catch(() => {});
 });
 
 

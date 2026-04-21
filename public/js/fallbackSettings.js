@@ -1,6 +1,8 @@
 // public/js/fallbackSettings.js
 const DEFAULTS = {
   fallbackMessage: "Vou encaminhar você para um atendente humano, aguarde um momento.",
+  sendTransferMessage: false,
+  internalNoteOnly: true,
   humanModeDuration: 15,
   aiTransferPhrases: ["transferindo...", "vou encaminhar você para um humano"],
   source: "default",
@@ -34,6 +36,41 @@ function showStatus(msg, ok = true) {
   box.style.display = "block";
   box.className = ok ? "status ok" : "status err";
   box.textContent = msg;
+}
+
+function syncTransferMessageUi() {
+  const internalNoteOnly = qs("internalNoteOnly");
+  const sendTransferMessage = qs("sendTransferMessage");
+  const fallbackMessage = qs("fallbackMessage");
+  if (!internalNoteOnly || !sendTransferMessage || !fallbackMessage) return;
+
+  const shouldEnableMessage = sendTransferMessage.checked && !internalNoteOnly.checked;
+  fallbackMessage.disabled = !shouldEnableMessage;
+  fallbackMessage.style.opacity = shouldEnableMessage ? "1" : "0.6";
+}
+
+function handleInternalNoteOnlyChange() {
+  const internalNoteOnly = qs("internalNoteOnly");
+  const sendTransferMessage = qs("sendTransferMessage");
+  if (!internalNoteOnly || !sendTransferMessage) return;
+
+  if (internalNoteOnly.checked) {
+    sendTransferMessage.checked = false;
+  }
+
+  syncTransferMessageUi();
+}
+
+function handleSendTransferMessageChange() {
+  const internalNoteOnly = qs("internalNoteOnly");
+  const sendTransferMessage = qs("sendTransferMessage");
+  if (!internalNoteOnly || !sendTransferMessage) return;
+
+  if (sendTransferMessage.checked) {
+    internalNoteOnly.checked = false;
+  }
+
+  syncTransferMessageUi();
 }
 
 function populateSessions(sessions) {
@@ -147,9 +184,13 @@ async function fetchSessions() {
 
 function applyConfig(cfg) {
   const merged = { ...DEFAULTS, ...cfg };
-  lastConfig = merged;
+  const internalNoteOnly = merged.internalNoteOnly !== false;
+  const sendTransferMessage = merged.sendTransferMessage === true && !internalNoteOnly;
+  lastConfig = { ...merged, internalNoteOnly, sendTransferMessage };
 
   qs("fallbackMessage").value = merged.fallbackMessage ?? DEFAULTS.fallbackMessage;
+  qs("sendTransferMessage").checked = sendTransferMessage;
+  qs("internalNoteOnly").checked = internalNoteOnly;
   const duration = merged.humanModeDuration === null ? 0 : merged.humanModeDuration;
   qs("humanModeDuration").value = Number.isFinite(duration) ? duration : DEFAULTS.humanModeDuration;
   qs("aiTransferPhrases").value = listToText(merged.aiTransferPhrases ?? DEFAULTS.aiTransferPhrases);
@@ -160,6 +201,7 @@ function applyConfig(cfg) {
       ? DEFAULTS.fallbackCooldownMinutes
       : merged.fallbackCooldownMinutes;
   qs("pill-src").textContent = `Fonte: ${merged.source === "db" ? "Personalizada" : "Padrão"}`;
+  syncTransferMessageUi();
 }
 
 async function loadConfig() {
@@ -191,9 +233,13 @@ async function saveConfig() {
   }
 
   const transferList = textToList(qs("aiTransferPhrases").value);
+  const internalNoteOnly = qs("internalNoteOnly").checked;
+  const sendTransferMessage = qs("sendTransferMessage").checked && !internalNoteOnly;
   const payload = {
     sessionName,
-    fallbackMessage: qs("fallbackMessage").value.trim() || DEFAULTS.fallbackMessage,
+    fallbackMessage: qs("fallbackMessage").value.trim(),
+    sendTransferMessage,
+    internalNoteOnly,
     humanModeDuration: (() => {
       const n = Number(qs("humanModeDuration").value);
       if (!Number.isFinite(n) || n < 0) return 0;
@@ -246,4 +292,6 @@ window.onload = () => {
   qs("btnReset")?.addEventListener("click", resetLocal);
   qs("btnRefreshList")?.addEventListener("click", fetchList);
   qs("sessionName")?.addEventListener("change", loadConfig);
+  qs("internalNoteOnly")?.addEventListener("change", handleInternalNoteOnlyChange);
+  qs("sendTransferMessage")?.addEventListener("change", handleSendTransferMessageChange);
 };

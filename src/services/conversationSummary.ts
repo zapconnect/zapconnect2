@@ -70,8 +70,11 @@ export async function summarizeConversationToCrm({
   try {
     const db = getDB();
     const row = await db.get<{ history: string | null }>(
-      `SELECT history FROM chat_histories WHERE user_id = ? AND session_name = ? AND chat_id = ?`,
-      [userId, sessionName, chatId]
+      `SELECT history
+       FROM chat_histories
+       WHERE user_id = ? AND chat_id = ?
+       LIMIT 1`,
+      [userId, chatId]
     );
     if (!row?.history) return;
 
@@ -99,10 +102,11 @@ export async function summarizeConversationToCrm({
     try {
       summary = await mainGoogle({
         currentMessage: prompt,
+        userMessage: prompt,
+        systemInstruction: "",
         chatId: `${chatId}::summary`,
         userId,
         sessionName,
-        promptUsuario: "",
         onStream: undefined,
       });
     } catch (err) {

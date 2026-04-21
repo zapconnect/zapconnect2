@@ -45,11 +45,44 @@ import {
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
 import { validatePhone } from "./utils/phoneUtils";
+import {
+  cleanupLocalMediaFile,
+  persistMediaBufferToLocalFile,
+  releaseMediaPayload,
+} from "./utils/mediaUploader";
+import {
+  SessionRateLimitError,
+  assertSessionCanSend,
+  getHumanDelay,
+  recordSessionSend,
+} from "./utils/humanDelay";
 import { withTimeout } from "./utils/withTimeout";
 import { runChatHistoryCleanup } from "./services/chatHistoryCleaner";
 import { getPlanConfig, listPlanConfigs } from "./services/planConfigs";
+import {
+  DISPATCH_CONSECUTIVE_FAILURE_LIMIT,
+  DISPATCH_ERROR_RATE_SAMPLE_SIZE,
+  DISPATCH_ERROR_RATE_THRESHOLD,
+  classifyDispatchError,
+  evaluateDispatchCampaignRisk,
+  evaluateDispatchPolicy,
+  evaluateDispatchSessionHealth,
+  recordDispatchContactEvent,
+} from "./services/dispatchPolicy";
+import {
+  type NumberListValidationResult,
+  validateNumberList,
+} from "./services/listValidator";
+import { setSocketServer } from "./lib/socketEmitter";
+import {
+  acquireWorkerLock,
+  releaseWorkerLock,
+  renewWorkerLock,
+  WORKER_INSTANCE_ID,
+} from "./services/workerLock";
 import { logAudit } from "./utils/audit";
 import {
+  disparoUserLimiter,
   loginLimiter,
   registerLimiter,
   forgotPasswordLimiter,
@@ -58,12 +91,11 @@ import {
 // setupLogging é chamado em index.ts antes de carregar o servidor
 
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
-const DISPARO_MIN_INTERVAL_MS = Number(process.env.DISPARO_MIN_INTERVAL_MS || 1500);
-const disparoRateLimit = new Map<number, number>();
 const MAX_CHAT_MESSAGES = Number(process.env.MAX_CHAT_MESSAGES || 500);
 const TRIAL_EMAIL_SWEEP_MS = 60 * 60 * 1000; // 1h
 const WPP_TIMEOUT_MS = Number(process.env.WPP_TIMEOUT_MS || 12_000);
 const GRACEFUL_TIMEOUT_MS = Number(process.env.GRACEFUL_TIMEOUT_MS || 10_000);
+const MAX_KB_FILE_BYTES = 10 * 1024 * 1024; // 10MB
 let shuttingDown = false;
 let appReady = false;
 
@@ -71,16 +103,83 @@ import { getDB, closeDB } from "./database";
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+type ConnectedSessionRow = {
+  user_id: number;
+  session_name: string;
+};
+
+type ScheduleNotificationUser = {
+  name: string;
+  email: string;
+};
+
+async function loadConnectedSessionsByUser(
+  db: ReturnType<typeof getDB>,
+  userIds: number[]
+): Promise<Map<number, string[]>> {
+  const uniqueUserIds = Array.from(
+    new Set(userIds.filter((id) => Number.isFinite(id)))
+  );
+  const grouped = new Map<number, string[]>();
+
+  if (!uniqueUserIds.length) return grouped;
+
+  const placeholders = uniqueUserIds.map(() => "?").join(", ");
+  const rows = await db.all<ConnectedSessionRow>(
+    `
+    SELECT user_id, session_name
+    FROM sessions
+    WHERE status = 'connected'
+      AND user_id IN (${placeholders})
+    ORDER BY user_id ASC, created_at DESC, id DESC
+    `,
+    uniqueUserIds
+  );
+
+  for (const row of rows) {
+    const current = grouped.get(row.user_id) || [];
+    current.push(row.session_name);
+    grouped.set(row.user_id, current);
+  }
+
+  return grouped;
+}
+
+async function loadScheduleNotificationUsers(
+  db: ReturnType<typeof getDB>,
+  userIds: number[]
+): Promise<Map<number, ScheduleNotificationUser>> {
+  const uniqueUserIds = Array.from(
+    new Set(userIds.filter((id) => Number.isFinite(id)))
+  );
+  const grouped = new Map<number, ScheduleNotificationUser>();
+
+  if (!uniqueUserIds.length) return grouped;
+
+  const placeholders = uniqueUserIds.map(() => "?").join(", ");
+  const rows = await db.all<{ id: number; name: string; email: string }>(
+    `
+    SELECT id, name, email
+    FROM users
+    WHERE id IN (${placeholders})
+    `,
+    uniqueUserIds
+  );
+
+  for (const row of rows) {
+    grouped.set(row.id, {
+      name: row.name,
+      email: row.email,
+    });
+  }
+
+  return grouped;
+}
+
 async function listConnectedSessions(userId: number): Promise<string[]> {
   const db = getDB();
-  const rows = await db.all<{ session_name: string }>(
-    `SELECT session_name
-     FROM sessions
-     WHERE user_id = ? AND status = 'connected'
-     ORDER BY created_at DESC, id DESC`,
-    [userId]
-  );
-  return rows.map(r => r.session_name);
+  const grouped = await loadConnectedSessionsByUser(db, [userId]);
+  return grouped.get(userId) || [];
 }
 
 function buildSessionCandidates(preferred: string | null | undefined, connected: string[]): string[] {
@@ -106,7 +205,7 @@ interface ScheduleRow {
   send_at: number;
   recurrence: "none" | "daily" | "weekly" | "monthly";
   recurrence_end: number | null;
-  status: "pending" | "processing" | "sent";
+  status: "pending" | "processing" | "sent" | "failed";
   processing_started_at: number | null;
 }
 
@@ -129,6 +228,17 @@ import { simulateFlowRun, simulateWelcomeFlow } from "./wppManager";
 
 
 import { User } from "./database/types";
+import {
+  clearAuthCookie,
+  createSessionToken,
+  ensureFreshUserSession,
+  findUserByToken,
+  getTokenExpiresAt,
+  invalidateUserSession,
+  isSessionExpired,
+  issueUserSession,
+  setAuthCookie,
+} from "./utils/authSession";
 
 
 const app = express();
@@ -144,6 +254,74 @@ type PersonalizedContact = {
   message?: string;
   vars?: Record<string, string>;
 };
+
+type ScheduleItemLog = {
+  number: string;
+  status: "sent" | "error";
+  error?: string;
+  sentAt: number;
+};
+
+function uniqueWarnings(warnings: string[] = []) {
+  return Array.from(new Set(warnings.filter(Boolean)));
+}
+
+function getCampaignPauseReason(progress: {
+  sessionName: string;
+  processed: number;
+  failures: number;
+  consecutiveFailures: number;
+}) {
+  if (progress.consecutiveFailures >= DISPATCH_CONSECUTIVE_FAILURE_LIMIT) {
+    return `Campanha pausada na sessão ${progress.sessionName} após ${progress.consecutiveFailures} falhas consecutivas.`;
+  }
+
+  if (
+    progress.processed >= DISPATCH_ERROR_RATE_SAMPLE_SIZE &&
+    progress.failures / Math.max(progress.processed, 1) >= DISPATCH_ERROR_RATE_THRESHOLD
+  ) {
+    return `Campanha pausada na sessão ${progress.sessionName} por taxa de erro elevada.`;
+  }
+
+  return null;
+}
+
+function isRetryableDispatchPolicyBlock(reason: string, skipCodes: string[] = []) {
+  const normalized = String(reason || "").toLowerCase();
+  return (
+    normalized.includes("envios s") ||
+    normalized.includes("limite diario seguro") ||
+    normalized.includes("limite seguro atual") ||
+    normalized.includes("aquecimento") ||
+    normalized.includes("fase de aquecimento") ||
+    skipCodes.includes("cooldown")
+  );
+}
+
+async function recordSkippedDispatchContacts(
+  db: DBClient,
+  input: {
+    userId: number;
+    campaignKind: "broadcast" | "schedule";
+    campaignRef: string;
+    skips: { number: string; code: string; reason: string }[];
+  }
+) {
+  for (const skip of input.skips) {
+    await recordDispatchContactEvent(
+      {
+        userId: input.userId,
+        campaignKind: input.campaignKind,
+        campaignRef: input.campaignRef,
+        phone: skip.number,
+        status: "skipped",
+        errorCode: skip.code,
+        errorMessage: skip.reason,
+      },
+      db
+    );
+  }
+}
 
 const normalizeVars = (input: any): Record<string, string> => {
   const out: Record<string, string> = {};
@@ -178,6 +356,109 @@ const buildContactsFromPayload = (contactsArr: any[]): PersonalizedContact[] =>
   Array.isArray(contactsArr)
     ? contactsArr.map(sanitizeContactPayload).filter(Boolean) as PersonalizedContact[]
     : [];
+
+const buildBroadcastContactsFromBody = (body: any): PersonalizedContact[] => {
+  const contactsArr: any[] = Array.isArray(body?.contacts) ? body.contacts : [];
+  if (contactsArr.length) {
+    return buildContactsFromPayload(contactsArr);
+  }
+
+  const numbersArr: any[] = Array.isArray(body?.numbers) ? body.numbers : [];
+  if (numbersArr.length) {
+    return numbersArr
+      .map((entry) => {
+        const { ok, sanitized } = validatePhone(entry);
+        return ok ? { number: sanitized, message: body?.message } : null;
+      })
+      .filter(Boolean) as PersonalizedContact[];
+  }
+
+  const { ok, sanitized } = validatePhone(body?.number);
+  if (!ok) return [];
+  return [{ number: sanitized, message: body?.message }];
+};
+
+const buildRawNumbersFromBody = (body: any): string[] => {
+  const contactsArr: any[] = Array.isArray(body?.contacts) ? body.contacts : [];
+  if (contactsArr.length) {
+    return contactsArr.map((entry) => String(entry?.number ?? "")).filter(Boolean);
+  }
+
+  const numbersArr: any[] = Array.isArray(body?.numbers) ? body.numbers : [];
+  if (numbersArr.length) {
+    return numbersArr.map((entry) => String(entry ?? "")).filter(Boolean);
+  }
+
+  if (body?.number !== undefined && body?.number !== null) {
+    return [String(body.number)];
+  }
+
+  return [];
+};
+
+type LiveListValidation = {
+  sessionName: string | null;
+  validation: NumberListValidationResult | null;
+  warnings: string[];
+};
+
+function findLiveClientSession(userId: number, candidates: string[]) {
+  for (const shortName of candidates) {
+    const client = getClient(`USER${userId}_${shortName}`);
+    if (client) {
+      return {
+        sessionName: shortName,
+        client,
+      };
+    }
+  }
+
+  return {
+    sessionName: null,
+    client: null,
+  };
+}
+
+async function runListQualityValidation(input: {
+  userId: number;
+  rawNumbers: string[];
+  preferredSession?: string | null;
+  connectedSessions?: string[];
+  unavailableWarning?: string;
+}): Promise<LiveListValidation> {
+  const warnings: string[] = [];
+  const connected = Array.isArray(input.connectedSessions)
+    ? input.connectedSessions
+    : await listConnectedSessions(input.userId);
+
+  if (!connected.length) {
+    if (input.unavailableWarning) warnings.push(input.unavailableWarning);
+    return {
+      sessionName: null,
+      validation: null,
+      warnings,
+    };
+  }
+
+  const candidates = buildSessionCandidates(input.preferredSession || null, connected);
+  const live = findLiveClientSession(input.userId, candidates);
+
+  if (!live.client || !live.sessionName) {
+    if (input.unavailableWarning) warnings.push(input.unavailableWarning);
+    return {
+      sessionName: null,
+      validation: null,
+      warnings,
+    };
+  }
+
+  const validation = await validateNumberList(live.client, input.rawNumbers);
+  return {
+    sessionName: live.sessionName,
+    validation,
+    warnings: uniqueWarnings([...warnings, ...validation.warnings]),
+  };
+}
 
 // =======================================================
 // 📨 Trial — emails e onboarding
@@ -333,6 +614,12 @@ type SanitizedFile = {
   filename: string;
 };
 
+type PreparedMediaFile = {
+  content: string;
+  filename: string;
+  cleanupPath?: string | null;
+};
+
 type DBClient = ReturnType<typeof getDB>;
 
 const detectMimeFromBuffer = (buf: Buffer): string | null => {
@@ -401,6 +688,112 @@ const guessMimeFromFilename = (filename: string): string | null => {
   }
 };
 
+const KB_ALLOWED_BINARY_MIMES = new Set<string>(["application/pdf"]);
+const KB_ALLOWED_TEXT_MIMES = new Set<string>(["text/plain", "text/csv"]);
+const KB_ALLOWED_TEXT_EXTENSIONS = new Set<string>([
+  ".txt",
+  ".csv",
+  ".md",
+  ".json",
+  ".xml",
+  ".html",
+  ".htm",
+]);
+
+const normalizeBase64Payload = (input: string) => {
+  const raw = String(input || "").trim();
+  const match = raw.match(/^data:([^;]+);base64,(.+)$/i);
+  return {
+    declaredMime: match?.[1]?.toLowerCase() || null,
+    base64: String(match?.[2] || raw).replace(/\s+/g, ""),
+  };
+};
+
+const estimateBase64DecodedBytes = (rawBase64: string) => {
+  const normalized = String(rawBase64 || "").replace(/\s+/g, "");
+  if (!normalized) return 0;
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+};
+
+const isProbablyUtf8TextBuffer = (buffer: Buffer) => {
+  if (!buffer.length) return false;
+
+  const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+  let suspicious = 0;
+
+  for (const byte of sample) {
+    if (byte === 0x00) return false;
+    const isAllowedControl = byte === 0x09 || byte === 0x0a || byte === 0x0d;
+    const isPrintableAscii = byte >= 0x20 && byte <= 0x7e;
+    const isHighByte = byte >= 0x80;
+    if (!isAllowedControl && !isPrintableAscii && !isHighByte) {
+      suspicious += 1;
+    }
+  }
+
+  if (suspicious / sample.length > 0.1) return false;
+
+  const decoded = sample.toString("utf-8");
+  const replacementCount = (decoded.match(/\uFFFD/g) || []).length;
+  return replacementCount / Math.max(decoded.length, 1) <= 0.02;
+};
+
+const decodeKbUploadBase64 = (fileBase64: string, fileName: string) => {
+  const { declaredMime, base64 } = normalizeBase64Payload(fileBase64);
+  if (!base64) {
+    throw new Error("Arquivo base64 inválido");
+  }
+
+  if (!/^[A-Za-z0-9+/=]+$/.test(base64) || base64.length % 4 !== 0) {
+    throw new Error("Conteúdo base64 inválido");
+  }
+
+  const estimatedBytes = estimateBase64DecodedBytes(base64);
+  if (estimatedBytes > MAX_KB_FILE_BYTES) {
+    throw new Error(
+      `Arquivo excede o limite de 10MB (estimado: ${Math.ceil(estimatedBytes / 1024 / 1024)}MB)`
+    );
+  }
+
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length) {
+    throw new Error("Arquivo vazio");
+  }
+  if (buffer.byteLength > MAX_KB_FILE_BYTES) {
+    throw new Error(
+      `Arquivo excede o limite de 10MB (${Math.ceil(buffer.byteLength / 1024 / 1024)}MB)`
+    );
+  }
+
+  const detectedMime = detectMimeFromBuffer(buffer);
+  const guessedMime = guessMimeFromFilename(fileName);
+  const ext = path.extname(String(fileName || "")).toLowerCase();
+  const isAllowedTextFile = KB_ALLOWED_TEXT_EXTENSIONS.has(ext) && isProbablyUtf8TextBuffer(buffer);
+
+  if (detectedMime) {
+    if (!KB_ALLOWED_BINARY_MIMES.has(detectedMime) && !KB_ALLOWED_TEXT_MIMES.has(detectedMime)) {
+      throw new Error("Tipo de arquivo não suportado para base de conhecimento");
+    }
+    if (KB_ALLOWED_BINARY_MIMES.has(detectedMime) && guessedMime && guessedMime !== detectedMime) {
+      throw new Error("Extensão do arquivo não corresponde ao conteúdo enviado");
+    }
+  } else if (!isAllowedTextFile) {
+    throw new Error("Tipo de arquivo não suportado para base de conhecimento");
+  }
+
+  if (
+    declaredMime &&
+    detectedMime &&
+    declaredMime !== detectedMime &&
+    !(KB_ALLOWED_TEXT_MIMES.has(declaredMime) && KB_ALLOWED_TEXT_MIMES.has(detectedMime))
+  ) {
+    throw new Error("Tipo declarado do arquivo não corresponde ao conteúdo enviado");
+  }
+
+  return buffer;
+};
+
 const sanitizeIncomingFile = (input: {
   dataUrl?: string;
   base64?: string;
@@ -447,9 +840,15 @@ const sanitizeIncomingFile = (input: {
 // ===============================
 // 💾 Armazenamento local de arquivos de agendamento
 // ===============================
+const DISPATCH_FILES_ROOT = path.join(process.cwd(), "dispatch_uploads");
 const SCHEDULE_FILES_ROOT = path.join(process.cwd(), "schedule_uploads");
+const SCHEDULE_STORAGE_DRIVER = (process.env.SCHEDULE_STORAGE_DRIVER || "local")
+  .trim()
+  .toLowerCase();
 
 const isDataUrl = (val: unknown): val is string => typeof val === "string" && /^data:[^;]+;base64,/.test(String(val));
+const isLocalScheduleStorage = () =>
+  !SCHEDULE_STORAGE_DRIVER || ["local", "filesystem", "fs"].includes(SCHEDULE_STORAGE_DRIVER);
 
 const sanitizeScheduleFilename = (name: string) => {
   const base = path.basename(name || "arquivo");
@@ -476,20 +875,29 @@ const persistScheduleFile = (userId: number, file: SanitizedFile): string => {
   return toRelativeSchedulePath(absPath);
 };
 
-const loadScheduleFileFromPath = (storedPath: string, filename?: string): SanitizedFile | null => {
+const prepareDispatchFileForSend = (
+  userId: number,
+  file: SanitizedFile
+): PreparedMediaFile => {
+  try {
+    const absPath = persistMediaBufferToLocalFile(DISPATCH_FILES_ROOT, userId, file);
+    return {
+      content: absPath,
+      filename: file.filename,
+      cleanupPath: absPath,
+    };
+  } finally {
+    releaseMediaPayload(file);
+  }
+};
+
+const loadScheduleFileFromPath = (storedPath: string, filename?: string): PreparedMediaFile | null => {
   try {
     const abs = resolveSchedulePath(storedPath);
-    const buffer = fs.readFileSync(abs);
-    const detected = detectMimeFromBuffer(buffer);
-    const guessed = guessMimeFromFilename(filename || path.basename(abs));
-    const mime = detected || guessed || "application/octet-stream";
-    const base64 = buffer.toString("base64");
+    if (!fs.existsSync(abs)) return null;
 
     return {
-      dataUrl: `data:${mime};base64,${base64}`,
-      base64,
-      buffer,
-      mime,
+      content: abs,
       filename: filename || path.basename(abs),
     };
   } catch (err) {
@@ -519,25 +927,58 @@ const deleteScheduleFileIfUnused = async (db: DBClient, storedPath?: string | nu
 const ensureScheduleFileOnDisk = async (
   db: DBClient,
   row: ScheduleRow
-): Promise<{ file: SanitizedFile | null; storedPath: string | null }> => {
-  if (!row.file || !row.filename) return { file: null, storedPath: null };
+): Promise<{ file: PreparedMediaFile | null; storedPath: string | null }> => {
+  if (!row.file) return { file: null, storedPath: null };
+  const safeFilename = row.filename || "arquivo";
 
   // Migração automática de registros antigos em base64
   if (isDataUrl(row.file)) {
     try {
-      const safe = sanitizeIncomingFile({ dataUrl: row.file, filename: row.filename });
+      const safe = sanitizeIncomingFile({ dataUrl: row.file, filename: safeFilename });
       const storedPath = persistScheduleFile(row.user_id, safe);
-      await db.run(`UPDATE schedules SET file = ? WHERE id = ?`, [storedPath, row.id]);
-      return { file: safe, storedPath };
+      await db.run(`UPDATE schedules SET file = ?, filename = ? WHERE id = ?`, [storedPath, safe.filename, row.id]);
+      const prepared: PreparedMediaFile = {
+        content: resolveSchedulePath(storedPath),
+        filename: safe.filename,
+      };
+      releaseMediaPayload(safe);
+      return { file: prepared, storedPath };
     } catch (err) {
       console.error("⚠️ Falha ao migrar arquivo de agendamento:", err);
       return { file: null, storedPath: null };
     }
   }
 
-  const loaded = loadScheduleFileFromPath(row.file, row.filename);
+  const loaded = loadScheduleFileFromPath(row.file, row.filename || undefined);
   return { file: loaded, storedPath: row.file };
 };
+
+const validateScheduleStorageSetup = () => {
+  const storagePath = SCHEDULE_FILES_ROOT;
+
+  if (!isLocalScheduleStorage()) {
+    console.warn(
+      `⚠️ SCHEDULE_STORAGE_DRIVER="${SCHEDULE_STORAGE_DRIVER}" ainda não é suportado neste build. O sistema continuará usando disco local em ${storagePath}.`
+    );
+  }
+
+  try {
+    fs.mkdirSync(storagePath, { recursive: true });
+    fs.accessSync(storagePath, fs.constants.R_OK | fs.constants.W_OK);
+  } catch (err) {
+    console.error(
+      `❌ Falha ao preparar o diretório de mídia dos agendamentos (${storagePath}). Uploads e disparos com arquivo podem falhar.`,
+      err
+    );
+    return;
+  }
+
+  console.warn(
+    `⚠️ Agendamentos com mídia estão usando armazenamento local em ${storagePath}. Em containers com disco efêmero, esses arquivos podem sumir após restart/deploy. Monte volume persistente ou mova para storage externo antes de produção.`
+  );
+};
+
+validateScheduleStorageSetup();
 
 const buildContactsFromStored = (raw: any, baseMessage?: string): PersonalizedContact[] => {
   if (!Array.isArray(raw)) return [];
@@ -785,6 +1226,7 @@ export const io = new Server(server, {
   cors: { origin: true, credentials: true },
   maxHttpBufferSize: 50 * 1024 * 1024, // 50MB — permite arquivos grandes via socket
 });
+setSocketServer(io);
 
 const parseCookies = (cookieHeader: string | undefined) => {
   if (!cookieHeader) return {};
@@ -803,9 +1245,8 @@ io.use(async (socket, next) => {
     const token = cookies?.token;
     if (!token) return next(new Error("unauthorized"));
 
-    const db = getDB();
-    const user = await db.get<{ id: number }>("SELECT id FROM users WHERE token = ?", [token]);
-    if (!user) return next(new Error("unauthorized"));
+    const user = await findUserByToken(token);
+    if (!user || isSessionExpired(user)) return next(new Error("unauthorized"));
 
     socket.data.userId = user.id;
     next();
@@ -1275,16 +1716,40 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
       return res.status(401).json({ error: "Não autenticado", redirect: "/login" });
     }
 
-    const db = getDB();
-    const user = await db.get<any>("SELECT * FROM users WHERE token = ?", [token]);
+    const user = await findUserByToken(token);
 
     if (!user) {
+      clearAuthCookie(res);
       if (isHtml) return res.redirect("/login");
       return res.status(401).json({ error: "Token inválido", redirect: "/login" });
     }
 
+    if (isSessionExpired(user)) {
+      clearAuthCookie(res);
+      if (isHtml) return res.redirect("/login");
+      return res.status(401).json({ error: "Sessão expirada", redirect: "/login" });
+    }
+
+    let reqUser = user;
+
+    try {
+      const refreshed = await ensureFreshUserSession(user);
+      const currentExpiry = getTokenExpiresAt(user);
+
+      if (refreshed.token !== user.token || refreshed.expiresAt !== currentExpiry) {
+        setAuthCookie(res, refreshed.token);
+        reqUser = {
+          ...user,
+          token: refreshed.token,
+          token_expires_at: refreshed.expiresAt,
+        };
+      }
+    } catch (refreshErr) {
+      console.error("Erro ao renovar sessão:", refreshErr);
+    }
+
     // ✅ SALVA O USER SEMPRE
-    (req as any).user = user;
+    (req as any).user = reqUser;
 
     // ✅ libera rotas mesmo sem verificação
     const ALLOW_NOT_VERIFIED = [
@@ -1298,7 +1763,7 @@ async function authMiddleware(req: Request, res: Response, next: NextFunction) {
       return next();
     }
 
-    const emailVerified = Number(user.email_verified) === 1;
+    const emailVerified = Number(reqUser.email_verified) === 1;
 
     if (!emailVerified) {
       if (isHtml) return res.redirect("/verify-email-required");
@@ -1397,8 +1862,17 @@ app.get("/login", (_req, res) => {
   res.render("login"); // ⬅️ render EJS
 });
 
-app.get("/auth/me", authMiddleware, (req, res) => {
-  res.json({ user: (req as any).user });
+app.get("/auth/me", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  let planConfig = null;
+
+  try {
+    planConfig = await getPlanConfig(user?.plan);
+  } catch (err) {
+    console.error("Erro ao carregar planConfig no /auth/me:", err);
+  }
+
+  res.json({ user, planConfig });
 });
 
 app.get("/", (_req, res) => res.redirect("/painel"));
@@ -1522,7 +1996,13 @@ app.post("/api/kb/upload", authMiddleware, async (req, res) => {
     const session = sessionScope ? String(sessionScope) : null;
 
     if (fileBase64 && fileName) {
-      const buffer = Buffer.from(String(fileBase64), "base64");
+      let buffer: Buffer;
+      try {
+        buffer = decodeKbUploadBase64(String(fileBase64), String(fileName));
+      } catch (err: any) {
+        return res.status(400).json({ ok: false, error: err?.message || "Arquivo inválido" });
+      }
+
       const result = await ingestFileSource({
         userId: user.id,
         filename: String(fileName),
@@ -1736,13 +2216,6 @@ app.get("/api/crm/client/:chatId", authMiddleware, async (req, res) => {
 // =======================================
 // 🧠 Auxiliares
 // =======================================
-const genToken = () => crypto.randomBytes(20).toString("hex");
-
-async function findUserByToken(token: string): Promise<User | null> {
-  const db = getDB();
-  return db.get<User>(`SELECT * FROM users WHERE token = ?`, [token]);
-}
-
 function requireFields(res: Response, fields: Record<string, any>) {
   for (const key in fields) {
     if (!fields[key]) {
@@ -1766,17 +2239,19 @@ app.post("/auth/auto-login", async (req, res) => {
 
   const user = await findUserByToken(token);
   if (!user) return res.status(404).json({ error: "token inválido" });
+  if (isSessionExpired(user)) {
+    clearAuthCookie(res);
+    return res.status(401).json({ error: "Sessão expirada", redirect: "/login" });
+  }
 
-  const isProd = String(process.env.NODE_ENV || "").toLowerCase() === "production";
+  const session = await ensureFreshUserSession(user);
+  setAuthCookie(res, session.token);
 
-  res.cookie("token", user.token, {
-    httpOnly: true,
-    sameSite: "strict",
-    secure: isProd,
-    path: "/",
-    maxAge: 30 * 24 * 60 * 60 * 1000, // 30 dias
+  res.json({
+    ok: true,
+    token: session.token,
+    expiresAt: session.expiresAt,
   });
-  res.json({ ok: true });
 });
 
 app.get("/disparo", authMiddleware, (req, res) => {
@@ -1801,7 +2276,7 @@ app.get("/verify-email", async (req, res) => {
     // 🔥 BUSCAR TAMBÉM O TOKEN DO USUÁRIO
     const user = await db.get<any>(
       `
-      SELECT id, token, email_verify_expires
+      SELECT id, token, token_expires_at, email_verify_expires
       FROM users
       WHERE email_verify_token = ?
       `,
@@ -1831,13 +2306,8 @@ app.get("/verify-email", async (req, res) => {
       [user.id]
     );
 
-    // 🔥 AGORA O TOKEN EXISTE CORRETAMENTE
-    res.cookie("token", user.token, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-    });
+    const session = await ensureFreshUserSession(user);
+    setAuthCookie(res, session.token);
 
     return res.redirect("/painel");
 
@@ -2001,38 +2471,201 @@ app.post("/auth/resend-verify-email", authMiddleware, resendEmailLimiter, async 
 // 📣 API de DISPARO EM MASSA (CORRIGIDO)
 // ===================================================
 app.post(
+  "/api/disparo/validate-list",
+  authMiddleware,
+  disparoUserLimiter,
+  subscriptionGuard,
+  async (req: Request, res: Response) => {
+    const user = (req as any).user as User & { plan?: string };
+    const contactList = buildBroadcastContactsFromBody(req.body);
+
+    if (!contactList.length) {
+      return res.status(400).json({ error: "Nenhum numero valido informado." });
+    }
+
+    const planConfig = await getPlanConfig(user.plan);
+    const maxBroadcastNumbers = planConfig?.maxBroadcastNumbers ?? 50;
+    if (contactList.length > maxBroadcastNumbers) {
+      return res.status(400).json({
+        error: `Seu plano permite ate ${maxBroadcastNumbers} numero(s) por disparo.`,
+      });
+    }
+
+    const connected = await listConnectedSessions(user.id);
+    if (!connected.length) {
+      return res.status(400).json({ error: "Nenhuma sessao ativa para este usuario." });
+    }
+
+    const preferred = String(req.body?.session_name || req.body?.sessionName || "").trim();
+    const listValidation = await runListQualityValidation({
+      userId: user.id,
+      rawNumbers: buildRawNumbersFromBody(req.body),
+      preferredSession: preferred || null,
+      connectedSessions: connected,
+      unavailableWarning:
+        "Nao foi possivel validar a qualidade da lista com as sessoes conectadas no momento.",
+    });
+
+    if (!listValidation.validation) {
+      return res.status(409).json({
+        ok: false,
+        blocked: false,
+        error: "Nao foi possivel validar a lista com as sessoes conectadas no momento.",
+        warnings: uniqueWarnings(listValidation.warnings),
+      });
+    }
+
+    const warnings = [...listValidation.warnings];
+    if (
+      preferred &&
+      listValidation.sessionName &&
+      preferred !== listValidation.sessionName
+    ) {
+      warnings.push(
+        `A sessao ${preferred} nao estava disponivel para validar a lista. A checagem usou ${listValidation.sessionName}.`
+      );
+    }
+
+    const status = listValidation.validation.blocked ? 409 : 200;
+    return res.status(status).json({
+      ok: status === 200,
+      blocked: listValidation.validation.blocked,
+      error:
+        listValidation.validation.blockReason ||
+        (listValidation.validation.blocked
+          ? listValidation.validation.recommendation
+          : null),
+      warnings: uniqueWarnings(warnings),
+      session: listValidation.sessionName,
+      listQuality: listValidation.validation,
+    });
+  }
+);
+
+app.post(
+  "/api/disparo/check",
+  authMiddleware,
+  disparoUserLimiter,
+  subscriptionGuard,
+  async (req: Request, res: Response) => {
+    const user = (req as any).user as User & { plan?: string };
+    const contactList = buildBroadcastContactsFromBody(req.body);
+
+    if (!contactList.length) {
+      return res.status(400).json({ error: "Nenhum numero valido informado." });
+    }
+
+    const planConfig = await getPlanConfig(user.plan);
+    const maxBroadcastNumbers = planConfig?.maxBroadcastNumbers ?? 50;
+    if (contactList.length > maxBroadcastNumbers) {
+      return res.status(400).json({
+        error: `Seu plano permite ate ${maxBroadcastNumbers} numero(s) por disparo.`,
+      });
+    }
+
+    const db = getDB();
+    const connected = await listConnectedSessions(user.id);
+    if (!connected.length) {
+      return res.status(400).json({ error: "Nenhuma sessao ativa para este usuario." });
+    }
+
+    const preferred = String(req.body?.session_name || req.body?.sessionName || "").trim();
+    const candidates = buildSessionCandidates(preferred, connected);
+    const riskSession = candidates[0] || null;
+    const policyResult = await evaluateDispatchPolicy({
+      db,
+      userId: user.id,
+      contacts: contactList,
+      campaignKind: "broadcast",
+      preferredSession: riskSession,
+      confirmLargeBatch: req.body?.confirmLargeBatch === true,
+      plannedCount: contactList.length,
+    });
+
+    const listValidation = await runListQualityValidation({
+      userId: user.id,
+      rawNumbers: policyResult.allowedContacts.map((contact) => contact.number),
+      preferredSession: preferred || null,
+      connectedSessions: connected,
+      unavailableWarning:
+        "Nao foi possivel validar a qualidade da lista agora porque nenhuma sessao respondeu a checagem preventiva.",
+    });
+
+    const warnings = uniqueWarnings([
+      ...policyResult.warnings,
+      ...listValidation.warnings,
+    ]);
+    if (preferred && riskSession && preferred !== riskSession) {
+      warnings.push(
+        `A sessao ${preferred} nao estava conectada. A validacao foi estimada usando ${riskSession}.`
+      );
+    } else if (!preferred && riskSession) {
+      warnings.push(
+        `A validacao de aquecimento foi estimada usando a sessao ${riskSession}.`
+      );
+    }
+    if (
+      preferred &&
+      listValidation.sessionName &&
+      preferred !== listValidation.sessionName
+    ) {
+      warnings.push(
+        `A sessao ${preferred} nao estava disponivel para validar a lista. A checagem usou ${listValidation.sessionName}.`
+      );
+    }
+
+    const error =
+      listValidation.validation?.blockReason ||
+      (listValidation.validation?.blocked
+        ? listValidation.validation.recommendation
+        : null) ||
+      policyResult.blockReason ||
+      policyResult.confirmationMessage ||
+      null;
+    const status =
+      policyResult.blocked ||
+      policyResult.requiresConfirmation ||
+      listValidation.validation?.blocked
+        ? 409
+        : 200;
+
+    return res.status(status).json({
+      ok: status === 200,
+      blocked: Boolean(policyResult.blocked || listValidation.validation?.blocked),
+      requiresConfirmation: Boolean(policyResult.requiresConfirmation),
+      error,
+      warnings: uniqueWarnings(warnings),
+      skipped: policyResult.skippedContacts.length,
+      session: riskSession,
+      validationSession: listValidation.sessionName,
+      listQuality: listValidation.validation,
+    });
+  }
+);
+
+app.post(
   "/api/disparo",
   authMiddleware,
+  disparoUserLimiter,
   subscriptionGuard,
   async (req: Request, res: Response) => {
 
-    const { number, message, file, filename, contacts, session_name, sessionName } = req.body;
+    const {
+      number,
+      message,
+      file,
+      filename,
+      session_name,
+      sessionName,
+      confirmLargeBatch,
+    } = req.body;
     const user = (req as any).user as User & { plan?: string };
 
-    // rate limit mínimo
-    const now = Date.now();
-    const last = disparoRateLimit.get(user.id) || 0;
-    const delta = now - last;
-    if (delta < DISPARO_MIN_INTERVAL_MS) {
-      const waitMs = DISPARO_MIN_INTERVAL_MS - delta;
-      return res.status(429).json({ error: `Aguarde ${Math.ceil(waitMs / 1000)}s para novo disparo` });
-    }
-    disparoRateLimit.set(user.id, now);
-
-    const contactsArr: any[] = Array.isArray(contacts) ? contacts : [];
-    const hasPersonalized = contactsArr.length > 0;
-
-    if (!number && !hasPersonalized) {
-      return res.status(400).json({ error: "Número é obrigatório" });
+    if (!number && !Array.isArray(req.body?.contacts) && !Array.isArray(req.body?.numbers)) {
+      return res.status(400).json({ error: "Numero e obrigatorio" });
     }
 
-    const contactList: PersonalizedContact[] = hasPersonalized
-      ? buildContactsFromPayload(contactsArr)
-      : (() => {
-          const { ok, sanitized } = validatePhone(number);
-          if (!ok) return [];
-          return [{ number: sanitized, message }];
-        })();
+    const contactList: PersonalizedContact[] = buildBroadcastContactsFromBody(req.body);
 
     if (!contactList.length) {
       return res.status(400).json({ error: "Nenhum número válido" });
@@ -2053,16 +2686,13 @@ app.post(
       });
     }
 
-    let safeFile: SanitizedFile | null = null;
-    if (file) {
-      try {
-        safeFile = sanitizeIncomingFile({ dataUrl: file as string, filename });
-      } catch (err: any) {
-        return res.status(400).json({ error: err?.message || "Arquivo inválido" });
-      }
-    }
-
+    let dispatchMedia: PreparedMediaFile | null = null;
     try {
+      if (file) {
+        const safeFile = sanitizeIncomingFile({ dataUrl: file as string, filename });
+        dispatchMedia = prepareDispatchFileForSend(user.id, safeFile);
+      }
+
       const db = getDB();
       const connected = await listConnectedSessions(user.id);
       if (!connected.length) {
@@ -2071,8 +2701,83 @@ app.post(
 
       const preferred = (session_name || sessionName || "").trim();
       const candidates = buildSessionCandidates(preferred, connected);
+      const effectivePreferred = candidates[0] || null;
+      const campaignRef = `broadcast:${Date.now()}:${crypto.randomUUID()}`;
+      const policyResult = await evaluateDispatchPolicy({
+        db,
+        userId: user.id,
+        contacts: contactList,
+        campaignKind: "broadcast",
+        preferredSession: effectivePreferred,
+        confirmLargeBatch: confirmLargeBatch === true,
+        plannedCount: contactList.length,
+      });
+
+      await recordSkippedDispatchContacts(db, {
+        userId: user.id,
+        campaignKind: "broadcast",
+        campaignRef,
+        skips: policyResult.skippedContacts,
+      });
+
+      const policyWarnings = uniqueWarnings(policyResult.warnings);
+      if (policyResult.requiresConfirmation) {
+        return res.status(409).json({
+          error: policyResult.confirmationMessage || "Confirmação adicional necessária.",
+          warnings: policyWarnings,
+          skipped: policyResult.skippedContacts.length,
+          requiresConfirmation: true,
+          retryable: false,
+        });
+      }
+
+      if (policyResult.blocked) {
+        return res.status(409).json({
+          error: policyResult.blockReason || "Campanha bloqueada pela política de envio.",
+          warnings: policyWarnings,
+          skipped: policyResult.skippedContacts.length,
+          retryable: false,
+        });
+      }
+
+      const listValidation = await runListQualityValidation({
+        userId: user.id,
+        rawNumbers: policyResult.allowedContacts.map((contact) => contact.number),
+        preferredSession: preferred || null,
+        connectedSessions: connected,
+        unavailableWarning:
+          "Nao foi possivel validar a qualidade da lista agora porque nenhuma sessao respondeu a checagem preventiva.",
+      });
+      const validationWarnings = uniqueWarnings([
+        ...policyWarnings,
+        ...listValidation.warnings,
+      ]);
+      if (
+        preferred &&
+        listValidation.sessionName &&
+        preferred !== listValidation.sessionName
+      ) {
+        validationWarnings.push(
+          `A sessao ${preferred} nao estava disponivel para validar a lista. A checagem usou ${listValidation.sessionName}.`
+        );
+      }
+
+      if (listValidation.validation?.blocked) {
+        return res.status(409).json({
+          error:
+            listValidation.validation.blockReason ||
+            listValidation.validation.recommendation ||
+            "Campanha bloqueada por baixa qualidade da lista.",
+          warnings: uniqueWarnings(validationWarnings),
+          skipped: policyResult.skippedContacts.length,
+          retryable: false,
+          blocked: true,
+          listQuality: listValidation.validation,
+        });
+      }
 
       let lastError: any = null;
+      let lastWarnings = uniqueWarnings(validationWarnings);
       for (const shortName of candidates) {
         const full = `USER${user.id}_${shortName}`;
         const client = getClient(full);
@@ -2081,50 +2786,140 @@ app.post(
           continue;
         }
 
+        const sessionHealth = await evaluateDispatchSessionHealth({
+          db,
+          userId: user.id,
+          sessionName: shortName,
+        });
+        lastWarnings = uniqueWarnings([...lastWarnings, ...sessionHealth.warnings]);
+        if (sessionHealth.blocked) {
+          lastError = sessionHealth.reason;
+          continue;
+        }
+
+        const sessionRisk = await evaluateDispatchCampaignRisk({
+          db,
+          userId: user.id,
+          sessionName: shortName,
+          plannedCount: policyResult.allowedContacts.length,
+        });
+        lastWarnings = uniqueWarnings([...lastWarnings, ...sessionRisk.warnings]);
+        if (sessionRisk.blocked) {
+          lastError = sessionRisk.reason;
+          continue;
+        }
+
         let sent = 0;
         let errors = 0;
-        try {
-          for (const contact of contactList) {
-            const chatId = `${contact.number}@c.us`;
+        let processed = 0;
+        let consecutiveFailures = 0;
+        let campaignPauseReason: string | null = null;
+
+        for (const contact of policyResult.allowedContacts) {
+          try {
+            const chatId = await ensureChat(client, contact.number);
             const finalMessage = renderTemplate(contact.message ?? message ?? "", contact);
 
-            if (!safeFile) {
+            if (!dispatchMedia) {
               await withTimeout(client.sendText(chatId, finalMessage), WPP_TIMEOUT_MS, "sendText");
             } else {
               await withTimeout(
                 client.sendFile(
                   chatId,
-                  safeFile.dataUrl,
-                  safeFile.filename || filename || "arquivo",
-                  finalMessage // legenda opcional
+                  dispatchMedia.content,
+                  dispatchMedia.filename || filename || "arquivo",
+                  finalMessage
                 ),
                 WPP_TIMEOUT_MS,
                 "sendFile"
               );
             }
+
             sent += 1;
+            processed += 1;
+            consecutiveFailures = 0;
+            await recordDispatchContactEvent(
+              {
+                userId: user.id,
+                sessionName: shortName,
+                campaignKind: "broadcast",
+                campaignRef,
+                phone: contact.number,
+                status: "sent",
+              },
+              db
+            );
+          } catch (err: any) {
+            const classified = classifyDispatchError(err);
+            console.error(`⚠️ Erro no disparo pela sessão ${shortName}:`, err);
+            errors += 1;
+            processed += 1;
+            consecutiveFailures += 1;
+            lastError = classified.message;
+            await recordDispatchContactEvent(
+              {
+                userId: user.id,
+                sessionName: shortName,
+                campaignKind: "broadcast",
+                campaignRef,
+                phone: contact.number,
+                status: "error",
+                errorCode: classified.code,
+                errorMessage: classified.message,
+              },
+              db
+            );
+
+            const runtimePauseReason = getCampaignPauseReason({
+              sessionName: shortName,
+              processed,
+              failures: errors,
+              consecutiveFailures,
+            });
+            if (runtimePauseReason) {
+              campaignPauseReason = runtimePauseReason;
+              lastWarnings = uniqueWarnings([...lastWarnings, runtimePauseReason]);
+              break;
+            }
           }
-        } catch (err: any) {
-          console.error(`⚠️ Erro no disparo pela sessão ${shortName}:`, err);
-          errors += 1;
-          lastError = err?.message || err;
         }
 
-        // Se conseguimos enviar pelo menos uma, não tentamos outras para evitar duplicidade
+        if (campaignPauseReason && !sent) {
+          return res.status(409).json({
+            error: campaignPauseReason,
+            warnings: uniqueWarnings(lastWarnings),
+            skipped: policyResult.skippedContacts.length,
+            retryable: false,
+            paused: true,
+          });
+        }
+
         if (sent > 0) {
           await logAudit("broadcast_send", user.id, "session", shortName, {
             sent,
             errors,
-            contacts: contactList.length,
+            contacts: policyResult.allowedContacts.length,
             file: Boolean(file),
+            warnings: uniqueWarnings(lastWarnings),
+            paused: Boolean(campaignPauseReason),
           });
-          return res.json({ ok: true, session: shortName, sent, errors });
+          return res.json({
+            ok: true,
+            session: shortName,
+            sent,
+            errors,
+            skipped: policyResult.skippedContacts.length,
+            warnings: uniqueWarnings(lastWarnings),
+            paused: Boolean(campaignPauseReason),
+            stoppedReason: campaignPauseReason,
+          });
         }
       }
 
       return res.status(500).json({
         error: "Não foi possível enviar por nenhuma sessão conectada",
         detail: lastError || null,
+        warnings: uniqueWarnings(lastWarnings),
       });
 
     } catch (err) {
@@ -2132,9 +2927,46 @@ app.post(
       return res.status(500).json({
         error: "Erro ao enviar mensagem"
       });
+    } finally {
+      cleanupLocalMediaFile(dispatchMedia?.cleanupPath);
     }
   }
 );
+
+app.post("/api/disparo/log", authMiddleware, async (req: Request, res: Response) => {
+  const user = (req as any).user as User;
+  const totalNumbers = Number(req.body?.total_numbers || 0);
+  const successCount = Number(req.body?.success_count || 0);
+  const failCount = Number(req.body?.fail_count || 0);
+  const message = typeof req.body?.message === "string" ? req.body.message : "";
+  const status = typeof req.body?.status === "string" ? req.body.status : "completed";
+
+  if (![totalNumbers, successCount, failCount].every((value) => Number.isFinite(value) && value >= 0)) {
+    return res.status(400).json({ error: "Totais do histórico inválidos." });
+  }
+
+  const safeTotal = Math.max(totalNumbers, successCount + failCount);
+  const successRate = safeTotal ? Number(((successCount / safeTotal) * 100).toFixed(2)) : 0;
+
+  try {
+    await getDB().run(
+      `INSERT INTO disparo_history (
+        user_id,
+        total_numbers,
+        success_count,
+        fail_count,
+        success_rate,
+        message,
+        status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [user.id, safeTotal, successCount, failCount, successRate, message || null, status]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("⚠️ Erro ao registrar histórico de disparo:", err);
+    return res.status(500).json({ error: "Falha ao registrar histórico do disparo." });
+  }
+});
 
 // ===============================
 // 📅 API — AGENDAMENTOS
@@ -2200,6 +3032,82 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
 
   if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
 
+  const db = getDB();
+  const preferredSession = (session_name || sessionName || "").trim() || null;
+  const policyContacts = hasPersonalized
+    ? contactList
+    : normalized.map((entry) => ({
+        number: String(entry),
+        message,
+      }));
+  const policyResult = await evaluateDispatchPolicy({
+    db,
+    userId: user.id,
+    contacts: policyContacts,
+    campaignKind: "schedule",
+    preferredSession,
+    scheduledAt: sendAtMs,
+    plannedCount: totalCount,
+  });
+
+  if (policyResult.blocked) {
+    return res.status(409).json({
+      error: policyResult.blockReason || "Agendamento bloqueado pela política de envio.",
+      warnings: uniqueWarnings(policyResult.warnings),
+      skipped: policyResult.skippedContacts,
+    });
+  }
+
+  const filteredSchedulePayload = hasPersonalized
+    ? policyResult.allowedContacts
+    : policyResult.allowedContacts.map((contact) => contact.number);
+
+  if (!filteredSchedulePayload.length) {
+    return res.status(409).json({
+      error: "Nenhum contato elegível restou após aplicar as regras da campanha.",
+      warnings: uniqueWarnings(policyResult.warnings),
+      skipped: policyResult.skippedContacts,
+    });
+  }
+
+  const connectedSessions = await listConnectedSessions(user.id);
+  const scheduleNumbersForValidation = hasPersonalized
+    ? (filteredSchedulePayload as PersonalizedContact[]).map((contact) => contact.number)
+    : (filteredSchedulePayload as string[]);
+  const listValidation = await runListQualityValidation({
+    userId: user.id,
+    rawNumbers: scheduleNumbersForValidation,
+    preferredSession,
+    connectedSessions,
+    unavailableWarning:
+      "Nao foi possivel validar a qualidade da lista agora porque nenhuma sessao conectada estava disponivel. O sistema tentara validar novamente quando o agendamento executar.",
+  });
+  const scheduleWarnings = uniqueWarnings([
+    ...policyResult.warnings,
+    ...listValidation.warnings,
+  ]);
+  if (
+    preferredSession &&
+    listValidation.sessionName &&
+    preferredSession !== listValidation.sessionName
+  ) {
+    scheduleWarnings.push(
+      `A sessao ${preferredSession} nao estava disponivel para validar a lista. A checagem usou ${listValidation.sessionName}.`
+    );
+  }
+
+  if (listValidation.validation?.blocked) {
+    return res.status(409).json({
+      error:
+        listValidation.validation.blockReason ||
+        listValidation.validation.recommendation ||
+        "Agendamento bloqueado por baixa qualidade da lista.",
+      warnings: uniqueWarnings(scheduleWarnings),
+      skipped: policyResult.skippedContacts,
+      listQuality: listValidation.validation,
+    });
+  }
+
   let safeFile: SanitizedFile | null = null;
   let storedFilePath: string | null = null;
   let storedFilename: string | null = null;
@@ -2212,6 +3120,7 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
     try {
       storedFilePath = persistScheduleFile(user.id, safeFile);
       storedFilename = safeFile.filename;
+      releaseMediaPayload(safeFile);
     } catch (err: any) {
       console.error("⚠️ Erro ao salvar arquivo do agendamento:", err);
       return res.status(500).json({ error: "Falha ao salvar arquivo" });
@@ -2219,12 +3128,11 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
   }
 
   // Checar duplicado: mesmo user, mesma data, mesma lista
-  const db = getDB();
   const existingDup = await db.get<{ id: number }>(
     `SELECT id FROM schedules
      WHERE user_id = ? AND status = 'pending' AND send_at = ? AND numbers = ?
      LIMIT 1`,
-    [user.id, sendAtMs, JSON.stringify(normalized)]
+    [user.id, sendAtMs, JSON.stringify(filteredSchedulePayload)]
   );
   if (existingDup && req.body?.forceDuplicate !== true) {
     return res.status(409).json({
@@ -2234,15 +3142,28 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
     });
   }
 
-  const preferredSession = (session_name || sessionName || "").trim() || null;
-
   await db.run(
     `INSERT INTO schedules (user_id, numbers, message, file, filename, preferred_session, send_at, recurrence, recurrence_end)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [user.id, JSON.stringify(normalized), message, storedFilePath, storedFilename, preferredSession, sendAtMs, recurrence, recurrenceEndMs]
+    [
+      user.id,
+      JSON.stringify(filteredSchedulePayload),
+      message,
+      storedFilePath,
+      storedFilename,
+      preferredSession,
+      sendAtMs,
+      recurrence,
+      recurrenceEndMs,
+    ]
   );
 
-  res.json({ ok: true });
+  res.json({
+    ok: true,
+    warnings: uniqueWarnings(scheduleWarnings),
+    skipped: policyResult.skippedContacts,
+    listQuality: listValidation.validation,
+  });
 });
 
 // Editar agendamento pendente
@@ -2324,10 +3245,84 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
 
   if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
 
+  const preferredSession = (session_name || sessionName || "").trim() || null;
+  const policyContacts = hasPersonalized
+    ? contactList
+    : normalized.map((entry) => ({
+        number: String(entry),
+        message: message ?? existing.message ?? "",
+      }));
+  const policyResult = await evaluateDispatchPolicy({
+    db,
+    userId: user.id,
+    contacts: policyContacts,
+    campaignKind: "schedule",
+    preferredSession,
+    scheduledAt: sendAtMs,
+    plannedCount: totalCount,
+  });
+  const filteredSchedulePayload = hasPersonalized
+    ? policyResult.allowedContacts
+    : policyResult.allowedContacts.map((contact) => contact.number);
+
+  if (policyResult.blocked) {
+    return res.status(409).json({
+      error: policyResult.blockReason || "Agendamento bloqueado pela política de envio.",
+      warnings: uniqueWarnings(policyResult.warnings),
+      skipped: policyResult.skippedContacts,
+    });
+  }
+
+  if (!filteredSchedulePayload.length) {
+    return res.status(409).json({
+      error: "Nenhum contato elegível para esse agendamento.",
+      warnings: uniqueWarnings(policyResult.warnings),
+      skipped: policyResult.skippedContacts,
+    });
+  }
+
   const recurrenceRaw = (recurrence || existing.recurrence || "none") as string;
   const allowed = ["none", "daily", "weekly", "monthly"];
   const finalRecurrence = allowed.includes(recurrenceRaw) ? recurrenceRaw : "none";
   const finalRecurrenceEnd = recurrenceEndMs ?? existing.recurrence_end ?? null;
+
+  const connectedSessions = await listConnectedSessions(user.id);
+  const scheduleNumbersForValidation = hasPersonalized
+    ? (filteredSchedulePayload as PersonalizedContact[]).map((contact) => contact.number)
+    : (filteredSchedulePayload as string[]);
+  const listValidation = await runListQualityValidation({
+    userId: user.id,
+    rawNumbers: scheduleNumbersForValidation,
+    preferredSession,
+    connectedSessions,
+    unavailableWarning:
+      "Nao foi possivel validar a qualidade da lista agora porque nenhuma sessao conectada estava disponivel. O sistema tentara validar novamente quando o agendamento executar.",
+  });
+  const scheduleWarnings = uniqueWarnings([
+    ...policyResult.warnings,
+    ...listValidation.warnings,
+  ]);
+  if (
+    preferredSession &&
+    listValidation.sessionName &&
+    preferredSession !== listValidation.sessionName
+  ) {
+    scheduleWarnings.push(
+      `A sessao ${preferredSession} nao estava disponivel para validar a lista. A checagem usou ${listValidation.sessionName}.`
+    );
+  }
+
+  if (listValidation.validation?.blocked) {
+    return res.status(409).json({
+      error:
+        listValidation.validation.blockReason ||
+        listValidation.validation.recommendation ||
+        "Agendamento bloqueado por baixa qualidade da lista.",
+      warnings: uniqueWarnings(scheduleWarnings),
+      skipped: policyResult.skippedContacts,
+      listQuality: listValidation.validation,
+    });
+  }
 
   let safeFile: SanitizedFile | null = null;
   if (file) {
@@ -2343,7 +3338,7 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     `SELECT id FROM schedules
      WHERE user_id = ? AND status = 'pending' AND send_at = ? AND numbers = ? AND id <> ?
      LIMIT 1`,
-    [user.id, sendAtMs, JSON.stringify(normalized), id]
+    [user.id, sendAtMs, JSON.stringify(filteredSchedulePayload), id]
   );
   if (dup && req.body?.forceDuplicate !== true) {
     return res.status(409).json({
@@ -2361,6 +3356,7 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     try {
       finalFilePath = persistScheduleFile(user.id, safeFile);
       finalFilename = safeFile.filename;
+      releaseMediaPayload(safeFile);
       await deleteScheduleFileIfUnused(db, existingRow.file);
     } catch (err: any) {
       console.error("⚠️ Erro ao salvar arquivo do agendamento:", err);
@@ -2368,6 +3364,11 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     }
   } else if (keepExistingFile) {
     const ensured = await ensureScheduleFileOnDisk(db, existingRow);
+    if (existingRow.file && !ensured.file) {
+      return res.status(409).json({
+        error: "O arquivo atual deste agendamento não está mais disponível. Reenvie a mídia para salvar.",
+      });
+    }
     finalFilePath = ensured.storedPath;
     finalFilename = ensured.storedPath ? existingRow.filename : null;
   } else {
@@ -2383,18 +3384,18 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     finalFilename = filename;
   }
 
-  const preferredSession = (session_name || sessionName || existingRow.preferred_session || "").trim() || null;
+  const finalPreferredSession = preferredSession || existingRow.preferred_session || null;
 
   await db.run(
     `UPDATE schedules
      SET numbers = ?, message = ?, file = ?, filename = ?, preferred_session = ?, send_at = ?, recurrence = ?, recurrence_end = ?
      WHERE id = ? AND user_id = ?`,
     [
-      JSON.stringify(normalized),
+      JSON.stringify(filteredSchedulePayload),
       message,
       finalFilePath,
       finalFilename,
-      preferredSession,
+      finalPreferredSession,
       sendAtMs,
       finalRecurrence,
       finalRecurrenceEnd,
@@ -2403,7 +3404,12 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
     ]
   );
 
-  return res.json({ ok: true });
+  return res.json({
+    ok: true,
+    warnings: uniqueWarnings(scheduleWarnings),
+    skipped: policyResult.skippedContacts,
+    listQuality: listValidation.validation,
+  });
 });
 
 // Listar agendamentos do usuário
@@ -2562,211 +3568,636 @@ function calculateNextSendAt(current: number, recurrence: string, recurrenceEnd?
   return nextTs;
 }
 
+async function insertScheduleExecutionLog(
+  db: DBClient,
+  row: Pick<ScheduleRow, "id" | "user_id">,
+  successCount: number,
+  failureCount: number,
+  itemLogs: ScheduleItemLog[],
+  sentAt: number
+) {
+  const logInsert = await db.run(
+    `INSERT INTO schedule_logs (schedule_id, user_id, success_count, failure_count, sent_at, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [row.id, row.user_id, successCount, failureCount, sentAt, sentAt]
+  );
+
+  const logId = (logInsert as any)?.insertId;
+  if (!logId) return;
+
+  if (!itemLogs.length) return;
+
+  const valuesSql = itemLogs.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
+  const params = itemLogs.flatMap((item) => [
+    logId,
+    row.id,
+    row.user_id,
+    item.number,
+    item.status,
+    item.error || null,
+    item.sentAt,
+  ]);
+
+  await db.run(
+    `INSERT INTO schedule_log_items (log_id, schedule_id, user_id, number, status, error, sent_at)
+     VALUES ${valuesSql}`,
+    params
+  );
+}
+
+async function sendScheduleMediaUnavailableEmail(
+  db: DBClient,
+  row: Pick<ScheduleRow, "id" | "user_id" | "message" | "send_at" | "filename">,
+  failureReason: string,
+  notificationUser?: ScheduleNotificationUser | null
+) {
+  try {
+    const user =
+      notificationUser ||
+      await db.get<ScheduleNotificationUser>(
+        `SELECT name, email FROM users WHERE id = ?`,
+        [row.user_id]
+      );
+
+    if (!user?.email) return;
+
+    const html = `
+      <p>Olá ${user.name || ""},</p>
+      <p>O agendamento <b>#${row.id}</b> não foi enviado porque a mídia anexada não está mais disponível no servidor.</p>
+      <p><b>Motivo:</b> ${failureReason}</p>
+      <p><b>Arquivo:</b> ${row.filename || "arquivo não identificado"}</p>
+      <p><b>Data programada:</b> ${new Date(row.send_at).toLocaleString("pt-BR")}</p>
+      <p><b>Mensagem:</b> ${row.message ? row.message.substring(0, 120) : "(sem texto)"}${row.message && row.message.length > 120 ? "..." : ""}</p>
+      <p>Abra a tela de agendamentos, duplique ou recrie este envio e anexe o arquivo novamente.</p>
+    `;
+
+    await sendEmail(user.email, `Agendamento #${row.id} bloqueado por mídia indisponível`, html);
+  } catch (err: any) {
+    console.error("⚠️ Falha ao enviar notificação de mídia indisponível:", err?.message || err);
+  }
+}
+
+async function failScheduleDueToMissingMedia(
+  db: DBClient,
+  row: ScheduleRow,
+  contactsList: PersonalizedContact[],
+  failureReason: string,
+  notificationUser?: ScheduleNotificationUser | null
+) {
+  const processedAt = Date.now();
+  const itemLogs: ScheduleItemLog[] = contactsList.map((contact) => ({
+    number: contact.number,
+    status: "error",
+    error: failureReason,
+    sentAt: processedAt,
+  }));
+
+  await db.run(
+    `UPDATE schedules SET status = 'failed', processing_started_at = NULL WHERE id = ?`,
+    [row.id]
+  );
+  await insertScheduleExecutionLog(db, row, 0, contactsList.length, itemLogs, processedAt);
+  await sendScheduleMediaUnavailableEmail(db, row, failureReason, notificationUser);
+}
+
+async function requeueScheduleForLater(
+  db: DBClient,
+  rowId: number,
+  delayMs: number,
+  reason: string
+) {
+  const nextAttemptAt = Date.now() + delayMs;
+  await db.run(
+    `UPDATE schedules
+     SET status = 'pending', processing_started_at = NULL, send_at = ?
+     WHERE id = ?`,
+    [nextAttemptAt, rowId]
+  );
+  console.warn(
+    `⚠️ Agendamento ${rowId} adiado para ${new Date(nextAttemptAt).toISOString()}: ${reason}`
+  );
+}
+
 // ===============================
 // ⏱️ AGENDADOR — VERSÃO FINAL, ESTÁVEL E SEM "No LID for user"
 // ===============================
 const SCHEDULE_WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
 const SCHEDULE_PROCESSING_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos
+const SCHEDULE_COORDINATION_TTL_MS = 60 * 1000; // 1 minuto
+const SCHEDULE_HEARTBEAT_INTERVAL_MS = 20 * 1000; // 20 segundos
+const SCHEDULER_DISPATCH_LOCK_KEY = "scheduler_dispatcher";
+const SCHEDULER_WATCHDOG_LOCK_KEY = "scheduler_watchdog";
+const SCHEDULE_POLICY_RETRY_DELAY_MS = 60 * 60 * 1000; // 1 hora
 
 let schedulerRunning = false;
+let scheduleWatchdogRunning = false;
+
+function startLockHeartbeat(lockKey: string, leaseName: string) {
+  let leaseLost = false;
+
+  const timer = setInterval(async () => {
+    try {
+      const renewed = await renewWorkerLock(lockKey, WORKER_INSTANCE_ID, SCHEDULE_COORDINATION_TTL_MS);
+      if (!renewed && !leaseLost) {
+        leaseLost = true;
+        console.error(`❌ Lease perdido para ${leaseName}; esta instância deixará de coordenar novas execuções.`);
+      }
+    } catch (err) {
+      console.error(`❌ Erro ao renovar lease ${leaseName}:`, err);
+    }
+  }, SCHEDULE_HEARTBEAT_INTERVAL_MS);
+
+  timer.unref();
+
+  return {
+    stop() {
+      clearInterval(timer);
+    },
+  };
+}
+
 setInterval(async () => {
   if (shuttingDown) return;
   if (schedulerRunning) return;
   schedulerRunning = true;
   try {
+    const acquired = await acquireWorkerLock(
+      SCHEDULER_DISPATCH_LOCK_KEY,
+      WORKER_INSTANCE_ID,
+      SCHEDULE_COORDINATION_TTL_MS
+    );
+    if (!acquired) return;
+
+    const heartbeat = startLockHeartbeat(SCHEDULER_DISPATCH_LOCK_KEY, "agendador");
     const db = getDB();
     const now = Date.now();
 
-    const schedules = await db.all(
-      `SELECT * FROM schedules
-       WHERE status = 'pending' AND send_at <= ?`,
-      [now]
-    );
+    try {
+      const schedules = await db.all<ScheduleRow>(
+        `SELECT * FROM schedules
+         WHERE status = 'pending' AND send_at <= ?`,
+        [now]
+      );
 
-    for (const row of schedules) {
-      try {
-        // 🔒 tentativa de lock otimista: só um worker muda status para "processing"
-        const claimedAt = Date.now();
-        const claimed = await db.run(
-          `UPDATE schedules
-           SET status = 'processing', processing_started_at = ?
-           WHERE id = ? AND status = 'pending'`,
-          [claimedAt, row.id]
-        );
-        if (!claimed.affectedRows) continue; // já foi pego por outro worker
+      const schedulerUserIds = Array.from(
+        new Set(schedules.map((row) => row.user_id).filter((id) => Number.isFinite(id)))
+      );
+      const connectedSessionsByUser = await loadConnectedSessionsByUser(db, schedulerUserIds);
+      const notificationUsersById = await loadScheduleNotificationUsers(db, schedulerUserIds);
 
-        const rawNumbers = JSON.parse(row.numbers || "[]");
-        const contactsList: PersonalizedContact[] = buildContactsFromStored(rawNumbers, row.message);
-        const userId = row.user_id;
-        let successCount = 0;
-        let failureCount = 0;
-        let itemLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
+      for (const row of schedules) {
+        try {
+          // 🔒 tentativa de lock otimista: só um worker muda status para "processing"
+          const claimedAt = Date.now();
+          const claimed = await db.run(
+            `UPDATE schedules
+             SET status = 'processing', processing_started_at = ?
+             WHERE id = ? AND status = 'pending'`,
+            [claimedAt, row.id]
+          );
+          if (!claimed.affectedRows) continue; // já foi pego por outro worker
 
-        // 🔎 Buscar sessões conectadas (com preferência do agendamento)
-        const connectedSessions = await listConnectedSessions(userId);
-        if (!connectedSessions.length) {
-          console.warn("⚠️ Nenhuma sessão conectada para user:", userId);
-          continue;
-        }
-        const preferredSession = (row as any).preferred_session as string | null;
-        const sessionCandidates = buildSessionCandidates(preferredSession, connectedSessions);
+          const campaignRef = `schedule:${row.id}:${claimedAt}`;
+          const rawNumbers = JSON.parse(row.numbers || "[]");
+          const contactsList: PersonalizedContact[] = buildContactsFromStored(rawNumbers, row.message);
+          const userId = row.user_id;
+          const notificationUser = notificationUsersById.get(userId) || null;
+          let successCount = 0;
+          let failureCount = 0;
+          let itemLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
+          const preferredSession = (row as any).preferred_session as string | null;
 
-        let safeRowFile: SanitizedFile | null = null;
-        let storedFilePath: string | null = null;
-        if (row.file && row.filename) {
-          const ensured = await ensureScheduleFileOnDisk(db, row as ScheduleRow);
-          safeRowFile = ensured.file;
-          storedFilePath = ensured.storedPath;
-        }
+          // 🔎 Buscar sessões conectadas (com preferência do agendamento)
+          const connectedSessions = connectedSessionsByUser.get(userId) || [];
+          if (!connectedSessions.length) {
+            console.warn("⚠️ Nenhuma sessão conectada para user:", userId);
+            await requeueScheduleForLater(
+              db,
+              row.id,
+              SCHEDULE_POLICY_RETRY_DELAY_MS,
+              "Nenhuma sessão conectada disponível para este agendamento."
+            );
+            continue;
+          }
+          const sessionCandidates = buildSessionCandidates(preferredSession, connectedSessions);
 
-        let sessionUsed: string | null = null;
-        let lastSendError: any = null;
+          let safeRowFile: PreparedMediaFile | null = null;
+          let storedFilePath: string | null = null;
+          if (row.file) {
+            const ensured = await ensureScheduleFileOnDisk(db, row as ScheduleRow);
+            safeRowFile = ensured.file;
+            storedFilePath = ensured.storedPath;
+          }
 
-        for (const shortName of sessionCandidates) {
-          const client = getClient(`USER${userId}_${shortName}`);
-          if (!client) continue;
+          if (row.file && !safeRowFile) {
+            const failureReason =
+              "A mídia anexada a este agendamento não está mais disponível no storage configurado. Reenvie o arquivo antes de tentar novamente.";
+            console.error(`❌ Agendamento ${row.id} bloqueado: ${failureReason}`);
+            await failScheduleDueToMissingMedia(
+              db,
+              row as ScheduleRow,
+              contactsList,
+              failureReason,
+              notificationUser
+            );
+            continue;
+          }
 
-          let tempSuccess = 0;
-          let tempFailure = 0;
-          const tempLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
+          const policyResult = await evaluateDispatchPolicy({
+            db,
+            userId,
+            contacts: contactsList,
+            campaignKind: "schedule",
+            preferredSession,
+            scheduledAt: row.send_at,
+            plannedCount: contactsList.length,
+          });
+          await recordSkippedDispatchContacts(db, {
+            userId,
+            campaignKind: "schedule",
+            campaignRef,
+            skips: policyResult.skippedContacts,
+          });
 
-          for (const contact of contactsList) {
-            try {
-              // ✅ valida número (SEM @c.us)
-              const target = await ensureChat(client, contact.number);
-              const finalMessage = renderTemplate(contact.message ?? row.message ?? "", contact);
+          const policyWarnings = uniqueWarnings(policyResult.warnings);
+          const shouldRetryPolicyBlock = isRetryableDispatchPolicyBlock(
+            policyResult.blockReason || "",
+            policyResult.skippedContacts.map((skip) => skip.code)
+          );
 
-              if (safeRowFile) {
-                // 📎 MÍDIA
-                await withTimeout(
-                  client.sendFile(
-                    target,
-                    safeRowFile.dataUrl,
-                    safeRowFile.filename,
-                    finalMessage || ""
-                  ),
-                  WPP_TIMEOUT_MS,
-                  "sendFile"
+          if (policyResult.blocked && shouldRetryPolicyBlock) {
+            await requeueScheduleForLater(
+              db,
+              row.id,
+              SCHEDULE_POLICY_RETRY_DELAY_MS,
+              policyResult.blockReason || "Agendamento pausado pela política de envio."
+            );
+            continue;
+          }
+
+          for (const skippedContact of policyResult.skippedContacts) {
+            failureCount += 1;
+            itemLogs.push({
+              number: skippedContact.number,
+              status: "error",
+              error: skippedContact.reason,
+              sentAt: Date.now(),
+            });
+          }
+
+          const contactsToSend = policyResult.allowedContacts as PersonalizedContact[];
+          const listValidation = await runListQualityValidation({
+            userId,
+            rawNumbers: contactsToSend.map((contact) => contact.number),
+            preferredSession,
+            connectedSessions,
+            unavailableWarning:
+              "Nao foi possivel revalidar a qualidade da lista deste agendamento antes do envio.",
+          });
+          let scheduleWarnings = uniqueWarnings([
+            ...policyWarnings,
+            ...listValidation.warnings,
+          ]);
+          if (
+            preferredSession &&
+            listValidation.sessionName &&
+            preferredSession !== listValidation.sessionName
+          ) {
+            scheduleWarnings.push(
+              `A sessao ${preferredSession} nao estava disponivel para validar a lista. A checagem usou ${listValidation.sessionName}.`
+            );
+          }
+
+          if (listValidation.validation?.blocked) {
+            const failureReason =
+              listValidation.validation.blockReason ||
+              listValidation.validation.recommendation ||
+              "Agendamento bloqueado por baixa qualidade da lista.";
+            const processedAt = Date.now();
+            const failedLogs = contactsToSend.map((contact) => ({
+              number: contact.number,
+              status: "error" as const,
+              error: failureReason,
+              sentAt: processedAt,
+            }));
+
+            await db.run(
+              `UPDATE schedules SET status = 'failed', processing_started_at = NULL WHERE id = ?`,
+              [row.id]
+            );
+            await insertScheduleExecutionLog(
+              db,
+              row as ScheduleRow,
+              0,
+              itemLogs.length + failedLogs.length,
+              [...itemLogs, ...failedLogs],
+              processedAt
+            );
+            console.warn(`⚠️ Agendamento ${row.id} bloqueado por baixa qualidade da lista: ${failureReason}`);
+            continue;
+          }
+
+          let sessionUsed: string | null = null;
+          let lastSendError: any = policyResult.blocked
+            ? policyResult.blockReason || "Nenhum contato elegível para este agendamento."
+            : null;
+          let nextContactIndex = 0;
+          let consecutiveFailures = 0;
+          let campaignPauseReason: string | null = null;
+          scheduleWarnings = uniqueWarnings(scheduleWarnings);
+
+          for (const shortName of sessionCandidates) {
+            const sessionThrottleKey = `USER${userId}_${shortName}`;
+            const client = getClient(sessionThrottleKey);
+            if (!client) continue;
+
+            const sessionHealth = await evaluateDispatchSessionHealth({
+              db,
+              userId,
+              sessionName: shortName,
+            });
+            scheduleWarnings = uniqueWarnings([...scheduleWarnings, ...sessionHealth.warnings]);
+            if (sessionHealth.blocked) {
+              lastSendError = sessionHealth.reason;
+              continue;
+            }
+
+            const sessionRisk = await evaluateDispatchCampaignRisk({
+              db,
+              userId,
+              sessionName: shortName,
+              plannedCount: contactsToSend.length - nextContactIndex,
+              scheduledAt: row.send_at,
+            });
+            scheduleWarnings = uniqueWarnings([...scheduleWarnings, ...sessionRisk.warnings]);
+            if (sessionRisk.blocked) {
+              lastSendError = sessionRisk.reason;
+              continue;
+            }
+
+            let sessionRateLimited = false;
+
+            for (
+              let contactIndex = nextContactIndex;
+              contactIndex < contactsToSend.length;
+              contactIndex += 1
+            ) {
+              const contact = contactsToSend[contactIndex];
+              try {
+                assertSessionCanSend(sessionThrottleKey);
+
+                // ✅ valida número (SEM @c.us)
+                const target = await ensureChat(client, contact.number);
+                const finalMessage = renderTemplate(contact.message ?? row.message ?? "", contact);
+
+                if (safeRowFile) {
+                  // 📎 MÍDIA
+                  await withTimeout(
+                    client.sendFile(
+                      target,
+                      safeRowFile.content,
+                      safeRowFile.filename,
+                      finalMessage || ""
+                    ),
+                    WPP_TIMEOUT_MS,
+                    "sendFile"
+                  );
+                } else if (finalMessage) {
+                  // 💬 TEXTO — MÉTODO CORRETO
+                  await withTimeout(client.sendText(target, finalMessage), WPP_TIMEOUT_MS, "sendText");
+                } else {
+                  throw new Error("Mensagem vazia e mídia inválida");
+                }
+                sessionUsed = sessionUsed || shortName;
+                successCount += 1;
+                consecutiveFailures = 0;
+                nextContactIndex = contactIndex + 1;
+                itemLogs.push({ number: contact.number, status: "sent", sentAt: Date.now() });
+                await recordDispatchContactEvent(
+                  {
+                    userId,
+                    sessionName: shortName,
+                    campaignKind: "schedule",
+                    campaignRef,
+                    phone: contact.number,
+                    status: "sent",
+                  },
+                  db
                 );
-              } else if (finalMessage) {
-                // 💬 TEXTO — MÉTODO CORRETO
-                await withTimeout(client.sendText(target, finalMessage), WPP_TIMEOUT_MS, "sendText");
-              } else {
-                throw new Error("Mensagem vazia e mídia inválida");
+
+                recordSessionSend(sessionThrottleKey);
+
+                if (nextContactIndex < contactsToSend.length) {
+                  await sleep(getHumanDelay(sessionThrottleKey));
+                }
+
+              } catch (err: any) {
+                if (err instanceof SessionRateLimitError) {
+                  sessionRateLimited = true;
+                  lastSendError = err.message;
+                  console.warn(
+                    "⚠️ Limite conservador de envio atingido na sessão:",
+                    sessionThrottleKey,
+                    err.message
+                  );
+                  break;
+                }
+
+                const classified = classifyDispatchError(err);
+                console.error(
+                  "⚠️ Erro envio agendado (número):",
+                  contact.number,
+                  err?.message || err
+                );
+                failureCount += 1;
+                consecutiveFailures += 1;
+                nextContactIndex = contactIndex + 1;
+                itemLogs.push({
+                  number: contact.number,
+                  status: "error",
+                  error: classified.message,
+                  sentAt: Date.now(),
+                });
+                lastSendError = classified.message;
+                await recordDispatchContactEvent(
+                  {
+                    userId,
+                    sessionName: shortName,
+                    campaignKind: "schedule",
+                    campaignRef,
+                    phone: contact.number,
+                    status: "error",
+                    errorCode: classified.code,
+                    errorMessage: classified.message,
+                  },
+                  db
+                );
+
+                const runtimePauseReason = getCampaignPauseReason({
+                  sessionName: shortName,
+                  processed: successCount + failureCount,
+                  failures: failureCount,
+                  consecutiveFailures,
+                });
+                if (runtimePauseReason) {
+                  campaignPauseReason = runtimePauseReason;
+                  lastSendError = runtimePauseReason;
+                  scheduleWarnings = uniqueWarnings([...scheduleWarnings, runtimePauseReason]);
+                  break;
+                }
               }
-              tempSuccess += 1;
-              tempLogs.push({ number: contact.number, status: "sent", sentAt: Date.now() });
+            }
 
-              // ⏳ delay anti-ban
-              await new Promise(r => setTimeout(r, 1200));
+            if (campaignPauseReason) {
+              break;
+            }
 
-            } catch (err: any) {
-              console.error(
-                "⚠️ Erro envio agendado (número):",
-                contact.number,
-                err?.message || err
+            if (nextContactIndex >= contactsToSend.length) {
+              break;
+            }
+
+            if (sessionRateLimited) continue;
+          }
+
+          const retryableNoProgress =
+            nextContactIndex === 0 &&
+            isRetryableDispatchPolicyBlock(
+              String(campaignPauseReason || lastSendError || "")
+            );
+
+          if (retryableNoProgress) {
+            await requeueScheduleForLater(
+              db,
+              row.id,
+              SCHEDULE_POLICY_RETRY_DELAY_MS,
+              String(lastSendError || "Agendamento pausado temporariamente pelas regras de envio.")
+            );
+            continue;
+          }
+
+          if (nextContactIndex < contactsToSend.length) {
+            const remainingError = String(
+              campaignPauseReason ||
+              lastSendError ||
+              "Nenhuma sessão disponível para concluir o envio"
+            );
+
+            for (
+              let contactIndex = nextContactIndex;
+              contactIndex < contactsToSend.length;
+              contactIndex += 1
+            ) {
+              const contact = contactsToSend[contactIndex];
+              failureCount += 1;
+              itemLogs.push({
+                number: contact.number,
+                status: "error",
+                error: remainingError,
+                sentAt: Date.now(),
+              });
+              await recordDispatchContactEvent(
+                {
+                  userId,
+                  sessionName: sessionUsed,
+                  campaignKind: "schedule",
+                  campaignRef,
+                  phone: contact.number,
+                  status: "skipped",
+                  errorCode: campaignPauseReason ? "campaign_paused" : "no_session",
+                  errorMessage: remainingError,
+                },
+                db
               );
-              tempFailure += 1;
-              tempLogs.push({ number: contact.number, status: "error", error: String(err?.message || err), sentAt: Date.now() });
-              lastSendError = err?.message || err;
             }
           }
 
-          if (tempSuccess > 0) {
-            sessionUsed = shortName;
-            successCount = tempSuccess;
-            failureCount = tempFailure;
-            itemLogs = tempLogs;
-            break;
+          if (!sessionUsed && itemLogs.length) {
+            sessionUsed = preferredSession || sessionCandidates[0] || "__processed__";
           }
-        }
 
-        if (!sessionUsed) {
-          console.warn("⚠️ Nenhuma sessão conseguiu enviar o agendamento:", row.id, sessionCandidates);
+          if (!sessionUsed) {
+            console.warn("⚠️ Nenhuma sessão conseguiu enviar o agendamento:", row.id, sessionCandidates);
+            await requeueScheduleForLater(
+              db,
+              row.id,
+              SCHEDULE_POLICY_RETRY_DELAY_MS,
+              String(lastSendError || "Nenhuma sessão conseguiu concluir o envio do agendamento.")
+            );
+            continue;
+          }
+
+          // ✅ MARCAR COMO ENVIADO
           await db.run(
-            `UPDATE schedules SET status = 'pending', processing_started_at = NULL WHERE id = ?`,
+            `UPDATE schedules SET status = 'sent', processing_started_at = NULL WHERE id = ?`,
             [row.id]
           );
-          continue;
-        }
 
-        // ✅ MARCAR COMO ENVIADO
-        await db.run(
-          `UPDATE schedules SET status = 'sent', processing_started_at = NULL WHERE id = ?`,
-          [row.id]
-        );
+          const recurrence = (row as any).recurrence || "none";
+          const recurrenceEnd = (row as any).recurrence_end || null;
+          const nextSendAt = calculateNextSendAt(row.send_at, recurrence, recurrenceEnd);
 
-        const recurrence = (row as any).recurrence || "none";
-        const recurrenceEnd = (row as any).recurrence_end || null;
-        const nextSendAt = calculateNextSendAt(row.send_at, recurrence, recurrenceEnd);
+          // 📝 Registrar log de execução
+          const sentAt = Date.now();
+          await insertScheduleExecutionLog(db, row as ScheduleRow, successCount, failureCount, itemLogs, sentAt);
 
-        // 📝 Registrar log de execução
-        const sentAt = Date.now();
-        const logInsert = await db.run(
-          `INSERT INTO schedule_logs (schedule_id, user_id, success_count, failure_count, sent_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [row.id, userId, successCount, failureCount, sentAt, sentAt]
-        );
-        const logId = (logInsert as any)?.insertId;
-        if (logId) {
-          for (const item of itemLogs) {
+          // 📧 Notificação por e-mail (best-effort)
+          try {
+            const user = notificationUser;
+
+            if (user?.email) {
+              const subject = `Agendamento #${row.id} concluído`;
+              const successLine = `<li>Sucesso: <b>${successCount}</b></li>`;
+              const failureLine = `<li>Falhas: <b>${failureCount}</b></li>`;
+              const nextLine = nextSendAt
+                ? `<p>Próximo envio agendado para ${new Date(nextSendAt).toLocaleString("pt-BR")}</p>`
+                : "";
+              const html = `
+                <p>Olá ${user.name || ""},</p>
+                <p>Seu agendamento #${row.id} foi concluído em ${new Date(sentAt).toLocaleString("pt-BR")}.</p>
+                <ul>${successLine}${failureLine}</ul>
+                ${nextLine}
+                <p>Mensagem: ${row.message ? row.message.substring(0, 120) : "(sem texto)"}${row.message && row.message.length > 120 ? "..." : ""}</p>
+              `;
+
+              await sendEmail(user.email, subject, html);
+            }
+          } catch (err: any) {
+            console.error("⚠️ Falha ao enviar notificação de agendamento:", err?.message || err);
+          }
+
+          if (nextSendAt) {
+            const nextFilePath = storedFilePath ?? null;
+            const nextFilename = safeRowFile?.filename ?? row.filename ?? null;
             await db.run(
-              `INSERT INTO schedule_log_items (log_id, schedule_id, user_id, number, status, error, sent_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [logId, row.id, userId, item.number, item.status, item.error || null, item.sentAt]
+              `INSERT INTO schedules (user_id, numbers, message, file, filename, preferred_session, send_at, recurrence, recurrence_end)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [userId, row.numbers, row.message, nextFilePath, nextFilename, preferredSession ?? null, nextSendAt, recurrence, recurrenceEnd]
             );
           }
-        }
 
-        // 📧 Notificação por e-mail (best-effort)
-        try {
-          const user = await db.get<{ name: string; email: string }>(
-            `SELECT name, email FROM users WHERE id = ?`,
-            [userId]
-          );
-
-          if (user?.email) {
-            const subject = `Agendamento #${row.id} concluído`;
-            const successLine = `<li>Sucesso: <b>${successCount}</b></li>`;
-            const failureLine = `<li>Falhas: <b>${failureCount}</b></li>`;
-            const nextLine = nextSendAt
-              ? `<p>Próximo envio agendado para ${new Date(nextSendAt).toLocaleString("pt-BR")}</p>`
-              : "";
-            const html = `
-              <p>Olá ${user.name || ""},</p>
-              <p>Seu agendamento #${row.id} foi concluído em ${new Date(sentAt).toLocaleString("pt-BR")}.</p>
-              <ul>${successLine}${failureLine}</ul>
-              ${nextLine}
-              <p>Mensagem: ${row.message ? row.message.substring(0, 120) : "(sem texto)"}${row.message && row.message.length > 120 ? "..." : ""}</p>
-            `;
-
-            await sendEmail(user.email, subject, html);
+          if (scheduleWarnings.length) {
+            console.warn("⚠️ Alertas de política no agendamento:", row.id, scheduleWarnings);
           }
-        } catch (err: any) {
-          console.error("⚠️ Falha ao enviar notificação de agendamento:", err?.message || err);
+          console.log("✅ Agendamento enviado:", row.id);
+
+        } catch (err) {
+          console.error("❌ Erro geral no agendador:", err);
+          // devolve para pending para tentar novamente depois
+          try {
+            await getDB().run(
+              `UPDATE schedules SET status = 'pending', processing_started_at = NULL WHERE id = ? AND status = 'processing'`,
+              [row.id]
+            );
+          } catch { }
         }
+      }
 
-        if (nextSendAt) {
-          const nextFilePath = storedFilePath ?? null;
-          const nextFilename = safeRowFile?.filename ?? row.filename ?? null;
-          await db.run(
-            `INSERT INTO schedules (user_id, numbers, message, file, filename, preferred_session, send_at, recurrence, recurrence_end)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [userId, row.numbers, row.message, nextFilePath, nextFilename, preferredSession ?? null, nextSendAt, recurrence, recurrenceEnd]
-          );
-        }
-
-        console.log("✅ Agendamento enviado:", row.id);
-
+    } finally {
+      heartbeat.stop();
+      try {
+        await releaseWorkerLock(SCHEDULER_DISPATCH_LOCK_KEY, WORKER_INSTANCE_ID);
       } catch (err) {
-        console.error("❌ Erro geral no agendador:", err);
-        // devolve para pending para tentar novamente depois
-        try {
-          await getDB().run(
-            `UPDATE schedules SET status = 'pending', processing_started_at = NULL WHERE id = ? AND status = 'processing'`,
-            [row.id]
-          );
-        } catch { }
+        console.error("❌ Erro ao liberar lease do agendador:", err);
       }
     }
   } catch (err) {
@@ -2779,22 +4210,44 @@ setInterval(async () => {
 // 🛡️ Watchdog para destravar agendamentos travados em "processing"
 setInterval(async () => {
   if (shuttingDown) return;
+  if (scheduleWatchdogRunning) return;
+
+  scheduleWatchdogRunning = true;
   try {
-    const db = getDB();
-    const timeoutThreshold = Date.now() - SCHEDULE_PROCESSING_TIMEOUT_MS;
-
-    const reset = await db.run(
-      `UPDATE schedules
-       SET status = 'pending', processing_started_at = NULL
-       WHERE status = 'processing' AND (processing_started_at IS NULL OR processing_started_at <= ?)`,
-      [timeoutThreshold]
+    const acquired = await acquireWorkerLock(
+      SCHEDULER_WATCHDOG_LOCK_KEY,
+      WORKER_INSTANCE_ID,
+      SCHEDULE_COORDINATION_TTL_MS
     );
+    if (!acquired) return;
 
-    if (reset.affectedRows) {
-      console.warn(`🔁 Watchdog: ${reset.affectedRows} agendamento(s) reaberto(s) para pending`);
+    const heartbeat = startLockHeartbeat(SCHEDULER_WATCHDOG_LOCK_KEY, "watchdog de agendamentos");
+    try {
+      const db = getDB();
+      const timeoutThreshold = Date.now() - SCHEDULE_PROCESSING_TIMEOUT_MS;
+
+      const reset = await db.run(
+        `UPDATE schedules
+         SET status = 'pending', processing_started_at = NULL
+         WHERE status = 'processing' AND (processing_started_at IS NULL OR processing_started_at <= ?)`,
+        [timeoutThreshold]
+      );
+
+      if (reset.affectedRows) {
+        console.warn(`🔁 Watchdog: ${reset.affectedRows} agendamento(s) reaberto(s) para pending`);
+      }
+    } finally {
+      heartbeat.stop();
+      try {
+        await releaseWorkerLock(SCHEDULER_WATCHDOG_LOCK_KEY, WORKER_INSTANCE_ID);
+      } catch (err) {
+        console.error("❌ Erro ao liberar lease do watchdog:", err);
+      }
     }
   } catch (err) {
     console.error("❌ Erro no watchdog de agendamentos:", err);
+  } finally {
+    scheduleWatchdogRunning = false;
   }
 }, SCHEDULE_WATCHDOG_INTERVAL_MS);
 
@@ -3373,7 +4826,12 @@ app.post("/api/fallback-settings", authMiddleware, async (req, res) => {
 
     const payload: FallbackSettings = {
       enableFallback: toBool(req.body?.enableFallback, current.enableFallback),
-      fallbackMessage: String(req.body?.fallbackMessage ?? current.fallbackMessage),
+      fallbackMessage:
+        req.body?.fallbackMessage === undefined
+          ? current.fallbackMessage
+          : String(req.body?.fallbackMessage ?? ""),
+      sendTransferMessage: toBool(req.body?.sendTransferMessage, current.sendTransferMessage),
+      internalNoteOnly: toBool(req.body?.internalNoteOnly, current.internalNoteOnly),
       fallbackSensitivity,
       maxRepetitions: toNumber(req.body?.maxRepetitions, current.maxRepetitions) ?? current.maxRepetitions,
       maxFrustration: toNumber(req.body?.maxFrustration, current.maxFrustration) ?? current.maxFrustration,
@@ -3396,6 +4854,10 @@ app.post("/api/fallback-settings", authMiddleware, async (req, res) => {
           ? current.fallbackCooldownMinutes
           : toNumber(req.body?.fallbackCooldownMinutes, current.fallbackCooldownMinutes),
     };
+
+    if (payload.internalNoteOnly) {
+      payload.sendTransferMessage = false;
+    }
 
     const saved = await saveFallbackSettings(user.id, sessionName, payload);
     resetFallbackCache(user.id, sessionName); // garante recarga futura caso outro processo esteja usando
@@ -3547,23 +5009,24 @@ app.post("/register", registerLimiter, async (req, res) => {
     }
 
     const hash = await bcrypt.hash(password, 10);
-    const token = genToken();
+    const session = createSessionToken(now);
 
     const userResult = await db.run(
       `INSERT INTO users (
-        name, email, email_normalized, password, prompt, token,
+        name, email, email_normalized, password, prompt, token, token_expires_at,
         plan, subscription_status, plan_expires_at, trial_started_at,
         email_verified, email_verify_token, email_verify_expires,
         signup_device_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         name,
         email,
         normalizedEmail,
         hash,
         prompt || "",
-        token,
+        session.token,
+        session.expiresAt,
         "free",
         "trial",
         now + trialDays * 24 * 60 * 60 * 1000,
@@ -3657,16 +5120,10 @@ app.post("/auth/login", loginLimiter, async (req, res) => {
   }
 
   // 🔐 Rotaciona o token a cada login para invalidar vazamentos antigos
-  const newToken = genToken();
-  await getDB().run(`UPDATE users SET token = ? WHERE id = ?`, [newToken, user.id]);
+  const session = await issueUserSession(user.id);
 
   // ✅ SEMPRE cria o cookie quando login estiver correto
-  res.cookie("token", newToken, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production", // Railway => true
-    path: "/",
-  });
+  setAuthCookie(res, session.token);
 
   const emailVerified = Number(user.email_verified) === 1;
 
@@ -3687,21 +5144,14 @@ app.post("/auth/login", loginLimiter, async (req, res) => {
 app.post("/auth/logout", authMiddleware, async (req, res) => {
   try {
     const user = (req as any).user;
-    const db = getDB();
-    const rotated = genToken();
     // invalida imediatamente o token atual
-    await db.run(`UPDATE users SET token = ? WHERE id = ?`, [rotated, user.id]);
+    await invalidateUserSession(user.id);
   } catch (err) {
     console.error("Erro ao rotacionar token no logout:", err);
     // continua para limpar cookie mesmo assim
   }
 
-  res.clearCookie("token", {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
-    path: "/", // 🔥 OBRIGATÓRIO
-  });
+  clearAuthCookie(res);
 
   return res.json({ ok: true });
 });
@@ -3712,20 +5162,12 @@ app.post("/auth/logout", authMiddleware, async (req, res) => {
 app.post("/auth/rotate-token", authMiddleware, async (req, res) => {
   try {
     const user = (req as any).user;
-    const db = getDB();
-    const newToken = genToken();
+    const session = await issueUserSession(user.id);
 
-    await db.run(`UPDATE users SET token = ? WHERE id = ?`, [newToken, user.id]);
-
-    res.cookie("token", newToken, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-    });
+    setAuthCookie(res, session.token);
 
     // retorna para uso em integrações se o cliente quiser
-    return res.json({ ok: true, token: newToken });
+    return res.json({ ok: true, token: session.token, expiresAt: session.expiresAt });
   } catch (err) {
     console.error("Erro ao rotacionar token:", err);
     return res.status(500).json({ ok: false, error: "Erro interno ao rotacionar token" });
@@ -3792,7 +5234,9 @@ app.post(
       [user.id, sessionName]
     );
 
-    const result = await createWppSession(user.id, sessionName);
+    const result = await createWppSession(user.id, sessionName, {
+      source: "manual_create",
+    });
 
     io.to(`user:${user.id}`).emit("sessions:changed", { userId: user.id });
 
@@ -3850,9 +5294,31 @@ app.post("/sessions/restart", async (req, res) => {
 
   const user = await findUserByToken(token);
   if (!user) return res.status(404).json({ error: "token inválido" });
+  if (isSessionExpired(user)) {
+    return res.status(401).json({ error: "Sessão expirada" });
+  }
+
+  const db = getDB();
+  const session = await db.get<{ status: string }>(
+    `SELECT status FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+    [user.id, sessionName]
+  );
+
+  if (!session) {
+    return res.status(404).json({ error: "Sessão não encontrada" });
+  }
+
+  if (session.status === "banned") {
+    return res.status(409).json({
+      error:
+        "Esta sessão foi marcada com possível banimento. Aguarde e procure suporte antes de tentar autenticar novamente.",
+    });
+  }
 
   await deleteWppSession(user.id, sessionName);
-  await createWppSession(user.id, sessionName);
+  await createWppSession(user.id, sessionName, {
+    source: "manual_restart",
+  });
 
   io.to(`user:${user.id}`).emit("sessions:changed", { userId: user.id });
   res.json({ ok: true, message: "Sessão reiniciada com sucesso" });
@@ -3968,7 +5434,9 @@ export async function restoreSessionsOnStartup() {
   for (const s of sessions) {
     const task = (async () => {
       try {
-        await createWppSession(s.user_id, s.session_name);
+        await createWppSession(s.user_id, s.session_name, {
+          source: "startup_restore",
+        });
       } catch (err) {
         console.warn(`⚠️ Falhou ao restaurar ${s.session_name}`, err);
       }

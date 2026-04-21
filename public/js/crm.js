@@ -23,7 +23,7 @@ let socket = null;
 try {
     socket = io({ auth: { userId: window.USER_ID } });
     socket.on("crm:changed", () => {
-        loadClients();
+        loadClients(true);
     });
 } catch (err) {
     console.warn("Socket CRM indisponível:", err);
@@ -53,6 +53,15 @@ function normalizeStage(stage) {
 function showToast(msg, type = "success") {
     if (window.showToast) return window.showToast(type, msg);
     alert(msg);
+}
+
+function escapeHtml(text) {
+    return String(text || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
 // ------------------------------------------------------
@@ -175,7 +184,7 @@ function renderModalTags() {
         div.style.background = p.bg;
         div.style.color = p.color;
         div.style.border = `1px solid ${p.border}`;
-        div.innerHTML = `${tag} <span class="remove-tag" data-i="${index}" style="opacity:.6;cursor:pointer;">✕</span>`;
+        div.innerHTML = `${escapeHtml(tag)} <span class="remove-tag" data-i="${index}" style="opacity:.6;cursor:pointer;">✕</span>`;
         modalTagsWrap.appendChild(div);
     });
 
@@ -202,9 +211,31 @@ function renderModalNotes() {
         const div = document.createElement("div");
         div.className = "note";
         div.innerHTML =
-            `<b>${new Date(n.created_at).toLocaleString()}</b><br>${n.text}`;
+            `<b>${escapeHtml(new Date(n.created_at).toLocaleString())}</b><br>${escapeHtml(n.text)}`;
         modalNotesWrap.appendChild(div);
     });
+}
+
+function mergeClientsPage(incomingClients, replace = false) {
+    const nextClients = replace ? [] : [...clients];
+    const indexById = new Map(
+        nextClients.map((client, index) => [String(client.id), index])
+    );
+
+    incomingClients.forEach((client) => {
+        const key = String(client.id);
+        const existingIndex = indexById.get(key);
+
+        if (existingIndex == null) {
+            indexById.set(key, nextClients.length);
+            nextClients.push(client);
+            return;
+        }
+
+        nextClients[existingIndex] = client;
+    });
+
+    clients = nextClients;
 }
 
 // ------------------------------------------------------
@@ -232,9 +263,9 @@ async function loadClients(reset = false) {
 
     const res = await fetch(`/api/crm/list?${qs.toString()}`);
     const data = await res.json();
+    const incomingClients = Array.isArray(data.clients) ? data.clients : [];
 
-    if (reset) clients = [];
-    clients = clients.concat(data.clients || []);
+    mergeClientsPage(incomingClients, reset || currentPage === 1);
     currentPage = data.page || currentPage;
     totalPages = data.totalPages || 1;
 
@@ -286,11 +317,12 @@ function renderTag(t, isClickable, isActive) {
     const activeBorder = isActive ? p.color       : p.border;
     const extraClass   = isClickable ? " tag-clickable" : "";
     const activeClass  = isActive ? " tag-active" : "";
+    const safeTag = escapeHtml(t);
     return `<span
         class="tag${extraClass}${activeClass}"
-        data-tag="${t}"
+        data-tag="${safeTag}"
         style="background:${activeBg};color:${activeColor};border:1px solid ${activeBorder};"
-    >${t}</span>`;
+    >${safeTag}</span>`;
 }
 
 // ------------------------------------------------------
@@ -384,20 +416,26 @@ function renderBoard() {
                 : "";
             const fup = c.follow_up_date ? Number(c.follow_up_date) : null;
             const fupLabel = fup ? new Date(fup).toLocaleDateString("pt-BR") : "";
+            const safeName = escapeHtml(c.name || "Sem nome");
+            const safePhone = escapeHtml(c.phone || "");
+            const safeCityState = escapeHtml(c.citystate || "Cidade não informada");
+            const safeZoneName = escapeHtml(zoneName);
+            const safeFupLabel = escapeHtml(fupLabel);
+            const safeChatPhone = encodeURIComponent(chatPhone);
 
             item.innerHTML = `
-              <h3>${c.name || "Sem nome"}</h3>
+              <h3>${safeName}</h3>
               <div class="list-cta">
-                <a href="/chat?contact=${chatPhone}" target="_blank">Abrir chat</a>
+                <a href="/chat?contact=${safeChatPhone}" target="_blank">Abrir chat</a>
                 <button data-id="${c.id}" class="btn-list-edit">Editar</button>
               </div>
               <div class="list-meta">
-                ${c.phone || ""} • ${c.citystate || "Cidade não informada"}
+                ${safePhone} • ${safeCityState}
               </div>
               <div class="list-meta">
-                ${valueStr ? `<span>${valueStr}</span>` : ""}
-                ${fupLabel ? `<span>Follow-up: ${fupLabel}</span>` : ""}
-                ${c.stage ? `<span class="list-stage" style="background:${stageColor}20;color:${stageColor};border:1px solid ${stageColor}40;">${zoneName}</span>` : ""}
+                ${valueStr ? `<span>${escapeHtml(valueStr)}</span>` : ""}
+                ${fupLabel ? `<span>Follow-up: ${safeFupLabel}</span>` : ""}
+                ${c.stage ? `<span class="list-stage" style="background:${stageColor}20;color:${stageColor};border:1px solid ${stageColor}40;">${safeZoneName}</span>` : ""}
               </div>
               <div class="list-tags">${tagsHtml || ""}</div>
             `;
@@ -422,11 +460,19 @@ function renderBoard() {
         // Avatar com iniciais
         const initials = (c.name || "?").trim().split(" ")
             .slice(0, 2).map(w => w[0].toUpperCase()).join("");
+        const safeInitials = escapeHtml(initials);
+        const safeName = escapeHtml(c.name || "Sem nome");
+        const safePhone = escapeHtml(c.phone || "—");
+        const safeCityState = escapeHtml(c.citystate || "");
+        const safeChatPhone = encodeURIComponent(chatPhone);
+        const safeAvatar = escapeHtml(c.avatar || "");
 
         // Valor formatado
         const valueStr = Number(c.deal_value) > 0
             ? "R$ " + Number(c.deal_value).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
             : "";
+        const safeValueStr = escapeHtml(valueStr);
+        const safeFupLabel = escapeHtml(fupLabel || "");
 
         card.innerHTML = `
           <div class="card-inner">
@@ -434,24 +480,24 @@ function renderBoard() {
             <!-- Topo: avatar + nome + valor -->
           <div class="card-top">
             <div class="card-avatar">${c.avatar
-                ? `<img src="${c.avatar}" alt="${initials}" loading="lazy" />`
-                : `<span>${initials}</span>`}
+                ? `<img src="${safeAvatar}" alt="${safeInitials}" loading="lazy" />`
+                : `<span>${safeInitials}</span>`}
             </div>
               <div class="card-info">
-                <div class="card-name">${c.name || "Sem nome"}</div>
+                <div class="card-name">${safeName}</div>
                 <div class="card-phone">
                   <i class="fa-solid fa-phone"></i>
-                  ${c.phone || "—"}
+                  ${safePhone}
                 </div>
               </div>
-              ${valueStr ? `<div class="card-value">${valueStr}</div>` : ""}
+              ${valueStr ? `<div class="card-value">${safeValueStr}</div>` : ""}
             </div>
 
             <!-- Localização -->
             ${c.citystate ? `
             <div class="card-location">
               <i class="fa-solid fa-location-dot"></i>
-              ${c.citystate}
+              ${safeCityState}
             </div>` : ""}
 
             <!-- Tags -->
@@ -465,12 +511,12 @@ function renderBoard() {
             ${fupLabel ? `
             <div class="card-followup ${fupOverdue ? "overdue" : fupToday ? "today" : ""}">
               <i class="fa-solid fa-clock"></i>
-              ${fupOverdue ? "Vencido: " : fupToday ? "Hoje: " : "Retorno: "}${fupLabel}
+              ${fupOverdue ? "Vencido: " : fupToday ? "Hoje: " : "Retorno: "}${safeFupLabel}
             </div>` : ""}
 
             <!-- Footer: botão chat -->
             <div class="card-footer">
-              <a href="/chat?contact=${chatPhone}" class="btn-open-chat" title="Abrir chat" onclick="event.stopPropagation()">
+              <a href="/chat?contact=${safeChatPhone}" class="btn-open-chat" title="Abrir chat" onclick="event.stopPropagation()">
                 <i class="fa-brands fa-whatsapp"></i> Chat
               </a>
             </div>
@@ -666,9 +712,8 @@ modalDelete?.addEventListener("click", async () => {
     }
 
         showToast("Cliente excluído!");
-        notifyCrmChanged();
         closeClientModal();
-        loadClients();
+        loadClients(true);
 
     } catch (err) {
         showToast("Erro ao excluir cliente", "error");
@@ -738,7 +783,6 @@ modalSave.addEventListener("click", async () => {
             if (!res.ok || data.ok === false) throw new Error(data.error || "Erro ao atualizar cliente");
             showToast("Cliente atualizado!");
             savedOk = true;
-            notifyCrmChanged();
         } else {
             const res = await fetch("/api/crm/create", {
                 method: "POST",
@@ -749,7 +793,6 @@ modalSave.addEventListener("click", async () => {
             if (!res.ok || data.ok === false) throw new Error(data.error || "Erro ao criar cliente");
             showToast("Cliente criado!");
             savedOk = true;
-            notifyCrmChanged();
         }
 
     } catch (err) {
@@ -760,7 +803,7 @@ modalSave.addEventListener("click", async () => {
             try { closeClientModal(); } catch {}
         }
         if (savedOk) {
-            try { await loadClients(); } catch (err) { console.error("Erro ao recarregar clientes:", err); }
+            try { await loadClients(true); } catch (err) { console.error("Erro ao recarregar clientes:", err); }
         }
         if (typeof setButtonLoading === "function") setButtonLoading(modalSave, false);
     }
@@ -790,15 +833,22 @@ document.querySelectorAll(".kanban-dropzone").forEach(zone => {
 
         const id = Number(draggedCard.dataset.id);
         const stage = zone.dataset.stage;
+        const c = clients.find(x => x.id === id);
+
+        if (c && normalizeStage(c.stage) === stage) return;
 
         try {
-            await fetch("/api/crm/stage", {
+            const res = await fetch("/api/crm/stage", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ id, stage })
             });
+            const data = await res.json();
 
-            const c = clients.find(x => x.id === id);
+            if (!res.ok || data.ok === false) {
+                throw new Error(data.error || "Erro ao atualizar estágio");
+            }
+
             if (c) c.stage = stage;
 
             renderBoard();

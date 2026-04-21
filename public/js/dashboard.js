@@ -7,14 +7,24 @@
    ESTADO GLOBAL
 =========================== */
 const State = {
-  allUsers:   [],
-  filtered:   [],
-  sort:       { key: null, dir: 'asc' },
-  page:       1,
-  perPage:    15,
-  charts:     {},
+  users: [],
+  stats: {},
+  chartData: {},
+  sort: { key: null, dir: 'asc' },
+  page: 1,
+  perPage: 15,
+  totalUsers: 0,
+  totalPages: 1,
+  filters: {
+    search: '',
+    plan: '',
+    status: '',
+  },
+  requestSeq: 0,
+  charts: {},
   planConfigs: [],
 };
+const DASHBOARD_EXPORT_PAGE_SIZE = 100;
 
 /* ===========================
    HELPERS UI
@@ -36,6 +46,61 @@ function ensureCanvas(wrap, id) {
   return wrap.querySelector("canvas");
 }
 
+function buildDashboardQuery(options = {}) {
+  const page = Number(options.page ?? State.page ?? 1);
+  const pageSize = Number(options.pageSize ?? State.perPage ?? 15);
+  const search = typeof options.search === "string" ? options.search : State.filters.search;
+  const plan = typeof options.plan === "string" ? options.plan : State.filters.plan;
+  const status = typeof options.status === "string" ? options.status : State.filters.status;
+  const sortKey = Object.prototype.hasOwnProperty.call(options, "sortKey")
+    ? options.sortKey
+    : State.sort.key;
+  const sortDir = typeof options.sortDir === "string" ? options.sortDir : State.sort.dir;
+  const force = Boolean(options.force);
+  const params = new URLSearchParams();
+
+  params.set("page", String(page));
+  params.set("pageSize", String(pageSize));
+  if (search) params.set("search", search);
+  if (plan) params.set("plan", plan);
+  if (status) params.set("status", status);
+  if (sortKey) {
+    params.set("sortKey", sortKey);
+    params.set("sortDir", sortDir === "desc" ? "desc" : "asc");
+  }
+  if (force) params.set("refresh", "1");
+
+  return params.toString();
+}
+
+function renderSortState() {
+  document.querySelectorAll('th[data-sort]').forEach((th) => {
+    th.classList.remove('asc', 'desc');
+    if (th.dataset.sort === State.sort.key) {
+      th.classList.add(State.sort.dir === 'desc' ? 'desc' : 'asc');
+    }
+  });
+}
+
+function syncDashboardControls() {
+  const searchEl = document.getElementById('search');
+  const planEl = document.getElementById('plan');
+  const statusEl = document.getElementById('status');
+  const clearEl = document.getElementById('clear-search');
+
+  if (searchEl && searchEl.value !== State.filters.search) {
+    searchEl.value = State.filters.search;
+  }
+  if (planEl && planEl.value !== State.filters.plan) {
+    planEl.value = State.filters.plan;
+  }
+  if (statusEl && statusEl.value !== State.filters.status) {
+    statusEl.value = State.filters.status;
+  }
+  clearEl?.classList.toggle('visible', Boolean(State.filters.search));
+  renderSortState();
+}
+
 /* ===========================
    INIT
 =========================== */
@@ -55,38 +120,55 @@ document.addEventListener("DOMContentLoaded", () => {
 /* ===========================
    LOAD
 =========================== */
-async function loadDashboard() {
+async function loadDashboard(options = {}) {
   const btn = document.querySelector('.btn-refresh');
+  const requestId = ++State.requestSeq;
   btn?.classList.add('spinning');
 
   try {
-    const res = await fetch("/admin/dashboard-data");
+    const res = await fetch(`/admin/dashboard-data?${buildDashboardQuery(options)}`);
 
     if (!res.ok) {
+      if (requestId !== State.requestSeq) return;
       showToast('error', `Erro ao carregar dados (${res.status})`);
       renderTableError();
       return;
     }
 
     const data = await res.json();
-    const stats    = data.stats    || {};
-    const users    = data.users    || [];
-    const chartData = data.chartData || {};
+    if (requestId !== State.requestSeq) return;
 
-    State.allUsers = users;
-    State.filtered = [...users];
-    State.page = 1;
+    State.stats = data.stats || {};
+    State.chartData = data.chartData || {};
+    State.users = Array.isArray(data.users) ? data.users : [];
+    State.page = Number(data.pagination?.page || 1);
+    State.perPage = Number(data.pagination?.pageSize || State.perPage || 15);
+    State.totalUsers = Number(data.pagination?.total || 0);
+    State.totalPages = Math.max(1, Number(data.pagination?.pages || 1));
+    State.filters = {
+      search: String(data.filters?.search || ''),
+      plan: String(data.filters?.plan || ''),
+      status: String(data.filters?.status || ''),
+    };
+    State.sort = {
+      key: data.filters?.sortKey || null,
+      dir: data.filters?.sortDir === 'desc' ? 'desc' : 'asc',
+    };
 
-    renderStats(stats);
-    renderCharts(stats, users, chartData);
-    applyFilters();
+    syncDashboardControls();
+    renderStats(State.stats);
+    renderCharts(State.stats, State.chartData);
+    renderUsers(State.users);
 
   } catch (err) {
+    if (requestId !== State.requestSeq) return;
     console.error("Erro no dashboard:", err);
     showToast('error', 'Falha na conexão com o servidor');
     renderTableError();
   } finally {
-    btn?.classList.remove('spinning');
+    if (requestId === State.requestSeq) {
+      btn?.classList.remove('spinning');
+    }
   }
 }
 
@@ -694,15 +776,15 @@ function renderStats(s) {
 }
 
 /* ===========================
-   CHARTS — derivados de users[] e stats
+   CHARTS — derivados de stats + chartData
 =========================== */
-function renderCharts(stats, users, chartData = {}) {
-  renderRevenueChart(users, chartData.monthlyRevenue);
-  renderDonutChart(stats);
+function renderCharts(stats, chartData = {}) {
+  renderRevenueChart(chartData.monthlyRevenue || []);
+  renderDonutChart(chartData.planDistribution || {});
   renderFunnelChart(stats);
-  renderDailyChart(users, chartData.dailyNewUsers);
-  renderHeatmap(users, chartData.dailyPayments);
-  renderTopFails(users);
+  renderDailyChart(chartData.dailyNewUsers || []);
+  renderHeatmap(chartData.dailyPayments || []);
+  renderTopFails(chartData.topFailures || []);
 }
 
 /* Helpers de cor/tema */
@@ -714,44 +796,22 @@ function destroyChart(id) {
   if (State.charts[id]) { State.charts[id].destroy(); delete State.charts[id]; }
 }
 
-/* ─── 1. RECEITA MENSAL ───
-   Agrupa pagamentos aprovados por mês usando last_payment_at e last_amount */
-function renderRevenueChart(users, monthlyRevenue) {
+/* ─── 1. RECEITA MENSAL ─── */
+function renderRevenueChart(monthlyRevenue = []) {
   destroyChart('revenue');
   const wrap = document.getElementById('chart-revenue')?.parentElement;
   let ctx = document.getElementById('chart-revenue');
   if (!ctx && wrap) ctx = ensureCanvas(wrap, 'chart-revenue');
   if (!ctx) return;
 
-  let months, values;
-
-  if (monthlyRevenue && monthlyRevenue.length) {
-    // Dados reais do backend: [{ month: '2025-01', total: 4200 }, ...]
-    months = monthlyRevenue.map(r => {
-      const [year, mon] = r.month.split('-');
-      return new Date(Number(year), Number(mon) - 1).toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
+  const months = monthlyRevenue.map((r) => {
+    const [year, mon] = String(r.month || '').split('-');
+    return new Date(Number(year), Number(mon) - 1).toLocaleDateString('pt-BR', {
+      month: 'short',
+      year: '2-digit',
     });
-    values = monthlyRevenue.map(r => Number(r.total) || 0);
-  } else {
-    // Fallback: agrupa last_payment_at dos usuários por mês
-    const now    = Date.now();
-    const mrrMap = {};
-    months = [];
-    for (let i = 6; i >= 0; i--) {
-      const d   = new Date(now);
-      d.setMonth(d.getMonth() - i);
-      const key = d.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
-      months.push(key);
-      mrrMap[key] = 0;
-    }
-    users.forEach(u => {
-      if (!u.last_payment_at || !u.last_amount) return;
-      const d   = new Date(Number(u.last_payment_at));
-      const key = d.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
-      if (key in mrrMap) mrrMap[key] += Number(u.last_amount) || 0;
-    });
-    values = months.map(m => mrrMap[m]);
-  }
+  });
+  const values = monthlyRevenue.map((r) => Number(r.total) || 0);
 
   const hasData = values.some(v => Number(v) > 0);
   if (!hasData) return renderEmptyState(wrap, "Nenhuma receita registrada", "fa-wallet");
@@ -788,23 +848,20 @@ function renderRevenueChart(users, monthlyRevenue) {
 }
 
 /* ─── 2. DONUT — distribuição de planos ─── */
-function renderDonutChart(stats) {
+function renderDonutChart(planDistribution = {}) {
   destroyChart('donut');
   const wrap = document.getElementById('chart-donut')?.parentElement;
   let ctx = document.getElementById('chart-donut');
   if (!ctx && wrap) ctx = ensureCanvas(wrap, 'chart-donut');
   if (!ctx) return;
 
-  // Conta planos a partir dos users
-  const counts = { free: 0, starter: 0, pro: 0 };
-  State.allUsers.forEach(u => {
-    const p = (u.plan || 'free').toLowerCase();
-    if (p in counts) counts[p]++;
-    else counts.free++;
-  });
-
-  const total   = State.allUsers.length || 0;
-  const paidPct = Math.round(((counts.starter + counts.pro) / total) * 100);
+  const counts = {
+    free: Number(planDistribution.free || 0),
+    starter: Number(planDistribution.starter || 0),
+    pro: Number(planDistribution.pro || 0),
+  };
+  const total = counts.free + counts.starter + counts.pro;
+  const paidPct = total ? Math.round(((counts.starter + counts.pro) / total) * 100) : 0;
 
   if (total === 0) {
     return renderEmptyState(wrap, "Nenhum usuário ainda", "fa-user-slash");
@@ -901,10 +958,8 @@ function renderFunnelChart(stats) {
   });
 }
 
-/* ─── 4. NOVOS USUÁRIOS POR DIA ───
-   Agrupa users por data de cadastro (u.id como proxy se não tiver created_at,
-   ou usa last_payment_at). */
-function renderDailyChart(users, dailyNewUsers) {
+/* ─── 4. NOVOS USUÁRIOS POR DIA ─── */
+function renderDailyChart(dailyNewUsers = []) {
   destroyChart('daily');
   const wrap = document.getElementById('chart-daily')?.parentElement;
   let ctx = document.getElementById('chart-daily');
@@ -913,38 +968,16 @@ function renderDailyChart(users, dailyNewUsers) {
 
   const labels = [], values = [];
   const today  = new Date();
+  const dayMap = {};
+  dailyNewUsers.forEach(r => { dayMap[r.day] = Number(r.count) || 0; });
 
-  if (dailyNewUsers && dailyNewUsers.length) {
-    // Dados reais: [{ day: '2025-03-01', count: 12 }, ...]
-    // Garante os últimos 28 dias mesmo se algum dia não tiver registro
-    const dayMap = {};
-    dailyNewUsers.forEach(r => { dayMap[r.day] = Number(r.count) || 0; });
-
-    for (let i = 27; i >= 0; i--) {
-      const d   = new Date(today);
-      d.setDate(d.getDate() - i);
-      const iso = d.toISOString().slice(0, 10);
-      const lbl = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-      labels.push(lbl);
-      values.push(dayMap[iso] || 0);
-    }
-  } else {
-    // Fallback: agrupa last_payment_at dos users
-    const dayMap = {};
-    for (let i = 27; i >= 0; i--) {
-      const d   = new Date(today);
-      d.setDate(d.getDate() - i);
-      const lbl = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-      labels.push(lbl);
-      dayMap[lbl] = 0;
-    }
-    users.forEach(u => {
-      if (!u.last_payment_at) return;
-      const d   = new Date(Number(u.last_payment_at));
-      const key = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
-      if (key in dayMap) dayMap[key]++;
-    });
-    labels.forEach(l => values.push(dayMap[l]));
+  for (let i = 27; i >= 0; i--) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const iso = d.toISOString().slice(0, 10);
+    const lbl = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+    labels.push(lbl);
+    values.push(dayMap[iso] || 0);
   }
 
   const hasData = values.some(v => Number(v) > 0);
@@ -986,9 +1019,8 @@ function renderDailyChart(users, dailyNewUsers) {
   });
 }
 
-/* ─── 5. HEATMAP — atividade por dia ───
-   Usa last_payment_at dos usuários para colorir os dias */
-function renderHeatmap(users, dailyPayments) {
+/* ─── 5. HEATMAP — atividade por dia ─── */
+function renderHeatmap(dailyPayments = []) {
   const grid   = document.getElementById('heatmap');
   const daysEl = document.getElementById('hm-days');
   if (!grid) return;
@@ -998,19 +1030,8 @@ function renderHeatmap(users, dailyPayments) {
     daysEl.innerHTML = dayNames.map(d => `<div class="hm-day-label">${d}</div>`).join('');
   }
 
-  // Monta mapa dateString → count
   const countMap = {};
-  if (dailyPayments && dailyPayments.length) {
-    // Dados reais: [{ day: '2025-03-01', count: 8 }, ...]
-    dailyPayments.forEach(r => { countMap[r.day] = Number(r.count) || 0; });
-  } else {
-    // Fallback: usa last_payment_at dos users
-    users.forEach(u => {
-      if (!u.last_payment_at) return;
-      const key = new Date(Number(u.last_payment_at)).toISOString().slice(0, 10);
-      countMap[key] = (countMap[key] || 0) + 1;
-    });
-  }
+  dailyPayments.forEach(r => { countMap[r.day] = Number(r.count) || 0; });
 
   const entries = Object.values(countMap);
   if (entries.length === 0) {
@@ -1084,19 +1105,19 @@ function adjustHeatmapSize(grid, daysEl) {
   }
 }
 
-/* ─── 6. TOP FALHAS — direto de users[] ─── */
-function renderTopFails(users) {
+/* ─── 6. TOP FALHAS ─── */
+function renderTopFails(topFailures = []) {
   const tbody = document.getElementById('top-fails-table');
   if (!tbody) return;
 
-  const top = [...users]
-    .filter(u => (u.failures || 0) > 0)
+  const top = [...topFailures]
+    .filter(u => Number(u.failures || 0) > 0)
     .sort((a, b) => (b.failures || 0) - (a.failures || 0))
     .slice(0, 5);
 
   if (!top.length) {
     tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:var(--text-muted);padding:16px;font-size:13px">
-      Nenhuma falha registrada 🎉
+      Nenhuma falha registrada
     </td></tr>`;
     return;
   }
@@ -1104,7 +1125,7 @@ function renderTopFails(users) {
   tbody.innerHTML = top.map(u => `
     <tr>
       <td title="${escHtml(u.email)}">${escHtml(u.name || u.email || '—')}</td>
-      <td><span class="mini-badge ${u.plan || 'free'}">${(u.plan || 'free').toUpperCase()}</span></td>
+      <td><span class="mini-badge ${escHtml(u.plan || 'free')}">${escHtml((u.plan || 'free').toUpperCase())}</span></td>
       <td style="text-align:right;color:var(--red);font-family:var(--font-mono);font-weight:700;font-size:13px">
         ${u.failures}
       </td>
@@ -1124,27 +1145,26 @@ function renderUsers(users) {
   const tbody = document.getElementById("users");
   if (!tbody) return;
 
-  const total = users.length;
-  const start = (State.page - 1) * State.perPage;
-  const page  = users.slice(start, start + State.perPage);
+  const total = State.totalUsers;
+  const start = total ? (State.page - 1) * State.perPage + 1 : 0;
+  const end = start ? start + users.length - 1 : 0;
 
-  // Contadores
   const countEl = document.getElementById('result-count');
   if (countEl) countEl.textContent = `${total} cliente${total !== 1 ? 's' : ''}`;
 
   const metaEl = document.getElementById('table-meta');
   if (metaEl) {
-    metaEl.textContent = total > State.perPage
-      ? `Exibindo ${start + 1}–${Math.min(start + State.perPage, total)} de ${total}`
-      : `${total} resultado${total !== 1 ? 's' : ''}`;
+    metaEl.textContent = total > 0
+      ? `Exibindo ${start}–${end} de ${total}`
+      : '0 resultados';
   }
 
-  if (!page.length) {
+  if (!users.length) {
     tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">
       <i class="fa-solid fa-user-slash"></i>
       <p>Nenhum cliente encontrado com os filtros aplicados.</p>
     </div></td></tr>`;
-    renderPagination(0);
+    renderPagination();
     return;
   }
 
@@ -1161,7 +1181,7 @@ function renderUsers(users) {
     return avatarColors[Math.abs(h)%avatarColors.length];
   };
 
-  tbody.innerHTML = page.map((u, idx) => {
+  tbody.innerHTML = users.map((u, idx) => {
     const initials = makeInitials(u.name || u.email || "");
     const color = colorFor(u.name || u.email || "");
 
@@ -1190,12 +1210,18 @@ function renderUsers(users) {
   `;
   }).join('');
 
-  renderPagination(total);
+  renderPagination();
 }
 
 function renderTableError() {
   const tbody = document.getElementById("users");
+  const countEl = document.getElementById('result-count');
+  const metaEl = document.getElementById('table-meta');
+  const pagination = document.getElementById('pagination');
   if (!tbody) return;
+  if (countEl) countEl.textContent = '— clientes';
+  if (metaEl) metaEl.textContent = 'Falha ao carregar a lista';
+  if (pagination) pagination.innerHTML = '';
   tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">
     <i class="fa-solid fa-triangle-exclamation"></i>
     <p>Não foi possível carregar os dados. Tente recarregar.</p>
@@ -1205,10 +1231,10 @@ function renderTableError() {
 /* ===========================
    PAGINAÇÃO
 =========================== */
-function renderPagination(total) {
+function renderPagination() {
   const container = document.getElementById('pagination');
   if (!container) return;
-  const pages   = Math.ceil(total / State.perPage);
+  const pages = State.totalPages;
   if (pages <= 1) { container.innerHTML = ''; return; }
 
   const current = State.page;
@@ -1238,10 +1264,10 @@ function getPaginationRange(current, total) {
 }
 
 function goToPage(page) {
-  const pages = Math.ceil(State.filtered.length / State.perPage);
+  const pages = State.totalPages;
   if (page < 1 || page > pages) return;
   State.page = page;
-  renderUsers(State.filtered);
+  loadDashboard();
   document.querySelector('.table-box')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -1249,20 +1275,13 @@ function goToPage(page) {
    FILTROS
 =========================== */
 function applyFilters() {
-  const search = document.getElementById("search")?.value.toLowerCase().trim() || '';
-  const plan   = document.getElementById("plan")?.value  || '';
+  const search = document.getElementById("search")?.value.trim() || '';
+  const plan   = document.getElementById("plan")?.value || '';
   const status = document.getElementById("status")?.value || '';
 
-  State.filtered = State.allUsers.filter(u => {
-    if (search && !(u.name?.toLowerCase().includes(search) || u.email?.toLowerCase().includes(search))) return false;
-    if (plan   && u.plan !== plan)                  return false;
-    if (status && u.subscription_status !== status) return false;
-    return true;
-  });
-
-  if (State.sort.key) sortUsers();
+  State.filters = { search, plan, status };
   State.page = 1;
-  renderUsers(State.filtered);
+  loadDashboard();
 }
 
 function bindFilters() {
@@ -1295,54 +1314,78 @@ function bindTableSort() {
       const key = th.dataset.sort;
       State.sort.dir = State.sort.key === key && State.sort.dir === 'asc' ? 'desc' : 'asc';
       State.sort.key = key;
-      document.querySelectorAll('th[data-sort]').forEach(el => el.classList.remove('asc', 'desc'));
-      th.classList.add(State.sort.dir);
-      sortUsers();
       State.page = 1;
-      renderUsers(State.filtered);
+      renderSortState();
+      loadDashboard();
     });
-  });
-}
-
-function sortUsers() {
-  const { key, dir } = State.sort;
-  const mul = dir === 'asc' ? 1 : -1;
-  State.filtered.sort((a, b) => {
-    let va = a[key] ?? '', vb = b[key] ?? '';
-    if (key === 'failures' || key === 'last_payment_at') return (Number(va) - Number(vb)) * mul;
-    return String(va).toLowerCase().localeCompare(String(vb).toLowerCase()) * mul;
   });
 }
 
 /* ===========================
    EXPORTAR CSV
 =========================== */
-function exportCSV() {
-  const users = State.filtered;
-  if (!users.length) { showToast('error', 'Nenhum dado para exportar'); return; }
+async function fetchDashboardPage(page, pageSize) {
+  const res = await fetch(`/admin/dashboard-data?${buildDashboardQuery({ page, pageSize })}`);
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
+  return res.json();
+}
 
-  const BOM    = '\uFEFF';
-  const header = 'Nome,Email,Plano,Status,Ultimo Pagamento,Metodo,Valor,Falhas,Abandonado\n';
-  const rows   = users.map(u => [
-    csvCell(u.name),
-    csvCell(u.email),
-    csvCell(u.plan),
-    csvCell(u.subscription_status),
-    csvCell(formatDate(u.last_payment_at)),
-    csvCell(u.last_method),
-    csvCell(fmtBRL(u.last_amount)),
-    u.failures || 0,
-    u.abandoned ? 'Sim' : 'Não',
-  ].join(','));
+async function exportCSV() {
+  if (!State.totalUsers) {
+    showToast('error', 'Nenhum dado para exportar');
+    return;
+  }
 
-  const blob = new Blob([BOM + header + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
-  const url  = URL.createObjectURL(blob);
-  Object.assign(document.createElement('a'), {
-    href: url,
-    download: `clientes-zapconnect-${new Date().toISOString().slice(0, 10)}.csv`,
-  }).click();
-  URL.revokeObjectURL(url);
-  showToast('success', `${users.length} registros exportados`);
+  const exportBtn = document.getElementById('export');
+  if (typeof setButtonLoading === 'function') {
+    setButtonLoading(exportBtn, true, 'Exportando...');
+  } else {
+    exportBtn?.setAttribute('disabled', 'disabled');
+  }
+
+  try {
+    const totalPages = Math.max(1, Math.ceil(State.totalUsers / DASHBOARD_EXPORT_PAGE_SIZE));
+    const users = [];
+
+    for (let page = 1; page <= totalPages; page++) {
+      const data = await fetchDashboardPage(page, DASHBOARD_EXPORT_PAGE_SIZE);
+      users.push(...(Array.isArray(data.users) ? data.users : []));
+    }
+
+    const BOM = '\uFEFF';
+    const header = 'Nome,Email,Plano,Status,Ultimo Pagamento,Metodo,Valor,Falhas,Abandonado\n';
+    const rows = users.map(u => [
+      csvCell(u.name),
+      csvCell(u.email),
+      csvCell(u.plan),
+      csvCell(u.subscription_status),
+      csvCell(formatDate(u.last_payment_at)),
+      csvCell(u.last_method),
+      csvCell(fmtBRL(u.last_amount)),
+      u.failures || 0,
+      u.abandoned ? 'Sim' : 'Não',
+    ].join(','));
+
+    const blob = new Blob([BOM + header + rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    Object.assign(document.createElement('a'), {
+      href: url,
+      download: `clientes-zapconnect-${new Date().toISOString().slice(0, 10)}.csv`,
+    }).click();
+    URL.revokeObjectURL(url);
+    showToast('success', `${users.length} registros exportados`);
+  } catch (err) {
+    console.error('Erro ao exportar CSV:', err);
+    showToast('error', 'Falha ao exportar CSV');
+  } finally {
+    if (typeof setButtonLoading === 'function') {
+      setButtonLoading(exportBtn, false);
+    } else {
+      exportBtn?.removeAttribute('disabled');
+    }
+  }
 }
 
 /* ===========================

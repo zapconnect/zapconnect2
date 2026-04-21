@@ -11,20 +11,27 @@ import { execSync } from "child_process";
 import { SpeechClient } from "@google-cloud/speech";
 import { getDB } from "./database";
 import { splitMessages, sendMessagesWithDelay } from "./util";
-import { io } from "./server";
+import { emitToUser } from "./lib/socketEmitter";
 import { canUseIA, consumeIaMessage } from "./services/iaLimiter";
 import { assertValidPhone, buildWhatsAppJid, sanitizePhone, validatePhone } from "./utils/phoneUtils";
 import { withTimeout } from "./utils/withTimeout";
+import { deliverWebhook } from "./utils/webhookDelivery";
 import {
   checkFallbackTriggers,
   clearFallbackRuntime,
   primeFallbackCache,
   markFallbackTimestamp,
   type FallbackDecision,
+  type FallbackReason,
 } from "./services/fallbackService";
 import { generateAIResponse } from "./services/aiHandler";
 import { getChatAI } from "./services/chatAiService";
 import { isInSilenceWindow } from "./services/silenceUtils";
+import {
+  clearDispatchSuppression,
+  detectDispatchConsentCommand,
+  upsertDispatchSuppression,
+} from "./services/dispatchPolicy";
 import { logAudit } from "./utils/audit";
 
 
@@ -60,6 +67,7 @@ function ensureDir(dir: string) {
  */
 const NUMBER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
 const numberValidationCache = new Map<string, number>(); // jid -> timestamp
+type NumberStatusCheckResult = { canReceiveMessage?: boolean } | null;
 
 export async function ensureChat(
   client: any,
@@ -83,8 +91,12 @@ export async function ensureChat(
     return jid;
   }
 
-  const exists = await withTimeout(client.checkNumberStatus(jid), WPP_TIMEOUT_MS, "checkNumberStatus");
-  if (!exists || !exists.canReceiveMessage) {
+  const exists = await withTimeout<NumberStatusCheckResult>(
+    client.checkNumberStatus(jid),
+    WPP_TIMEOUT_MS,
+    "checkNumberStatus"
+  );
+  if (!exists?.canReceiveMessage) {
     throw new Error("Número inválido ou não registrado no WhatsApp");
   }
 
@@ -370,11 +382,6 @@ async function getChatAIState(userId: number, chatId: string): Promise<boolean> 
 
 
 
-declare global {
-  var io: any;
-}
-
-
 const term = terminalKit.terminal;
 
 const AI_SELECTED = (process.env.AI_SELECTED as "GPT" | "GEMINI") || "GEMINI";
@@ -389,12 +396,52 @@ const eventsAttached = new Set<string>();
 // ===========================
 const reconnecting = new Set<string>();
 const reconnectAttempts = new Map<string, number>();
+type ReconnectCircuitState = {
+  openedAt: number;
+  attempts: number;
+  reason: string;
+};
+type SessionStartSource =
+  | "manual_create"
+  | "manual_restart"
+  | "auto_reconnect"
+  | "startup_restore";
+type CreateWppSessionOptions = {
+  source?: SessionStartSource;
+};
+const reconnectCircuitOpen = new Map<string, ReconnectCircuitState>();
+const RECONNECT_MAX_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.WPP_RECONNECT_MAX_ATTEMPTS || 6)
+);
+const RECONNECT_STATUS_CIRCUIT_OPEN = "circuit_open";
+const BANNED_SESSION_STATUS = "banned";
+const REAUTH_REQUIRED_SESSION_STATUS = "reauth_required";
+const bannedSessions = new Set<string>();
+const BAN_INDICATORS = [
+  "banned",
+  "unauthorized",
+  "forbidden",
+  "your account has been",
+  "invalid session",
+  "401",
+  "403",
+];
+const BAN_PROBE_STATES = ["disconnectedmobile", "serverclose", "logout"];
+const BANNED_SESSION_USER_MESSAGE =
+  "Possivel banimento detectado nesta sessao. Nao tente reconectar imediatamente. Aguarde e procure o suporte antes de autenticar de novo.";
+const REAUTH_REQUIRED_SESSION_USER_MESSAGE =
+  "A sessao precisa de autenticacao manual. A recuperacao automatica foi interrompida para evitar loop. Clique em reconectar quando quiser gerar um novo QR.";
 let speechClient: SpeechClient | null = null;
 const AUDIO_TRANSCRIBE_PROVIDER = (process.env.AUDIO_TRANSCRIBE_PROVIDER || "").toLowerCase(); // "google", "deepgram" ou vazio (desativado)
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || "";
 const inboundCount = new Map<string, number>(); // chatKey -> quantidade de mensagens recebidas (para firstMessageOnly)
 const chatAICacheLoaded = new Map<number, number>(); // userId -> timestamp do último preload
 const sessionLocks = new Map<string, Promise<void>>(); // garante exclusão mútua por sessão para attach/reconnect
+const sessionCreationPromises = new Map<
+  string,
+  Promise<{ sessionName: string; exists?: boolean }>
+>();
 const chatActivity = new Map<string, number>(); // chatKey -> last activity
 const chatAIActivity = new Map<string, number>(); // aiKey -> last activity
 const CRM_UPDATE_TTL_MS = 5 * 60 * 1000; // 5 minutos
@@ -428,28 +475,335 @@ function withSessionLock(full: string, task: () => Promise<void> | void): Promis
   return next;
 }
 
+function getReconnectReason(reason: unknown) {
+  if (reason instanceof Error) return reason.message || "erro desconhecido";
+  if (typeof reason === "string") {
+    const trimmed = reason.trim();
+    return trimmed || "erro desconhecido";
+  }
+  if (reason == null) return "erro desconhecido";
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
+}
+
+function hasBanIndicator(value: unknown) {
+  const text = String(value || "").toLowerCase();
+  return BAN_INDICATORS.some((indicator) => text.includes(indicator));
+}
+
+function isAutomaticSessionStart(source: SessionStartSource) {
+  return source === "auto_reconnect" || source === "startup_restore";
+}
+
+async function detectBanSignal(client: any, state: unknown) {
+  const normalizedState = String(state || "").toLowerCase().trim();
+
+  if (hasBanIndicator(normalizedState)) {
+    return {
+      isBanned: true,
+      reason: `estado suspeito: ${normalizedState || "desconhecido"}`,
+    };
+  }
+
+  const shouldProbeHostDevice = BAN_PROBE_STATES.some((token) =>
+    normalizedState.includes(token)
+  );
+
+  if (!shouldProbeHostDevice || typeof client?.getHostDevice !== "function") {
+    return { isBanned: false, reason: "" };
+  }
+
+  try {
+    const hostDevice = await withTimeout(
+      Promise.resolve(client.getHostDevice()),
+      5000,
+      "getHostDevice"
+    );
+
+    if (!hostDevice) {
+      return {
+        isBanned: true,
+        reason: `getHostDevice vazio apos ${normalizedState || "desconexao"}`,
+      };
+    }
+  } catch (err) {
+    const reason = getReconnectReason(err);
+    if (hasBanIndicator(reason)) {
+      return { isBanned: true, reason };
+    }
+  }
+
+  return { isBanned: false, reason: "" };
+}
+
+async function probeAutoRecoveryBlock(
+  client: any,
+  source: SessionStartSource,
+  state: unknown
+) {
+  const explicitBan = await detectBanSignal(client, state);
+  if (explicitBan.isBanned) {
+    return explicitBan;
+  }
+
+  const notes: string[] = [];
+
+  if (typeof client?.getConnectionState === "function") {
+    try {
+      const connectionState = await withTimeout(
+        Promise.resolve(client.getConnectionState()),
+        5000,
+        "getConnectionState"
+      );
+      const normalizedConnectionState = String(connectionState || "").trim();
+      if (hasBanIndicator(normalizedConnectionState)) {
+        return {
+          isBanned: true,
+          reason: `getConnectionState: ${normalizedConnectionState || "desconhecido"}`,
+        };
+      }
+      if (normalizedConnectionState) {
+        notes.push(`connection=${normalizedConnectionState}`);
+      }
+    } catch (err) {
+      const reason = getReconnectReason(err);
+      if (hasBanIndicator(reason)) {
+        return { isBanned: true, reason: `getConnectionState: ${reason}` };
+      }
+      notes.push("connection=erro");
+    }
+  }
+
+  if (typeof client?.isLoggedIn === "function") {
+    try {
+      const loggedIn = await withTimeout(
+        Promise.resolve(client.isLoggedIn()),
+        5000,
+        "isLoggedIn"
+      );
+      notes.push(`isLoggedIn=${Boolean(loggedIn)}`);
+    } catch (err) {
+      const reason = getReconnectReason(err);
+      if (hasBanIndicator(reason)) {
+        return { isBanned: true, reason: `isLoggedIn: ${reason}` };
+      }
+      notes.push("isLoggedIn=erro");
+    }
+  }
+
+  const normalizedState = String(state || "notLogged").trim() || "notLogged";
+  const sourceLabel =
+    source === "startup_restore" ? "restauracao automatica" : "reconexao automatica";
+  const details = notes.length ? ` (${notes.join(", ")})` : "";
+
+  return {
+    isBanned: false,
+    reason: `QR solicitado apos ${normalizedState} durante ${sourceLabel}${details}`,
+  };
+}
+
+async function updateSessionStatus(userId: number, sessionName: string, status: string) {
+  try {
+    const db = await getDB();
+    await db.run(
+      `UPDATE sessions SET status = ? WHERE user_id = ? AND session_name = ?`,
+      [status, userId, sessionName]
+    );
+  } catch { }
+}
+
+function resetReconnectTracking(full: string) {
+  reconnectAttempts.delete(full);
+  reconnectCircuitOpen.delete(full);
+  bannedSessions.delete(full);
+}
+
+async function emitReconnectCircuitOpen(
+  userId: number,
+  sessionName: string,
+  full: string,
+  circuit: ReconnectCircuitState
+) {
+  try {
+    emitToUser(userId, "session:stateChange", {
+      userId,
+      sessionName,
+      full,
+      state: RECONNECT_STATUS_CIRCUIT_OPEN,
+    });
+    emitToUser(userId, "session:circuitOpen", {
+      userId,
+      sessionName,
+      full,
+      attempts: circuit.attempts,
+      reason: circuit.reason,
+      openedAt: circuit.openedAt,
+    });
+    emitToUser(userId, "sessions:changed", { userId });
+  } catch { }
+}
+
+async function openReconnectCircuit(
+  userId: number,
+  sessionName: string,
+  reason: unknown,
+  attempts: number
+) {
+  const full = `USER${userId}_${sessionName}`;
+  if (reconnectCircuitOpen.has(full)) return;
+
+  const circuit: ReconnectCircuitState = {
+    openedAt: Date.now(),
+    attempts,
+    reason: getReconnectReason(reason),
+  };
+
+  reconnectCircuitOpen.set(full, circuit);
+  await updateSessionStatus(userId, sessionName, RECONNECT_STATUS_CIRCUIT_OPEN);
+  console.error(
+    `🚫 Circuit breaker aberto para ${full} após ${attempts} tentativa(s): ${circuit.reason}`
+  );
+  await emitReconnectCircuitOpen(userId, sessionName, full, circuit);
+}
+
+async function markSessionAsBanned(
+  userId: number,
+  sessionName: string,
+  full: string,
+  state: unknown,
+  reason: string,
+  clientOverride?: any
+) {
+  if (bannedSessions.has(full)) return;
+
+  const TOKENS_DIR = process.env.TOKENS_DIR || "tokens";
+  const sessionDir = path.join(TOKENS_DIR, full);
+  const normalizedReason = reason || `estado suspeito: ${String(state || "desconhecido")}`;
+
+  resetReconnectTracking(full);
+  bannedSessions.add(full);
+  reconnecting.delete(full);
+
+  await closeSessionRuntime(full, sessionDir, clientOverride);
+  await updateSessionStatus(userId, sessionName, BANNED_SESSION_STATUS);
+
+  console.warn(`⚠️ Possivel banimento detectado para ${full}: ${normalizedReason}`);
+
+  try {
+    emitToUser(userId, "session:stateChange", {
+      userId,
+      sessionName,
+      full,
+      state: BANNED_SESSION_STATUS,
+      originalState: state,
+      reason: normalizedReason,
+    });
+    emitToUser(userId, "session:banned", {
+      userId,
+      sessionName,
+      full,
+      state,
+      reason: normalizedReason,
+      message: BANNED_SESSION_USER_MESSAGE,
+    });
+    emitToUser(userId, "sessions:changed", { userId });
+  } catch { }
+
+  try {
+    await logAudit("session_banned_detected", userId, "session", sessionName, {
+      state: String(state || ""),
+      reason: normalizedReason,
+    });
+  } catch { }
+}
+
+async function markSessionAsReauthRequired(
+  userId: number,
+  sessionName: string,
+  full: string,
+  state: unknown,
+  reason: string,
+  clientOverride?: any
+) {
+  const TOKENS_DIR = process.env.TOKENS_DIR || "tokens";
+  const sessionDir = path.join(TOKENS_DIR, full);
+  const normalizedReason =
+    reason || `QR solicitado apos ${String(state || "desconhecido")}`;
+
+  resetReconnectTracking(full);
+  reconnecting.delete(full);
+
+  await closeSessionRuntime(full, sessionDir, clientOverride);
+  await updateSessionStatus(userId, sessionName, REAUTH_REQUIRED_SESSION_STATUS);
+
+  try {
+    const qrPath = getQRPathFor(full);
+    if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
+  } catch { }
+
+  console.warn(`⚠️ ${full} exige autenticacao manual: ${normalizedReason}`);
+
+  try {
+    emitToUser(userId, "session:stateChange", {
+      userId,
+      sessionName,
+      full,
+      state: REAUTH_REQUIRED_SESSION_STATUS,
+      originalState: state,
+      reason: normalizedReason,
+    });
+    emitToUser(userId, "session:reauthRequired", {
+      userId,
+      sessionName,
+      full,
+      state,
+      reason: normalizedReason,
+      message: REAUTH_REQUIRED_SESSION_USER_MESSAGE,
+    });
+    emitToUser(userId, "sessions:changed", { userId });
+  } catch { }
+
+  try {
+    await logAudit("session_reauth_required", userId, "session", sessionName, {
+      state: String(state || ""),
+      reason: normalizedReason,
+    });
+  } catch { }
+}
+
+function clearInactiveChatState(chatKey: string) {
+  chatActivity.delete(chatKey);
+  chatHumanLock.delete(chatKey);
+  chatHumanDuration.delete(chatKey);
+  chatHumanLastActivity.delete(chatKey);
+  pausedChats.delete(chatKey);
+  inboundCount.delete(chatKey);
+  messageBuffer.delete(chatKey);
+
+  const chatHumanTimeout = chatHumanTimer.get(chatKey);
+  if (chatHumanTimeout) clearTimeout(chatHumanTimeout);
+  chatHumanTimer.delete(chatKey);
+
+  const debounceTimeout = messageTimeouts.get(chatKey);
+  if (debounceTimeout) clearTimeout(debounceTimeout);
+  messageTimeouts.delete(chatKey);
+
+  const humanModeTimeout = humanTimeouts.get(chatKey);
+  if (humanModeTimeout) clearTimeout(humanModeTimeout);
+  humanTimeouts.delete(chatKey);
+}
+
 // Limpeza periódica para evitar vazamento de memória em chats inativos
 function cleanupInactiveChats() {
-  const cutoff = Date.now() - CHAT_ACTIVITY_TTL_MS;
+  const now = Date.now();
+  const cutoff = now - CHAT_ACTIVITY_TTL_MS;
 
   for (const [key, last] of Array.from(chatActivity.entries())) {
     if (last >= cutoff) continue;
-
-    chatActivity.delete(key);
-    chatHumanLock.delete(key);
-    chatHumanDuration.delete(key);
-    chatHumanLastActivity.delete(key);
-
-    const ht = chatHumanTimer.get(key);
-    if (ht) clearTimeout(ht);
-    chatHumanTimer.delete(key);
-
-    const mt = messageTimeouts.get(key);
-    if (mt) clearTimeout(mt);
-    messageTimeouts.delete(key);
-
-    messageBuffer.delete(key);
-    inboundCount.delete(key);
+    clearInactiveChatState(key);
   }
 
   for (const [key, last] of Array.from(chatAIActivity.entries())) {
@@ -460,10 +814,24 @@ function cleanupInactiveChats() {
   }
 
   // Expira marcação de preload de IA para permitir reload periódico
-  const preloadCutoff = Date.now() - CHAT_AI_CACHE_TTL_MS;
+  const preloadCutoff = now - CHAT_AI_CACHE_TTL_MS;
   for (const [userId, ts] of Array.from(chatAICacheLoaded.entries())) {
     if (ts < preloadCutoff) {
       chatAICacheLoaded.delete(userId);
+    }
+  }
+
+  const numberCacheCutoff = now - NUMBER_CACHE_TTL_MS;
+  for (const [jid, ts] of Array.from(numberValidationCache.entries())) {
+    if (ts < numberCacheCutoff) {
+      numberValidationCache.delete(jid);
+    }
+  }
+
+  const crmCacheCutoff = now - CRM_UPDATE_TTL_MS;
+  for (const [cacheKey, entry] of Array.from(crmWriteCache.entries())) {
+    if (entry.lastWrite < crmCacheCutoff) {
+      crmWriteCache.delete(cacheKey);
     }
   }
 }
@@ -746,7 +1114,11 @@ async function runFlowActions(
         } catch { }
 
         try {
-          global.io?.emit("human_request", { chatId: ctx.chatId, userId: ctx.userId, sessionName: ctx.sessionName });
+          emitToUser(ctx.userId, "human_request", {
+            chatId: ctx.chatId,
+            userId: ctx.userId,
+            sessionName: ctx.sessionName,
+          });
         } catch { }
       }
     }
@@ -975,6 +1347,53 @@ function getHumanKey(
   return `USER${userId}_${sessionName}::${chatId}`;
 }
 
+type HumanActivationOptions = {
+  contactMessage?: string | null;
+  sendTransferMessage?: boolean;
+};
+
+const FALLBACK_REASON_LABELS: Record<FallbackReason, string> = {
+  user_request: "Cliente pediu atendimento humano",
+  repetition_limit: "Mensagens repetidas detectadas",
+  frustration_limit: "Frustração detectada",
+  ai_failure: "Falha da IA",
+  ai_uncertainty: "IA sem confiança suficiente",
+  ai_transfer: "IA pediu transferência",
+  cooldown: "Chat ainda em cooldown",
+  silence_window: "Horário de silêncio",
+};
+
+function getFallbackReasonLabel(reason?: FallbackReason) {
+  if (!reason) return "Fallback automático";
+  return FALLBACK_REASON_LABELS[reason] || "Fallback automático";
+}
+
+function emitSystemNote(
+  userId: string | number,
+  sessionName: string,
+  chatId: string,
+  note: {
+    type: string;
+    title?: string;
+    message: string;
+    timestamp?: number;
+    detail?: string | null;
+  }
+) {
+  try {
+    emitToUser(userId, "system_note", {
+      chatId,
+      userId,
+      sessionName,
+      type: note.type,
+      title: note.title || "Nota interna",
+      message: note.message,
+      detail: note.detail || null,
+      timestamp: note.timestamp || Date.now(),
+    });
+  } catch { }
+}
+
 /**
  *  Ativa modo humano
  * Expira quando ficar 5 min sem mensagem do cliente.
@@ -984,7 +1403,7 @@ export function enableHumanTemporarily(
   sessionName: string,
   chatId: string,
   durationMs: number | null = HUMAN_INACTIVITY_DEFAULT_MS,  // null = sem limite
-  customMessage?: string
+  options: HumanActivationOptions = {}
 ) {
   const key = getHumanKey(userId, sessionName, chatId);
 
@@ -1005,13 +1424,11 @@ export function enableHumanTemporarily(
     chatHumanTimer.set(key, timer);
   }
 
-  // OK MENSAGEM AUTOMÁTICA NO WHATSAPP
-  const messageToSend =
-    typeof customMessage === "string" && customMessage.trim().length > 0
-      ? customMessage
-      : " Conversa transferida para um atendente humano.";
+  const messageToSend = String(options.contactMessage || "").trim();
+  const shouldSendToContact =
+    options.sendTransferMessage === true && messageToSend.length > 0;
 
-  if (messageToSend) {
+  if (shouldSendToContact) {
     sendSystemMessage(
       userId,
       sessionName,
@@ -1021,7 +1438,7 @@ export function enableHumanTemporarily(
   }
 
   try {
-    global.io?.emit("human_state_changed", {
+    emitToUser(userId, "human_state_changed", {
       chatId,
       userId,
       sessionName,
@@ -1068,7 +1485,7 @@ export function registerHumanActivity(
 
   // Atualiza painel ao vivo com a duração correta
   try {
-    global.io?.emit("human_state_changed", {
+    emitToUser(userId, "human_state_changed", {
       chatId,
       userId,
       sessionName,
@@ -1124,21 +1541,18 @@ function tryDisableHumanByInactivity(
   // limpa estado de runtime (repetição/frustração) para evitar reativação imediata
   clearFallbackRuntime(Number(userId), sessionName, chatId);
 
-  // ===========================
-  // OK AVISA NO WHATSAPP (VOLTOU PRO BOT)
-  // ===========================
-  sendSystemMessage(
-    userId,
-    sessionName,
-    chatId,
-    " Conversa transferida para o assistente automático."
-  );
+  emitSystemNote(userId, sessionName, chatId, {
+    type: "bot_resume",
+    title: "Assistente automático",
+    message:
+      "O assistente automático reassumiu a conversa por inatividade no atendimento humano.",
+  });
 
   // ===========================
   // OK AVISA O PAINEL
   // ===========================
   try {
-    global.io?.emit("human_state_changed", {
+    emitToUser(userId, "human_state_changed", {
       chatId,
       userId,
       sessionName,
@@ -1183,39 +1597,50 @@ async function handleAutomaticFallback(options: {
     sessionName,
     chatId,
     duration,
-    decision.config.fallbackMessage
+    {
+      contactMessage: decision.config.fallbackMessage,
+      sendTransferMessage:
+        decision.config.sendTransferMessage === true &&
+        decision.config.internalNoteOnly !== true,
+    }
   );
 
   clearFallbackRuntime(userId, sessionName, chatId);
 
   if (decision.config.notifyPanel !== false) {
-    try {
-      io.to(`user:${userId}`).emit("fallback_triggered", {
-        chatId,
-        userId,
-        sessionName,
-        reason: decision.reason,
-        configUsed: decision.config.source === "db",
-        matchedPhrase: decision.matchedPhrase || null,
-        triggeredAt: Date.now(),
-      });
-    } catch { }
+    const label = getFallbackReasonLabel(decision.reason);
+    const detail = decision.matchedPhrase
+      ? `Frase que disparou: "${decision.matchedPhrase}".`
+      : null;
+    const message = detail
+      ? `${label}. ${detail}`
+      : label;
+
+    emitSystemNote(userId, sessionName, chatId, {
+      type: "fallback",
+      title: "Fallback automático",
+      message,
+      detail,
+      timestamp: Date.now(),
+    });
   }
 
   if (decision.config.notifyWebhook && decision.config.webhookUrl) {
     try {
-      await axios.post(
-        decision.config.webhookUrl,
-        {
+      await deliverWebhook({
+        userId,
+        url: decision.config.webhookUrl,
+        eventType: "fallback_handoff",
+        payload: {
           chatId,
           userId,
           sessionName,
           reason: decision.reason,
           configUsed: decision.config.source === "db",
+          matchedPhrase: decision.matchedPhrase || null,
           triggeredAt: Date.now(),
         },
-        { timeout: 5000 }
-      );
+      });
     } catch (err) {
       console.error("Erro ao acionar webhook de fallback:", err);
     }
@@ -1294,10 +1719,7 @@ export async function cleanupInactiveTokens() {
   console.log(` Limpeza concluída. Tokens removidos: ${removed}`);
 }
 
-// ===========================
-// REMOVER PASTA DA SESSÃO (SAFE)
-// ===========================
-async function safeRmDir(dir: string) {
+function killSessionBrowserProcesses(dir: string) {
   try {
     if (process.platform === "win32") {
       try {
@@ -1321,11 +1743,42 @@ async function safeRmDir(dir: string) {
           } catch { }
         }
       } catch { }
-    } else {
-      try {
-        execSync(`pkill -f "${dir}"`, { stdio: "ignore" });
-      } catch { }
+      return;
     }
+
+    try {
+      execSync(`pkill -f "${dir}"`, { stdio: "ignore" });
+    } catch { }
+  } catch { }
+}
+
+async function closeSessionRuntime(full: string, sessionDir?: string, clientOverride?: any) {
+  const trackedClient = clients.get(full);
+  const client = trackedClient || clientOverride;
+  if (client) {
+    try {
+      await client.close();
+    } catch { }
+    if (trackedClient) {
+      clients.delete(full);
+    }
+  }
+
+  if (sessionDir) {
+    killSessionBrowserProcesses(sessionDir);
+    clearChromiumLocks(sessionDir);
+  }
+
+  eventsAttached.delete(full);
+  clearSessionMemory(full);
+}
+
+// ===========================
+// REMOVER PASTA DA SESSÃO (SAFE)
+// ===========================
+async function safeRmDir(dir: string) {
+  try {
+    killSessionBrowserProcesses(dir);
 
     for (let i = 0; i < 5; i++) {
       try {
@@ -1351,17 +1804,7 @@ export async function deleteWppSession(userId: number, sessionName: string) {
   console.log(" Apagando sessão COMPLETA:", full);
 
   try {
-    const client = clients.get(full);
-    if (client) {
-      try {
-        await client.close();
-      } catch { }
-      clients.delete(full);
-    }
-
-    // ERRO remover eventos e memória
-    eventsAttached.delete(full);
-    clearSessionMemory(full);
+    await closeSessionRuntime(full, sessionDir);
 
     //  remover QR
     const qrPath = getQRPathFor(full);
@@ -1383,6 +1826,9 @@ export async function deleteWppSession(userId: number, sessionName: string) {
       `DELETE FROM sessions WHERE user_id = ? AND session_name = ?`,
       [userId, sessionName]
     );
+
+    resetReconnectTracking(full);
+    reconnecting.delete(full);
 
   console.log("OK Sessão totalmente removida:", full);
   logAudit("session_deleted", userId, "session", sessionName);
@@ -1596,7 +2042,6 @@ async function attachEvents(
       }
 
       try {
-        const { io } = await import("./server");
         const payload: any = {
           chatId,
           name:
@@ -1616,8 +2061,65 @@ async function attachEvents(
           payload.mediaBase64 = mediaBase64;
           payload.mediaText = body; // transcrição/texto original
         }
-        io.to(`user:${userId}`).emit("newMessage", payload);
+        emitToUser(userId, "newMessage", payload);
       } catch { }
+
+      const consentCommand = detectDispatchConsentCommand(body);
+      if (consentCommand) {
+        try {
+          const db = getDB();
+          if (consentCommand.type === "opt_out") {
+            await upsertDispatchSuppression({
+              userId,
+              phone: phoneForCtx,
+              reason: "opt_out_keyword",
+              source: "inbound_message",
+              notes: consentCommand.normalizedText,
+              db,
+            });
+            await logAudit("dispatch_opt_out", userId, "phone", phoneForCtx, {
+              session: shortName,
+              command: consentCommand.normalizedText,
+            });
+            await withTimeout(
+              client.sendText(
+                chatId,
+                "Tudo certo. Vou respeitar sua preferencia e parar os envios automáticos para este número. Se quiser voltar, responda VOLTAR."
+              ),
+              WPP_TIMEOUT_MS,
+              "sendText"
+            );
+          } else {
+            await clearDispatchSuppression({
+              userId,
+              phone: phoneForCtx,
+              source: "inbound_message",
+              notes: consentCommand.normalizedText,
+              db,
+            });
+            await logAudit("dispatch_opt_in", userId, "phone", phoneForCtx, {
+              session: shortName,
+              command: consentCommand.normalizedText,
+            });
+            await withTimeout(
+              client.sendText(
+                chatId,
+                "Perfeito. Este número voltou a poder receber comunicações automáticas."
+              ),
+              WPP_TIMEOUT_MS,
+              "sendText"
+            );
+          }
+        } catch (err) {
+          console.error("Erro ao processar opt-out/opt-in de disparo:", err);
+        }
+
+        messageBuffer.delete(chatKey);
+        try {
+          await client.stopTyping(chatId);
+        } catch { }
+        return;
+      }
 
       // =================================================
       //  MODO HUMANO ATIVO → NÃO RESPONDER
@@ -1863,8 +2365,7 @@ async function attachEvents(
 
           //  Avisar o painel que a IA está digitando
           try {
-            const { io } = await import("./server");
-            io.to(`user:${userId}`).emit("typing:start", { chatId, userId, sessionName: shortName });
+            emitToUser(userId, "typing:start", { chatId, userId, sessionName: shortName });
           } catch { }
 
           typingTimeout = setTimeout(() => {
@@ -1887,8 +2388,7 @@ async function attachEvents(
                 chatId,
                 onStream: async (delta: string) => {
                   try {
-                    const { io } = await import("./server");
-                    io.to(`user:${userId}`).emit("ai:stream", {
+                    emitToUser(userId, "ai:stream", {
                       chatId,
                       userId,
                       sessionName: shortName,
@@ -1980,8 +2480,7 @@ async function attachEvents(
 
           //  Avisar o painel que a IA parou de digitar
           try {
-            const { io } = await import("./server");
-            io.to(`user:${userId}`).emit("typing:stop", { chatId, userId, sessionName: shortName });
+            emitToUser(userId, "typing:stop", { chatId, userId, sessionName: shortName });
           } catch { }
         }
       }, 1000);
@@ -2002,8 +2501,18 @@ async function attachEvents(
 // ===========================
 //  RECONNECT SESSION
 // ===========================
-async function reconnectSession(userId: number, shortName: string) {
+async function reconnectSession(userId: number, shortName: string, reason: unknown = "disconnected") {
   const full = `USER${userId}_${shortName}`;
+  const TOKENS_DIR = process.env.TOKENS_DIR || "tokens";
+  const sessionDir = path.join(TOKENS_DIR, full);
+
+  if (reconnectCircuitOpen.has(full)) {
+    const circuit = reconnectCircuitOpen.get(full)!;
+    console.warn(
+      `🚫 Auto-reconnect bloqueado para ${full}; circuito aberto após ${circuit.attempts} tentativa(s).`
+    );
+    return;
+  }
 
   if (reconnecting.has(full)) {
     console.log("ALERTA Reconexão já em andamento:", full);
@@ -2011,11 +2520,18 @@ async function reconnectSession(userId: number, shortName: string) {
   }
 
   reconnecting.add(full);
+  let shouldRecreate = false;
 
   try {
     await withSessionLock(full, async () => {
       const attempts = (reconnectAttempts.get(full) || 0) + 1;
       reconnectAttempts.set(full, attempts);
+
+      if (attempts > RECONNECT_MAX_ATTEMPTS) {
+        await closeSessionRuntime(full, sessionDir);
+        await openReconnectCircuit(userId, shortName, reason, RECONNECT_MAX_ATTEMPTS);
+        return;
+      }
 
       // backoff simples (2s, 5s, 10s, 20s, 30s...)
       const delay = Math.min(30000, attempts === 1 ? 2000 : attempts * 5000);
@@ -2023,36 +2539,27 @@ async function reconnectSession(userId: number, shortName: string) {
       console.log(` Tentando reconectar ${full} (tentativa ${attempts}) em ${delay}ms...`);
       await wait(delay);
 
-      // fecha client antigo se existir
-      const old = clients.get(full);
-      if (old) {
-        try {
-          await old.close();
-        } catch { }
-        clients.delete(full);
-      }
-
-      // remove eventos e memória
-      eventsAttached.delete(full);
-      clearSessionMemory(full);
-
-      // atualiza status no banco
-      try {
-        const db = await getDB();
-        await db.run(
-          `UPDATE sessions SET status = 'reconnecting' WHERE user_id = ? AND session_name = ?`,
-          [userId, shortName]
-        );
-      } catch { }
+      await closeSessionRuntime(full, sessionDir);
+      await updateSessionStatus(userId, shortName, "reconnecting");
+      shouldRecreate = true;
     });
+
+    if (!shouldRecreate) return;
 
     // recria sessão com o MESMO token (fora do lock para evitar deadlock com attachEvents)
     console.log(" Recriando sessão:", full);
-    await createWppSession(userId, shortName);
+    await createWppSession(userId, shortName, { source: "auto_reconnect" });
 
     console.log("OK Reconexão concluída:", full);
   } catch (err) {
     console.error("ERRO Falha ao reconectar:", full, err);
+    const attempts = reconnectAttempts.get(full) || 0;
+    await closeSessionRuntime(full, sessionDir);
+    if (attempts >= RECONNECT_MAX_ATTEMPTS) {
+      await openReconnectCircuit(userId, shortName, err, attempts);
+    } else {
+      await updateSessionStatus(userId, shortName, "disconnected");
+    }
   } finally {
     reconnecting.delete(full);
   }
@@ -2061,13 +2568,16 @@ async function reconnectSession(userId: number, shortName: string) {
 // ===========================
 // CRIAR SESSÃO + STATUS EM TEMPO REAL
 // ===========================
-export async function createWppSession(
+async function doCreateWppSession(
   userId: number,
-  shortName: string
+  shortName: string,
+  options: CreateWppSessionOptions = {}
 ): Promise<{ sessionName: string; exists?: boolean }> {
   const full = `USER${userId}_${shortName}`;
   const TOKENS_DIR = process.env.TOKENS_DIR || "tokens";
   const sessionDir = path.join(TOKENS_DIR, full);
+  const source = options.source || "manual_create";
+  const automaticStart = isAutomaticSessionStart(source);
 
   if (clients.has(full)) {
     console.log("ALERTA Sessão já está carregada:", full);
@@ -2078,6 +2588,20 @@ export async function createWppSession(
   // garante registro no banco
   try {
     const db = await getDB();
+    const existingSession = await db.get<{ status: string | null }>(
+      `SELECT status FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+      [userId, shortName]
+    );
+
+    if (
+      automaticStart &&
+      String(existingSession?.status || "").toLowerCase() === BANNED_SESSION_STATUS
+    ) {
+      bannedSessions.add(full);
+      console.warn(`🚫 Ignorando ${source} para ${full}: sessao ja marcada como banned.`);
+      return { sessionName: full, exists: true };
+    }
+
     await db.run(
       `
       INSERT INTO sessions (user_id, session_name, status)
@@ -2088,10 +2612,12 @@ export async function createWppSession(
       `,
       [userId, shortName, userId, shortName]
     );
-    await db.run(
-      `UPDATE sessions SET status = 'pending' WHERE user_id = ? AND session_name = ?`,
-      [userId, shortName]
-    );
+    if (!existingSession || !automaticStart) {
+      await db.run(
+        `UPDATE sessions SET status = 'pending' WHERE user_id = ? AND session_name = ?`,
+        [userId, shortName]
+      );
+    }
   } catch (err) {
     console.warn("Não foi possível garantir sessão no banco:", err);
   }
@@ -2108,6 +2634,9 @@ export async function createWppSession(
 
   clearChromiumLocks(sessionDir);
   console.log(" Criando sessão:", full);
+
+  let client: wppconnect.Whatsapp | null = null;
+  let autoRecoveryBlockedState: string | null = null;
 
   const createOptions: any = {
     session: full,
@@ -2129,6 +2658,16 @@ export async function createWppSession(
     },
     catchQR: async (base64Qrimg, asciiQR, attempts, urlCode) => {
       console.log(` QR (${full}) tentativa ${attempts}`);
+      if (automaticStart) {
+        autoRecoveryBlockedState = autoRecoveryBlockedState || "notLogged";
+        try {
+          const qrPath = getQRPathFor(full);
+          if (fs.existsSync(qrPath)) fs.unlinkSync(qrPath);
+        } catch { }
+        console.warn(`⚠️ QR suprimido para ${full} durante ${source}.`);
+        return;
+      }
+
       console.log(" QR salvo em:", getQRPathFor(full));
       if (base64Qrimg) {
         const base64 = base64Qrimg.split("base64,")[1];
@@ -2136,8 +2675,7 @@ export async function createWppSession(
       }
 
       try {
-        const { io } = await import("./server");
-        io.to(`user:${userId}`).emit("session:qr", { userId, sessionName: shortName, full });
+        emitToUser(userId, "session:qr", { userId, sessionName: shortName, full });
       } catch { }
 
       if (urlCode) term(await qrcode.toString(urlCode, { type: "terminal" }));
@@ -2147,8 +2685,15 @@ export async function createWppSession(
 
       const db = await getDB();
 
+      if (automaticStart && status === "notLogged") {
+        autoRecoveryBlockedState = autoRecoveryBlockedState || status;
+        return;
+      }
+
       if (["inChat", "qrReadSuccess", "connected"].includes(status)) {
         console.log(" WHATSAPP CONECTADO — EMITINDO server:online");
+        autoRecoveryBlockedState = null;
+        resetReconnectTracking(full);
 
         await db.run(
           `UPDATE sessions SET status = 'connected' WHERE user_id = ? AND session_name = ?`,
@@ -2156,15 +2701,14 @@ export async function createWppSession(
         );
 
         try {
-          const { io } = await import("./server");
-          console.log(" io existe?", !!io);
-          io.to(`user:${userId}`).emit("server:online", { userId });
+          emitToUser(userId, "server:online", { userId });
         } catch (err) {
           console.error("ERRO ERRO AO EMITIR server:online", err);
         }
       }
 
       if (["browserClose", "disconnectedMobile", "serverClose"].includes(status)) {
+        if (reconnectCircuitOpen.has(full) || bannedSessions.has(full)) return;
         console.log(" WHATSAPP DESCONECTADO — EMITINDO server:offline");
 
         await db.run(
@@ -2173,8 +2717,7 @@ export async function createWppSession(
         );
 
         try {
-          const { io } = await import("./server");
-          io.to(`user:${userId}`).emit("server:offline", { userId });
+          emitToUser(userId, "server:offline", { userId });
         } catch (err) {
           console.error("ERRO ERRO AO EMITIR server:offline", err);
         }
@@ -2189,7 +2732,35 @@ export async function createWppSession(
     createOptions.whatsappVersion = envWaVersion;
   }
 
-  const client = await wppconnect.create(createOptions);
+  client = await wppconnect.create(createOptions);
+
+  if (automaticStart && autoRecoveryBlockedState) {
+    const recoveryProbe = await probeAutoRecoveryBlock(
+      client,
+      source,
+      autoRecoveryBlockedState
+    );
+    if (recoveryProbe.isBanned) {
+      await markSessionAsBanned(
+        userId,
+        shortName,
+        full,
+        autoRecoveryBlockedState,
+        recoveryProbe.reason,
+        client
+      );
+    } else {
+      await markSessionAsReauthRequired(
+        userId,
+        shortName,
+        full,
+        autoRecoveryBlockedState,
+        recoveryProbe.reason,
+        client
+      );
+    }
+    return { sessionName: full };
+  }
 
   await attachEvents(client, userId, shortName);
 
@@ -2198,8 +2769,7 @@ export async function createWppSession(
 
     //  Emitir estado exato (conexão, reconexão, etc.)
     try {
-      const { io } = await import("./server");
-      io.to(`user:${userId}`).emit("session:stateChange", {
+      emitToUser(userId, "session:stateChange", {
         userId,
         sessionName: shortName,
         full,
@@ -2211,7 +2781,28 @@ export async function createWppSession(
     //  AUTO RECONNECT
     // ===========================
     try {
-      if (isDisconnectedState(state)) {
+      const normalizedState = String(state || "").toLowerCase();
+
+      if (bannedSessions.has(full) && !normalizedState.includes("connected")) {
+        return;
+      }
+
+      if (isDisconnectedState(state) || hasBanIndicator(state)) {
+        if (reconnectCircuitOpen.has(full)) {
+          console.warn("🚫 Circuit breaker aberto, ignorando auto-reconnect:", full);
+          return;
+        }
+
+        const banSignal = await detectBanSignal(client, state);
+        if (banSignal.isBanned) {
+          await markSessionAsBanned(userId, shortName, full, state, banSignal.reason);
+          return;
+        }
+
+        if (!isDisconnectedState(state)) {
+          return;
+        }
+
         console.log(" Estado indica desconexão -> auto-reconnect:", full);
 
         // marca offline
@@ -2225,17 +2816,16 @@ export async function createWppSession(
 
         // emite offline
         try {
-          const { io } = await import("./server");
-          io.to(`user:${userId}`).emit("server:offline", { userId });
+          emitToUser(userId, "server:offline", { userId });
         } catch { }
 
         // tenta reconectar
-        reconnectSession(userId, shortName);
+        reconnectSession(userId, shortName, state);
       }
 
       // reset tentativas quando conectar
-      if (String(state).toLowerCase().includes("connected")) {
-        reconnectAttempts.delete(full);
+      if (normalizedState.includes("connected")) {
+        resetReconnectTracking(full);
       }
     } catch { }
   });
@@ -2246,6 +2836,34 @@ export async function createWppSession(
   await primeChatAICache(userId);
   logAudit("session_created", userId, "session", shortName);
   return { sessionName: full };
+}
+
+export async function createWppSession(
+  userId: number,
+  shortName: string,
+  options: CreateWppSessionOptions = {}
+): Promise<{ sessionName: string; exists?: boolean }> {
+  const full = `USER${userId}_${shortName}`;
+
+  if (clients.has(full)) {
+    console.log("ALERTA Sessão já está carregada:", full);
+    await primeFallbackCache(userId, shortName);
+    return { sessionName: full, exists: true };
+  }
+
+  const inFlight = sessionCreationPromises.get(full);
+  if (inFlight) {
+    console.log("ALERTA Criação de sessão já em andamento:", full);
+    await inFlight;
+    return { sessionName: full, exists: true };
+  }
+
+  const creationPromise = doCreateWppSession(userId, shortName, options).finally(() => {
+    sessionCreationPromises.delete(full);
+  });
+
+  sessionCreationPromises.set(full, creationPromise);
+  return creationPromise;
 }
 
 

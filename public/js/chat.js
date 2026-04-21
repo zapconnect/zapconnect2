@@ -142,17 +142,19 @@ function avatarColor(name) {
 
 function buildAvatarHtml(chat) {
     const name = chat?.name || "Contato";
-    const initials = avatarInitials(name);
+    const initials = escapeHtml(avatarInitials(name));
     const color = avatarColor(name);
     const hasPic = !!chat?.pic;
+    const safeName = escapeHtml(name);
+    const safePic = escapeHtml(chat?.pic || "");
 
     return `
       <div class="avatar-shell">
         ${hasPic ? `
           <img
             class="avatar avatar-img"
-            src="${chat.pic}"
-            alt="${escapeHtml(name)}"
+            src="${safePic}"
+            alt="${safeName}"
             loading="lazy"
             onerror="this.style.display='none';const f=this.nextElementSibling;if(f){f.classList.remove('hidden');}"
           >
@@ -208,6 +210,33 @@ function ensureChat(chatId, name) {
     }
 }
 
+function appendInternalSystemNote(note) {
+    const chatId = note?.chatId;
+    if (!chatId) return;
+
+    const body = String(note.message || note.body || "").trim();
+    if (!body) return;
+
+    ensureChat(chatId, note.name);
+
+    chats[chatId].msgs.push({
+        body,
+        timestamp: note.timestamp || note.triggeredAt || Date.now(),
+        fromBot: true,
+        system: true,
+        systemNote: true,
+        noteTitle: String(note.title || "Nota interna"),
+        noteDetail: note.detail ? String(note.detail) : "",
+        noteType: String(note.type || "system"),
+    });
+
+    if (currentChat === chatId) {
+        renderMessages(chatId);
+    }
+
+    renderChatList();
+}
+
 /* ==========================================================
    🔤 PREVIEW DA ÚLTIMA MENSAGEM
    ========================================================== */
@@ -255,7 +284,8 @@ function renderChatList(filter = "") {
     cont.innerHTML = "";
 
     Object.keys(chats).forEach(id => {
-        if (filter && !chats[id].name.toLowerCase().includes(filter.toLowerCase())) return;
+        const chatName = String(chats[id].name || "");
+        if (filter && !chatName.toLowerCase().includes(filter.toLowerCase())) return;
 
         const div = document.createElement("div");
         div.className =
@@ -271,17 +301,21 @@ function renderChatList(filter = "") {
         const lastTime = fmtLastTime(chats[id].lastMsg?.timestamp);
         const unread = chats[id].unread || 0;
         const avatar = buildAvatarHtml(chats[id]);
+        const safeName = escapeHtml(chatName || "Sem nome");
+        const safePreview = escapeHtml(preview);
+        const safeLastTime = escapeHtml(lastTime);
+        const safeUnread = unread > 99 ? "99+" : String(unread);
 
         div.innerHTML = `
             ${avatar}
             <div class="chat-infos">
                 <div class="chat-name-row">
-                    <div class="chat-name">${chats[id].name}</div>
-                    <div class="chat-time">${lastTime}</div>
+                    <div class="chat-name">${safeName}</div>
+                    <div class="chat-time">${safeLastTime}</div>
                 </div>
                 <div class="chat-preview-row">
-                    <div class="chat-preview">${preview}</div>
-                    ${unread > 0 ? `<div class="chat-unread">${unread > 99 ? "99+" : unread}</div>` : ""}
+                    <div class="chat-preview">${safePreview}</div>
+                    ${unread > 0 ? `<div class="chat-unread">${safeUnread}</div>` : ""}
                 </div>
             </div>
         `;
@@ -452,25 +486,43 @@ function renderMessages(chatId) {
         }
 
         const row = document.createElement("div");
+        const isSystemNote = msg.systemNote === true;
         const isSystem = msg.system === true;
-        row.className = "msg-row " + (isSystem ? "system-msg" : (fromMe ? "from-user" : "from-bot"));
+        row.className = "msg-row " + (isSystemNote ? "system-note-row" : (isSystem ? "system-msg" : (fromMe ? "from-user" : "from-bot")));
         row.dataset.msgIdx = idx;
 
         const bubble = document.createElement("div");
-        bubble.className = "msg-bubble";
+        let appendDefaultMeta = true;
 
-        if (isSystem) {
+        if (isSystemNote) {
+            bubble.className = "system-note-card";
+            bubble.innerHTML = `
+                <div class="system-note-title">${escapeHtml(msg.noteTitle || "Nota interna")}</div>
+                <div class="system-note-body">${escapeHtml(msg.body || "")}</div>
+                ${msg.noteDetail ? `<div class="system-note-detail">${escapeHtml(msg.noteDetail)}</div>` : ""}
+                <div class="system-note-time">${escapeHtml(fmtTime(msg.timestamp))}</div>
+            `;
+            appendDefaultMeta = false;
+        } else {
+            bubble.className = "msg-bubble";
+        }
+
+        if (isSystemNote) {
+            // layout já montado acima
+        } else if (isSystem) {
             bubble.textContent = msg.body || "";
         } else if (msg.isMedia || msg.mimetype) {
             msg.isMedia = true;
             const mime = msg.mimetype || "";
             const mediaBase64 = msg.mediaBase64 || msg.body || "";
+            const safeMime = escapeHtml(mime);
+            const safeMediaText = escapeHtml(msg.mediaText || "");
 
             if (mime.startsWith("image/")) {
                 row.classList.add("msg-photo");
                 bubble.classList.add("msg-bubble-media");
                 bubble.innerHTML = `
-                    <img class="msg-img" src="data:${mime};base64,${mediaBase64}" alt="imagem enviada">
+                    <img class="msg-img" src="data:${safeMime};base64,${mediaBase64}" alt="imagem enviada">
                 `;
             } else if (mime.startsWith("audio/") || mime.includes("opus")) {
                 row.classList.add("msg-audio-row");
@@ -483,15 +535,15 @@ function renderMessages(chatId) {
                     <div class="audio-card">
                         <div class="audio-wave">${bars}</div>
                         <audio controls class="msg-audio">
-                            <source src="data:${mime};base64,${mediaBase64}" type="${mime}">
+                            <source src="data:${safeMime};base64,${mediaBase64}" type="${safeMime}">
                         </audio>
-                        ${msg.mediaText ? `<p class="audio-caption">${msg.mediaText}</p>` : ""}
+                        ${msg.mediaText ? `<p class="audio-caption">${safeMediaText}</p>` : ""}
                     </div>
                 `;
             } else if (mime.startsWith("video/")) {
                 row.classList.add("msg-video-row");
                 bubble.classList.add("msg-bubble-media");
-                bubble.innerHTML = `<video controls class="msg-video" src="data:${mime};base64,${mediaBase64}"></video>`;
+                bubble.innerHTML = `<video controls class="msg-video" src="data:${safeMime};base64,${mediaBase64}"></video>`;
             } else {
                 row.classList.add("msg-doc-row");
                 bubble.classList.add("msg-doc-card");
@@ -499,11 +551,11 @@ function renderMessages(chatId) {
                 const fileType = (mime.split("/")[1] || "file").toUpperCase();
                 bubble.innerHTML = `
                     <div class="doc-card">
-                        <div class="doc-icon">${fileType.slice(0, 3)}</div>
+                        <div class="doc-icon">${escapeHtml(fileType.slice(0, 3))}</div>
                         <div class="doc-body">
                             <div class="doc-name">${escapeHtml(filename)}</div>
-                            <div class="doc-meta">${mime || "Arquivo"}</div>
-                            <a class="doc-download" download href="data:${mime};base64,${msg.body}">⬇ Baixar</a>
+                            <div class="doc-meta">${safeMime || "Arquivo"}</div>
+                            <a class="doc-download" download href="data:${safeMime};base64,${msg.body}">⬇ Baixar</a>
                         </div>
                     </div>
                 `;
@@ -520,10 +572,12 @@ function renderMessages(chatId) {
             }
         }
 
-        const meta = document.createElement("div");
-        meta.className = "meta";
-        meta.textContent = fmtTime(msg.timestamp);
-        bubble.appendChild(meta);
+        if (appendDefaultMeta) {
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            meta.textContent = fmtTime(msg.timestamp);
+            bubble.appendChild(meta);
+        }
 
         row.appendChild(bubble);
         box.appendChild(row);
@@ -944,7 +998,6 @@ socket.on("newMessage", msg => {
 socket.on("fallback_triggered", data => {
     if (!data || data.userId !== window.USER_ID) return;
     const { chatId, reason, matchedPhrase, triggeredAt } = data;
-    ensureChat(chatId);
 
     const labels = {
         user_request: "Cliente pediu humano",
@@ -958,30 +1011,19 @@ socket.on("fallback_triggered", data => {
     };
 
     const label = labels[reason] || "Fallback automático";
-    const detail = matchedPhrase ? ` | Detalhe: "${matchedPhrase}"` : "";
-
-    const systemMsg = {
-        body: `⚠️ Fallback ativado (${label})${detail}`,
+    appendInternalSystemNote({
+        chatId,
+        type: "fallback",
+        title: "Fallback automático",
+        message: `Fallback ativado (${label}).`,
+        detail: matchedPhrase ? `Frase que disparou: "${matchedPhrase}".` : "",
         timestamp: triggeredAt || Date.now(),
-        fromBot: true,
-        system: true,
-    };
+    });
+});
 
-    chats[chatId].msgs.push(systemMsg);
-
-    // mantém preview informativo
-    chats[chatId].lastMsg = {
-        body: systemMsg.body,
-        fromMe: false,
-        timestamp: systemMsg.timestamp,
-        isMedia: false,
-        mimetype: ""
-    };
-
-    if (currentChat === chatId) {
-        renderMessages(chatId);
-    }
-    renderChatList();
+socket.on("system_note", data => {
+    if (!data || data.userId !== window.USER_ID) return;
+    appendInternalSystemNote(data);
 });
 
 socket.on("chat_ai_state", ({ chatId, state }) => {

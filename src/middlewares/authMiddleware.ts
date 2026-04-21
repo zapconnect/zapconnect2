@@ -1,10 +1,18 @@
 import { Request, Response, NextFunction } from "express";
-import { getDB } from "../database";
+import {
+  clearAuthCookie,
+  ensureFreshUserSession,
+  findUserByToken,
+  getTokenExpiresAt,
+  isSessionExpired,
+  setAuthCookie,
+} from "../utils/authSession";
 
 const ALLOW_NOT_VERIFIED = [
   "/verify-email-required",
   "/auth/resend-verify-email",
   "/auth/logout",
+  "/auth/me",
 ];
 
 export async function authMiddleware(
@@ -22,28 +30,49 @@ export async function authMiddleware(
       return res.status(401).json({ error: "Não autenticado" });
     }
 
-    const db = getDB();
-
-    const user = await db.get<any>(`SELECT * FROM users WHERE token = ?`, [
-      token,
-    ]);
+    const user = await findUserByToken(token);
 
     if (!user) {
+      clearAuthCookie(res);
       if (req.headers.accept?.includes("text/html")) {
         return res.redirect("/login");
       }
       return res.status(401).json({ error: "Token inválido" });
     }
 
-    // ✅ salva o user no req ANTES de qualquer bloqueio
-    (req as any).user = user;
+    if (isSessionExpired(user)) {
+      clearAuthCookie(res);
+      if (req.headers.accept?.includes("text/html")) {
+        return res.redirect("/login");
+      }
+      return res.status(401).json({ error: "Sessão expirada", redirect: "/login" });
+    }
 
-    // ✅ libera algumas rotas mesmo sem verificação
+    let reqUser = user;
+
+    try {
+      const refreshed = await ensureFreshUserSession(user);
+      const currentExpiry = getTokenExpiresAt(user);
+
+      if (refreshed.token !== user.token || refreshed.expiresAt !== currentExpiry) {
+        setAuthCookie(res, refreshed.token);
+        reqUser = {
+          ...user,
+          token: refreshed.token,
+          token_expires_at: refreshed.expiresAt,
+        };
+      }
+    } catch (refreshErr) {
+      console.error("Erro ao renovar sessão:", refreshErr);
+    }
+
+    (req as any).user = reqUser;
+
     if (ALLOW_NOT_VERIFIED.includes(req.path)) {
       return next();
     }
 
-    const emailVerified = Number(user.email_verified) === 1;
+    const emailVerified = Number(reqUser.email_verified) === 1;
 
     if (!emailVerified) {
       if (req.headers.accept?.includes("text/html")) {

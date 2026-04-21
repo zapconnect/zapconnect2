@@ -22,12 +22,22 @@ let isSending = false;
 let isPaused = false;
 let cancelRequested = false;
 let isPreviewing = false;
+let shownWarnings = new Set();
 const btnStart = document.getElementById("btnStart");
 const btnPause = document.getElementById("btnPause");
 const btnCancel = document.getElementById("btnCancel");
 btnStart.addEventListener("click", startDisparo);
 btnPause.addEventListener("click", togglePause);
 btnCancel.addEventListener("click", cancelDisparo);
+
+function notifyWarnings(warnings = []) {
+  warnings.forEach((warning) => {
+    const normalized = String(warning || "").trim();
+    if (!normalized || shownWarnings.has(normalized)) return;
+    shownWarnings.add(normalized);
+    notify(normalized, "warn");
+  });
+}
 
 async function waitWhilePausedOrCancelled() {
   while (isPaused) {
@@ -64,10 +74,38 @@ async function sendWithRetry(payload, maxRetries = 2) {
         body: JSON.stringify(payload),
       });
 
-      const data = await resp.json();
-      if (!resp.ok || data.error) throw new Error();
-      return true;
-    } catch {
+      const data = await resp.json().catch(() => ({}));
+      const warnings = Array.isArray(data?.warnings)
+        ? data.warnings.filter((warning) => typeof warning === "string" && warning.trim())
+        : [];
+      notifyWarnings(warnings);
+
+      if (resp.ok && !data.error) {
+        return {
+          ok: true,
+          warnings,
+          paused: Boolean(data?.paused),
+          stoppedReason: data?.stoppedReason || null,
+        };
+      }
+
+      const error = new Error(data?.error || `Falha ao enviar (HTTP ${resp.status})`);
+      error.retryable = data?.retryable !== false && resp.status >= 500;
+      error.warnings = warnings;
+      error.paused = Boolean(data?.paused);
+      error.requiresConfirmation = Boolean(data?.requiresConfirmation);
+      throw error;
+    } catch (err) {
+      if (err?.retryable === false) {
+        return {
+          ok: false,
+          error: err?.message || "Falha ao enviar.",
+          warnings: Array.isArray(err?.warnings) ? err.warnings : [],
+          paused: Boolean(err?.paused),
+          requiresConfirmation: Boolean(err?.requiresConfirmation),
+        };
+      }
+
       attempt++;
       if (attempt > maxRetries) break;
 
@@ -80,7 +118,69 @@ async function sendWithRetry(payload, maxRetries = 2) {
     }
   }
 
-  return false;
+  return {
+    ok: false,
+    error: "Falha ao enviar após várias tentativas.",
+    paused: false,
+    requiresConfirmation: false,
+    warnings: [],
+  };
+}
+
+async function runDisparoRiskCheck(payload) {
+  try {
+    const resp = await fetch("/api/disparo/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await resp.json().catch(() => ({}));
+    const warnings = Array.isArray(data?.warnings)
+      ? data.warnings.filter((warning) => typeof warning === "string" && warning.trim())
+      : [];
+    notifyWarnings(warnings);
+
+    return {
+      ok: resp.ok && !data?.error,
+      error: data?.error || null,
+      warnings,
+      blocked: Boolean(data?.blocked),
+      requiresConfirmation: Boolean(data?.requiresConfirmation),
+      session: data?.session || null,
+      listQuality: data?.listQuality || null,
+    };
+  } catch {
+    return {
+      ok: false,
+      error: "Falha ao validar o risco do disparo.",
+      warnings: [],
+      blocked: true,
+      requiresConfirmation: false,
+      session: null,
+      listQuality: null,
+    };
+  }
+}
+
+function shouldStopDisparo(result) {
+  if (!result || result.ok) return false;
+  if (result.paused || result.requiresConfirmation) return true;
+
+  const message = String(result.error || "").toLowerCase();
+  return (
+    message.includes("envios só são permitidos") ||
+    message.includes("nenhuma sessão ativa") ||
+    message.includes("nenhuma sessão conectada") ||
+    message.includes("campanha bloqueada") ||
+    message.includes("pausada para campanha") ||
+    message.includes("limite diario seguro") ||
+    message.includes("fase de aquecimento") ||
+    message.includes("limite seguro atual") ||
+    message.includes("fora do whatsapp") ||
+    message.includes("baixa qualidade da lista") ||
+    message.includes("muitos numeros inativos")
+  );
 }
 
 // ===================================================
@@ -162,6 +262,38 @@ async function startDisparo() {
     return;
   }
 
+  shownWarnings = new Set();
+
+  let largeBatchConfirmed = false;
+  let riskCheck = await runDisparoRiskCheck({
+    numbers,
+    message,
+    confirmLargeBatch: false,
+  });
+
+  if (riskCheck.requiresConfirmation) {
+    const confirmed = confirm(
+      riskCheck.error || `Confirmar envio para ${numbers.length} contatos?`
+    );
+    if (!confirmed) {
+      resetButton(originalLabel);
+      return;
+    }
+
+    largeBatchConfirmed = true;
+    riskCheck = await runDisparoRiskCheck({
+      numbers,
+      message,
+      confirmLargeBatch: true,
+    });
+  }
+
+  if (!riskCheck.ok) {
+    notify(riskCheck.error || "Disparo bloqueado pela politica de envio.", "error");
+    resetButton(originalLabel);
+    return;
+  }
+
   isSending = true;
   isPreviewing = false;
   isPaused = false;
@@ -199,18 +331,25 @@ async function startDisparo() {
       await waitWhilePausedOrCancelled();
       setProgressStatus(`Enviando para ${num}...`);
 
-      const ok = await sendWithRetry({
+      const result = await sendWithRetry({
         number: num,
         message,
         file: fileBase64,
         filename,
+        confirmLargeBatch: largeBatchConfirmed,
       });
 
-      if (ok) {
+      if (result.ok) {
         successCount++;
       } else {
         failCount++;
-        setProgressStatus(`Falha ao enviar para ${num} (tentativas esgotadas)`);
+        const failureMessage = result.error || "Falha ao enviar.";
+        setProgressStatus(`Falha ao enviar para ${num}: ${failureMessage}`);
+        notify(`⚠️ ${num}: ${failureMessage}`, "warn");
+
+        if (shouldStopDisparo(result)) {
+          throw new Error(failureMessage);
+        }
       }
 
       updateProgressUI({
@@ -221,7 +360,7 @@ async function startDisparo() {
         startedAt,
       });
 
-      await controlledSleep(3000); // ⏳ anti-ban
+      await controlledSleep(3000); // ⏳ cooldown entre envios
     }
 
     setProgressStatus("🎉 Disparo finalizado!");
@@ -267,6 +406,7 @@ async function startDisparo() {
 function resetButton(originalLabel) {
   isSending = false;
   isPreviewing = false;
+  shownWarnings = new Set();
   btnStart.disabled = false;
   btnStart.classList.remove("is-busy");
   btnStart.innerHTML =

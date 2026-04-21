@@ -264,6 +264,7 @@ th {
 
 .status.pending { color: #facc15; font-weight: 700; }
 .status.sent { color: #22c55e; font-weight: 700; }
+.status.failed { color: #f87171; font-weight: 700; }
 
 .recurrence-pill {
   display: inline-flex;

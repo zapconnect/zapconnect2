@@ -13,7 +13,7 @@
     <header class="page-header">
       <div>
         <h1>Fallback automático para atendimento humano</h1>
-        <p>Defina apenas a mensagem de transferência e por quanto tempo o modo humano permanece ativo.</p>
+        <p>Escolha se o fallback só registra uma nota interna no painel ou se também envia texto para o contato.</p>
       </div>
       <div class="header-actions">
         <button class="btn-ghost small" onclick="window.location.href='/painel'">
@@ -35,9 +35,21 @@
 
     <section class="grid">
       <div class="card">
-        <div class="card-title">Mensagem automática</div>
-        <label>Mensagem enviada ao ativar atendimento humano</label>
+        <div class="card-title">Transferência para humano</div>
+        <label class="switch-line">
+          <input id="internalNoteOnly" type="checkbox" checked>
+          <span>Registrar só nota interna no painel</span>
+        </label>
+        <small class="muted">Recomendado para evitar mensagens automáticas de sistema no WhatsApp do contato.</small>
+
+        <label class="switch-line">
+          <input id="sendTransferMessage" type="checkbox">
+          <span>Também enviar mensagem para o contato</span>
+        </label>
+
+        <label>Mensagem opcional enviada ao ativar atendimento humano</label>
         <textarea id="fallbackMessage" placeholder="Vou encaminhar você para um atendente humano, aguarde um momento."></textarea>
+        <small class="muted">Se o envio ao contato estiver desligado ou a mensagem ficar vazia, a transferência será interna.</small>
       </div>
 
       <div class="card">

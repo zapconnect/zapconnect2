@@ -169,6 +169,7 @@
             <option value="all">Todos</option>
             <option value="pending">Pendentes</option>
             <option value="sent">Enviados</option>
+            <option value="failed">Falhos</option>
           </select>
         </div>
         <div class="field">
@@ -834,9 +835,19 @@
         });
 
         const data = await res.json();
+        const warnings = Array.isArray(data?.warnings)
+          ? data.warnings.filter((warning) => typeof warning === "string" && warning.trim())
+          : [];
+        const skippedCount = Array.isArray(data?.skipped)
+          ? data.skipped.length
+          : Number(data?.skipped || 0);
 
         if (data.ok) {
           setResult(editingId ? "✅ Agendamento atualizado!" : "✅ Agendamento criado com sucesso!", true);
+          warnings.forEach((warning) => notify(warning, "warning"));
+          if (skippedCount > 0) {
+            notify(`${skippedCount} contato(s) foram removidos pelas regras de seguranca.`, "warning");
+          }
           // Limpar formulário
           document.getElementById("nums").value = "";
           document.getElementById("msg").value = "";
@@ -852,6 +863,10 @@
           existingFilename = null;
           btnEl.innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
         } else {
+          warnings.forEach((warning) => notify(warning, "warning"));
+          if (skippedCount > 0) {
+            notify(`${skippedCount} contato(s) foram removidos pelas regras de seguranca.`, "warning");
+          }
           setResult("❌ " + (data.error || "Erro ao agendar"), false);
           btnEl.innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
         }
@@ -926,7 +941,8 @@
             ? nums.map((c) => `${c.number || ""} <span class="pill-personalized">msg personalizada</span>`).join("<br>")
             : nums.join("<br>");
           const recurrenceHtml = recurrenceBadge(row.recurrence);
-          const actionButtons = row.status === "pending"
+          const isPending = row.status === "pending";
+          const actionButtons = isPending
             ? `<button class="btn-edit" onclick="editar(${row.id})">
                  <i class="fa-solid fa-pen"></i> Editar
                </button>
@@ -955,11 +971,11 @@
             </td>
             <td>
               <span class="countdown" data-send="${row.send_at}" data-status="${row.status}">
-                ${row.status === "pending" ? formatarCountdown(row.send_at) : "-"}
+                ${isPending ? formatarCountdown(row.send_at) : "-"}
               </span>
             </td>
             <td class="status ${row.status}">
-              ${row.status === "pending" ? "⏳ Pendente" : "✅ Enviado"}
+              ${formatStatusLabel(row.status)}
             </td>
             <td class="action-cell">
               ${actionButtons}
@@ -1055,6 +1071,17 @@
       </div>`;
     }
 
+    function formatStatusLabel(status) {
+      switch (status) {
+        case "pending":
+          return "⏳ Pendente";
+        case "failed":
+          return "❌ Falhou";
+        default:
+          return "✅ Enviado";
+      }
+    }
+
     async function verDetalhes(id) {
       const modal = document.getElementById("detailsModal");
       const body = document.getElementById("detailsBody");
@@ -1087,7 +1114,7 @@
 
         body.innerHTML = `
           <div class="details-head">
-            <div><strong>Enviado em:</strong> ${sentAt}</div>
+            <div><strong>Processado em:</strong> ${sentAt}</div>
             <div><strong>Sucesso:</strong> ${success}</div>
             <div><strong>Falhas:</strong> ${failure}</div>
           </div>

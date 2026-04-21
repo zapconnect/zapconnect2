@@ -339,8 +339,21 @@
 }
 
 .badge-reconnecting { background: rgba(242,201,76,.12); color: #f2c94c; border: 1px solid rgba(242,201,76,.25); }
+.badge-circuit-open { background: rgba(255,145,77,.14); color: #ff914d; border: 1px solid rgba(255,145,77,.3); }
+.badge-banned      { background: rgba(255,120,120,.16); color: #ff9d9d; border: 1px solid rgba(255,120,120,.32); }
 .badge-pending      { background: rgba(90,200,250,.12);  color: #5ac8fa; border: 1px solid rgba(90,200,250,.25); }
 .badge-disconnected { background: rgba(255,95,95,.12);   color: #ff7070; border: 1px solid rgba(255,95,95,.25); }
+
+.session-note {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9599b4;
+}
+
+.session-note-warning {
+  color: #ffb07a;
+}
 
 .session-actions { display: flex; align-items: center; gap: 8px; }
 

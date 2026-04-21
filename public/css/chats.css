@@ -248,6 +248,46 @@ body{
   padding:6px 10px;
 }
 
+.system-note-row{
+  justify-content:center;
+}
+.system-note-card{
+  width:min(100%, 560px);
+  background:rgba(148,163,184,0.12);
+  border:1px solid rgba(148,163,184,0.22);
+  border-radius:14px;
+  padding:10px 12px;
+  color:#dbe7f3;
+  box-shadow:none;
+}
+.system-note-title{
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  color:#94a3b8;
+  margin-bottom:4px;
+  font-weight:700;
+}
+.system-note-body,
+.system-note-detail{
+  white-space:pre-wrap;
+  line-height:1.45;
+}
+.system-note-body{
+  font-size:13px;
+}
+.system-note-detail{
+  margin-top:6px;
+  font-size:12px;
+  color:#bfd0e2;
+}
+.system-note-time{
+  margin-top:8px;
+  font-size:11px;
+  color:#94a3b8;
+  text-align:right;
+}
+
 .msg-bubble{
   max-width:95% !important;
   padding:6px 8px 8px;

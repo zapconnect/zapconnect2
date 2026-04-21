@@ -16,6 +16,8 @@ export type FallbackReason =
 export interface FallbackSettings {
   enableFallback: boolean;
   fallbackMessage: string;
+  sendTransferMessage: boolean;
+  internalNoteOnly: boolean;
   fallbackSensitivity: FallbackSensitivity;
   maxRepetitions: number;
   maxFrustration: number;
@@ -54,6 +56,8 @@ export interface FallbackDecision {
 const DEFAULT_FALLBACK_SETTINGS: FallbackSettings = {
   enableFallback: true,
   fallbackMessage: "Vou encaminhar você para um atendente humano, aguarde um momento.",
+  sendTransferMessage: false,
+  internalNoteOnly: true,
   fallbackSensitivity: "medium",
   maxRepetitions: 3,
   maxFrustration: 2,
@@ -275,7 +279,18 @@ export async function loadFallbackSettings(
 
   const settings: FallbackSettings = {
     enableFallback: row.enable_fallback !== 0,
-    fallbackMessage: row.fallback_message || DEFAULT_FALLBACK_SETTINGS.fallbackMessage,
+    fallbackMessage:
+      row.fallback_message === null || row.fallback_message === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.fallbackMessage
+        : String(row.fallback_message),
+    sendTransferMessage:
+      row.send_transfer_message === null || row.send_transfer_message === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.sendTransferMessage
+        : row.send_transfer_message !== 0,
+    internalNoteOnly:
+      row.internal_note_only === null || row.internal_note_only === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.internalNoteOnly
+        : row.internal_note_only !== 0,
     fallbackSensitivity: (row.fallback_sensitivity as FallbackSensitivity) || DEFAULT_FALLBACK_SETTINGS.fallbackSensitivity,
     maxRepetitions: row.max_repetitions ?? DEFAULT_FALLBACK_SETTINGS.maxRepetitions,
     maxFrustration: row.max_frustration ?? DEFAULT_FALLBACK_SETTINGS.maxFrustration,
@@ -318,6 +333,8 @@ export async function saveFallbackSettings(
       session_name,
       enable_fallback,
       fallback_message,
+      send_transfer_message,
+      internal_note_only,
       fallback_sensitivity,
       max_repetitions,
       max_frustration,
@@ -333,10 +350,12 @@ export async function saveFallbackSettings(
       alert_phone,
       alert_message,
       fallback_cooldown_minutes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       enable_fallback = VALUES(enable_fallback),
       fallback_message = VALUES(fallback_message),
+      send_transfer_message = VALUES(send_transfer_message),
+      internal_note_only = VALUES(internal_note_only),
       fallback_sensitivity = VALUES(fallback_sensitivity),
       max_repetitions = VALUES(max_repetitions),
       max_frustration = VALUES(max_frustration),
@@ -358,6 +377,8 @@ export async function saveFallbackSettings(
       sessionName,
       payload.enableFallback ? 1 : 0,
       payload.fallbackMessage,
+      payload.sendTransferMessage ? 1 : 0,
+      payload.internalNoteOnly ? 1 : 0,
       payload.fallbackSensitivity,
       payload.maxRepetitions,
       payload.maxFrustration,

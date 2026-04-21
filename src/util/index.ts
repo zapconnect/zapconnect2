@@ -1,9 +1,16 @@
-import { type Whatsapp } from '@wppconnect-team/wppconnect';
+import { type Whatsapp } from "@wppconnect-team/wppconnect";
+import {
+  assertSessionCanSend,
+  calculateTypingDelay,
+  getMessageContinuationDelay,
+  getPostTypingDelay,
+  recordSessionSend,
+} from "../utils/humanDelay";
 
 /**
- * ✂️ Divide mensagens em partes legíveis, preservando links/e-mails e evitando cortar frases.
+ * Divide mensagens em partes legiveis, preservando links/e-mails e evitando cortar frases.
  * Regras:
- *  - prioridade para quebras por parágrafo (linhas em branco)
+ *  - prioridade para quebras por paragrafo (linhas em branco)
  *  - depois por frases (., !, ?)
  *  - limite de ~800 caracteres por parte com fallback seguro
  */
@@ -24,7 +31,7 @@ export function splitMessages(text: string): string[] {
     () => `${placeholder}${phIndex++}`
   );
 
-  // 1) Quebra por parágrafo duplo
+  // 1) Quebra por paragrafo duplo
   const paragraphs = withPlaceholders
     .split(/\n\s*\n/)
     .map((p) => p.trim())
@@ -33,7 +40,7 @@ export function splitMessages(text: string): string[] {
   const chunks: string[] = [];
 
   const emitChunk = (chunk: string) => {
-    // restitui placeholders
+    // Restitui placeholders
     let restored = chunk;
     placeholders.forEach((val, idx) => {
       restored = restored.replaceAll(`${placeholder}${idx}`, val);
@@ -48,7 +55,7 @@ export function splitMessages(text: string): string[] {
       return;
     }
 
-    // 2) Quebra por frases OU emojis (emoji conta como parte isolada)
+    // 2) Quebra por frases ou emojis (emoji conta como parte isolada)
     const sentences =
       [...para.matchAll(/(\p{Extended_Pictographic}|[^.?!]+[.?!]?)/gu)]
         .map((m) => m[1]?.trim() ?? "")
@@ -81,54 +88,91 @@ export function splitMessages(text: string): string[] {
   return chunks;
 }
 
+function resolveSessionThrottleKey(client: Whatsapp, sessionName?: string): string {
+  const inferredSession =
+    sessionName ||
+    (client as any)?.session ||
+    (client as any)?.sessionName ||
+    (client as any)?.options?.session;
+
+  return typeof inferredSession === "string" && inferredSession.trim()
+    ? inferredSession.trim()
+    : "shared-wpp-session";
+}
+
 /**
- * 💬 Envia mensagens com digitação contínua e tempo realista + emite ao painel em tempo real
+ * Envia mensagens com digitacao continua e tempo realista + emite ao painel em tempo real.
  */
 export async function sendMessagesWithDelay({
   messages,
   client,
   targetNumber,
+  sessionName,
 }: {
   messages: string[];
   client: Whatsapp;
   targetNumber: string;
+  sessionName?: string;
 }): Promise<void> {
   const chatId = targetNumber.toString();
+  const sessionThrottleKey = resolveSessionThrottleKey(client, sessionName);
 
-  for (const msg of messages) {
-    if (!msg) continue;
+  for (const [index, rawMessage] of messages.entries()) {
+    const msg = String(rawMessage || "");
+    const trimmedMessage = msg.trimStart();
+    if (!trimmedMessage) continue;
 
-    try { await client.startTyping(chatId); } catch {}
+    assertSessionCanSend(sessionThrottleKey);
 
-    // Espera aleatória entre 2 e 5 segundos para simular comportamento humano
-    const randomDelay = Math.floor(Math.random() * (5000 - 2000 + 1)) + 2000;
-    await new Promise(resolve => setTimeout(resolve, randomDelay));
+    if (index > 0) {
+      const previousMessage = messages[index - 1] || "";
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          getMessageContinuationDelay(previousMessage, trimmedMessage)
+        )
+      );
+    }
 
     try {
-      await client.sendText(chatId, msg.trimStart());
-      console.log('📤 Mensagem enviada:', msg);
+      await client.startTyping(chatId);
+    } catch {}
+
+    const typingDelayMs = calculateTypingDelay(trimmedMessage, sessionThrottleKey);
+    await new Promise((resolve) => setTimeout(resolve, typingDelayMs));
+
+    try {
+      await client.stopTyping(chatId);
+    } catch {}
+
+    await new Promise((resolve) =>
+      setTimeout(resolve, getPostTypingDelay())
+    );
+
+    try {
+      await client.sendText(chatId, trimmedMessage);
+      recordSessionSend(sessionThrottleKey);
+      console.log("Mensagem enviada:", trimmedMessage);
 
       try {
         const { io } = await import("../server");
         io.emit("newMessage", {
           chatId,
-          body: msg.trimStart(),
+          body: trimmedMessage,
           timestamp: Date.now(),
           fromBot: true,
           _isFromMe: true,
-          name: "🤖 Bot"
+          name: "Bot",
         });
       } catch (err) {
-        console.error("⚠️ Falha ao emitir para painel:", err);
+        console.error("Falha ao emitir para painel:", err);
       }
-
     } catch (erro) {
-      console.error('⚠️ Erro ao enviar mensagem:', erro);
+      console.error("Erro ao enviar mensagem:", erro);
     }
   }
 
   try {
-    await new Promise(resolve => setTimeout(resolve, 1000));
     await client.stopTyping(chatId);
   } catch {}
 }

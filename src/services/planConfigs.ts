@@ -44,6 +44,14 @@ function normalizeIaLimit(value: unknown, fallback: PlanIaLimit): PlanIaLimit {
     return "unlimited";
   }
 
+  // Corrige configs legadas salvas como "0" em planos cujo default e ilimitado.
+  if (
+    fallback === "unlimited" &&
+    ["", "0", "null", "undefined", "nan"].includes(text)
+  ) {
+    return "unlimited";
+  }
+
   const numericFallback = fallback === "unlimited" ? 0 : fallback;
   return clampInteger(value, numericFallback, 0);
 }
