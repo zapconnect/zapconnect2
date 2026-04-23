@@ -1,6 +1,8 @@
+import crypto from "crypto";
 import { getDB } from "../database";
 import { mainOpenAI } from "../service/openai";
 import { mainGoogle } from "../service/google";
+import { createLRUCache } from "../utils/lru";
 import { queryKb } from "./kbService";
 import { isInSilenceWindow } from "./silenceUtils";
 
@@ -33,6 +35,18 @@ const AI_CONTEXT_BUDGETS = {
   crmMaxNotes: 3,
   crmNoteChars: 180,
 };
+const CRM_CONTEXT_CACHE_TTL_MS = 90_000;
+const RAG_CONTEXT_CACHE_TTL_MS = 120_000;
+const crmContextCache = createLRUCache<string, string>(
+  "AI_CRM_CONTEXT_CACHE_MAX",
+  5_000,
+  { ttl: CRM_CONTEXT_CACHE_TTL_MS }
+);
+const ragContextCache = createLRUCache<string, string>(
+  "AI_RAG_CONTEXT_CACHE_MAX",
+  5_000,
+  { ttl: RAG_CONTEXT_CACHE_TTL_MS }
+);
 const PROMPT_INJECTION_PATTERNS = [
   /\b(ignore|disregard|forget)\b.{0,60}\b(previous|prior|above|system|developer|hidden|internal)\b.{0,40}\b(instruction|prompt|rule|policy|message)s?\b/i,
   /\b(reveal|show|print|dump|expose|quote)\b.{0,60}\b(system|developer|hidden|internal)\b.{0,40}\b(prompt|instruction|policy|message)s?\b/i,
@@ -245,6 +259,20 @@ function getNowPtBr(): string {
   }
 }
 
+function buildCrmContextCacheKey(userId: number, phone: string): string {
+  return `${userId}:${phone}`;
+}
+
+function buildRagContextCacheKey(
+  userId: number,
+  sessionName: string | undefined,
+  query: string
+): string {
+  const scope = String(sessionName || "").trim() || "global";
+  const hash = crypto.createHash("sha1").update(query).digest("hex");
+  return `${userId}:${scope}:${hash}`;
+}
+
 function buildCrmContextForPrompt(client: CrmClientRow | null): string | null {
   if (!client) return null;
 
@@ -292,6 +320,20 @@ function buildCrmContextForPrompt(client: CrmClientRow | null): string | null {
   return clipToBudget(parts.join(" "), AI_CONTEXT_BUDGETS.crm);
 }
 
+function formatRagContextForPrompt(
+  rag: Awaited<ReturnType<typeof queryKb>>
+): string {
+  if (!rag.length) return "";
+
+  const lines = rag.map((r, idx) => {
+    const txt = String(r.content || "");
+    const short = txt.length > 320 ? `${txt.slice(0, 317)}...` : txt;
+    return `[${idx + 1}] ${r.sourceName || "Fonte"}: ${short}`;
+  });
+
+  return `Contexto da base de conhecimento do usuario:\n${lines.join("\n")}`;
+}
+
 function buildMiscContext(langInstr: string | null): string {
   return [
     langInstr ? `Instrucao de idioma: responda no mesmo idioma do cliente (${langInstr}).` : "",
@@ -304,6 +346,10 @@ function buildMiscContext(langInstr: string | null): string {
 async function getCrmContext(userId: number, chatId: string): Promise<string> {
   try {
     const phone = chatId.replace(/@.*/, "");
+    const cacheKey = buildCrmContextCacheKey(userId, phone);
+    const cached = crmContextCache.get(cacheKey);
+    if (cached) return cached;
+
     const db = getDB();
     const crmData = await db.get<CrmClientRow>(
       `SELECT name, phone, citystate, stage, tags, notes, last_seen, deal_value, follow_up_date
@@ -311,11 +357,43 @@ async function getCrmContext(userId: number, chatId: string): Promise<string> {
        WHERE user_id = ? AND phone = ?`,
       [userId, phone]
     );
-    return buildCrmContextForPrompt(crmData) || "";
+    const context = buildCrmContextForPrompt(crmData) || "";
+    if (context) crmContextCache.set(cacheKey, context);
+    return context;
   } catch (err) {
     console.warn("Nao foi possivel montar contexto CRM:", err);
     return "";
   }
+}
+
+async function getRagContext(params: {
+  userId: number;
+  query: string;
+  sessionName: string;
+  chatId: string;
+  topK: number;
+}): Promise<string> {
+  const safeQuery = String(params.query || "").trim();
+  if (!safeQuery) return "";
+
+  const cacheKey = buildRagContextCacheKey(
+    params.userId,
+    params.sessionName,
+    safeQuery
+  );
+  const cached = ragContextCache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const rag = await queryKb({
+    userId: params.userId,
+    query: safeQuery,
+    sessionName: params.sessionName,
+    chatId: params.chatId,
+    topK: params.topK,
+  });
+  const context = formatRagContextForPrompt(rag);
+  ragContextCache.set(cacheKey, context);
+  return context;
 }
 
 export async function generateAIResponse({
@@ -340,7 +418,7 @@ export async function generateAIResponse({
   }
 
   const rawConversationText = buffer.join("\n").trim();
-  const crmContext = await getCrmContext(userId, chatId);
+  const crmContextPromise = getCrmContext(userId, chatId);
   const lang = detectLanguageSimple(rawConversationText);
   const langInstr =
     lang === "pt" ? "portugues" :
@@ -354,30 +432,24 @@ export async function generateAIResponse({
     AI_CONTEXT_BUDGETS.geminiSystem
   );
 
-  let ragContext = "";
-  try {
-    const kbQueryText = [sanitizedPrompt, buffer.slice(-6).join(" ")].filter(Boolean).join(" ");
-    const clipped = kbQueryText.slice(0, 4000);
-    if (clipped.trim()) {
-      const rag = await queryKb({
+  const kbQueryText = [sanitizedPrompt, buffer.slice(-6).join(" ")].filter(Boolean).join(" ");
+  const clippedKbQueryText = kbQueryText.slice(0, 4000).trim();
+  const ragContextPromise = clippedKbQueryText
+    ? getRagContext({
         userId,
-        query: clipped,
+        query: clippedKbQueryText,
         sessionName,
         chatId,
         topK: 4,
-      });
-      if (rag.length) {
-        const lines = rag.map((r, idx) => {
-          const txt = String(r.content || "");
-          const short = txt.length > 320 ? `${txt.slice(0, 317)}...` : txt;
-          return `[${idx + 1}] ${r.sourceName || "Fonte"}: ${short}`;
-        });
-        ragContext = `Contexto da base de conhecimento do usuario:\n${lines.join("\n")}`;
-      }
-    }
-  } catch (err) {
-    console.warn("RAG context falhou:", err);
-  }
+      }).catch((err) => {
+        console.warn("RAG context falhou:", err);
+        return "";
+      })
+    : Promise.resolve("");
+  const [crmContext, ragContext] = await Promise.all([
+    crmContextPromise,
+    ragContextPromise,
+  ]);
 
   const miscContext = buildMiscContext(langInstr);
   const clippedConversationText = clipToBudget(rawConversationText, AI_CONTEXT_BUDGETS.buffer);

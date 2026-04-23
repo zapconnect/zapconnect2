@@ -1,11 +1,10 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <title>Minha Conta • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <!-- Font Awesome -->
   <link
     rel="stylesheet"
     href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
@@ -18,8 +17,6 @@
 </head>
 
 <body>
-
-  <!-- HEADER -->
   <header class="topbar">
     <div class="brand">
       <i class="fa-solid fa-user"></i>
@@ -31,10 +28,7 @@
     </a>
   </header>
 
-  <!-- CARD PRINCIPAL -->
   <main class="card user-card">
-
-    <!-- DADOS -->
     <section class="section">
       <h2><i class="fa-solid fa-id-card"></i> Dados do Usuário</h2>
 
@@ -53,7 +47,312 @@
 
     <hr>
 
-    <!-- PLANO -->
+    <section class="section">
+      <h2><i class="fa-solid fa-sliders"></i> Preferências Operacionais</h2>
+
+      <form id="accountGeneralForm" class="settings-form">
+        <div class="settings-grid">
+          <div class="settings-field">
+            <label for="timezoneOffset">Fuso horário padrão</label>
+            <select
+              id="timezoneOffset"
+              name="timezone_offset"
+              class="settings-input settings-select"
+            >
+              <option value="-180">(UTC-03:00) Brasília</option>
+              <option value="-240">(UTC-04:00) Manaus</option>
+              <option value="-120">(UTC-02:00) Fernando de Noronha</option>
+              <option value="0">(UTC+00:00) Londres</option>
+              <option value="60">(UTC+01:00) Lisboa</option>
+              <option value="-300">(UTC-05:00) NY / EST</option>
+            </select>
+            <small class="muted">
+              Esse fuso é usado por padrão nos agendamentos e em telas que trabalham com data e hora.
+            </small>
+          </div>
+
+          <div class="settings-field">
+            <label for="defaultSessionName">Sessão WhatsApp padrão</label>
+            <select
+              id="defaultSessionName"
+              name="default_session_name"
+              class="settings-input settings-select"
+            >
+              <option value="">Automática (primeira sessão conectada)</option>
+              <% (sessions || []).forEach((session) => { %>
+                <option
+                  value="<%= session.session_name %>"
+                  <%= user.default_session_name === session.session_name ? "selected" : "" %>
+                >
+                  <%= session.session_name %> (<%= session.status %>)
+                </option>
+              <% }) %>
+            </select>
+            <small class="muted">
+              Se nenhum módulo enviar uma sessão manualmente, o sistema tentará usar essa sessão primeiro.
+            </small>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary small" id="btnSaveGeneral">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Salvar Preferências
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <hr>
+
+    <section class="section">
+      <h2><i class="fa-solid fa-globe"></i> Preferências de Número</h2>
+
+      <form id="defaultDdiForm" class="settings-form">
+        <div class="settings-field">
+          <label for="defaultDdi">DDI padrão</label>
+          <input
+            id="defaultDdi"
+            name="default_ddi"
+            class="settings-input"
+            type="text"
+            inputmode="numeric"
+            maxlength="4"
+            value="<%= user.default_ddi || '55' %>"
+            placeholder="55"
+          />
+          <small class="muted">
+            Esse DDI é usado como prefixo automático nas máscaras de telefone de Cobranças, Disparo e Agendamentos.
+          </small>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary small" id="btnSaveDdi">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Salvar DDI
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <hr>
+
+    <section class="section">
+      <h2><i class="fa-solid fa-file-invoice-dollar"></i> Dados Padrão de Cobrança</h2>
+
+      <form id="billingDefaultsForm" class="settings-form">
+        <div class="settings-grid">
+          <div class="settings-field">
+            <label for="billingDefaultType">Forma de pagamento padrão</label>
+            <select
+              id="billingDefaultType"
+              name="billing_default_type"
+              class="settings-input settings-select"
+            >
+              <option value="PIX" <%= (user.billing_default_type || "PIX") === "PIX" ? "selected" : "" %>>PIX</option>
+              <option value="BOLETO" <%= user.billing_default_type === "BOLETO" ? "selected" : "" %>>Boleto / Depósito</option>
+              <option value="CARTAO" <%= user.billing_default_type === "CARTAO" ? "selected" : "" %>>Cartão</option>
+              <option value="TRANSFERENCIA" <%= user.billing_default_type === "TRANSFERENCIA" ? "selected" : "" %>>Transferência</option>
+              <option value="DINHEIRO" <%= user.billing_default_type === "DINHEIRO" ? "selected" : "" %>>Dinheiro</option>
+              <option value="OUTRO" <%= user.billing_default_type === "OUTRO" ? "selected" : "" %>>Outro</option>
+            </select>
+          </div>
+
+          <div class="settings-field">
+            <label for="billingDefaultDescription">Descrição padrão</label>
+            <input
+              id="billingDefaultDescription"
+              name="billing_default_description"
+              class="settings-input"
+              type="text"
+              maxlength="255"
+              value="<%= user.billing_default_description || '' %>"
+              placeholder="Ex: Mensalidade, serviço, consultoria..."
+            />
+          </div>
+
+          <div class="settings-field">
+            <label for="billingDefaultPixKey">Chave PIX padrão</label>
+            <input
+              id="billingDefaultPixKey"
+              name="billing_default_pix_key"
+              class="settings-input"
+              type="text"
+              maxlength="255"
+              value="<%= user.billing_default_pix_key || '' %>"
+              placeholder="CPF, telefone, e-mail ou chave aleatória"
+            />
+          </div>
+
+          <div class="settings-field">
+            <label for="billingDefaultLink">Link de pagamento padrão</label>
+            <input
+              id="billingDefaultLink"
+              name="billing_default_link_pagamento"
+              class="settings-input"
+              type="text"
+              value="<%= user.billing_default_link_pagamento || '' %>"
+              placeholder="https://..."
+            />
+          </div>
+
+          <div class="settings-field">
+            <label for="billingDefaultMulta">Multa padrão (%)</label>
+            <input
+              id="billingDefaultMulta"
+              name="billing_default_multa"
+              class="settings-input"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value="<%= Number(user.billing_default_multa || 0) %>"
+            />
+          </div>
+
+          <div class="settings-field">
+            <label for="billingDefaultJuros">Juros padrão ao mês (%)</label>
+            <input
+              id="billingDefaultJuros"
+              name="billing_default_juros"
+              class="settings-input"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value="<%= Number(user.billing_default_juros || 0) %>"
+            />
+          </div>
+
+          <div class="settings-field">
+            <label for="billingDefaultDesconto">Desconto padrão (%)</label>
+            <input
+              id="billingDefaultDesconto"
+              name="billing_default_desconto"
+              class="settings-input"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              value="<%= Number(user.billing_default_desconto || 0) %>"
+            />
+          </div>
+
+          <div class="settings-field">
+            <label for="billingDefaultDescontoDias">Desconto válido até X dias antes</label>
+            <input
+              id="billingDefaultDescontoDias"
+              name="billing_default_desconto_dias"
+              class="settings-input"
+              type="number"
+              min="0"
+              step="1"
+              value="<%= Number(user.billing_default_desconto_dias || 0) %>"
+            />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary small" id="btnSaveBillingDefaults">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Salvar Defaults de Cobrança
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <hr>
+
+    <section class="section">
+      <h2><i class="fa-solid fa-comment-dots"></i> Templates Padrão de Mensagem</h2>
+
+      <form id="messageTemplatesForm" class="settings-form">
+        <div class="template-grid">
+          <div class="settings-field">
+            <label for="templateCriacao">Cobrança criada</label>
+            <textarea
+              id="templateCriacao"
+              name="template_cobranca_criacao"
+              class="settings-input settings-textarea"
+              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+            ><%= user.template_cobranca_criacao || '' %></textarea>
+          </div>
+
+          <div class="settings-field">
+            <label for="templateLembrete">Lembrete de vencimento</label>
+            <textarea
+              id="templateLembrete"
+              name="template_cobranca_lembrete"
+              class="settings-input settings-textarea"
+              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+            ><%= user.template_cobranca_lembrete || '' %></textarea>
+          </div>
+
+          <div class="settings-field">
+            <label for="templateAtraso">Cobrança em atraso</label>
+            <textarea
+              id="templateAtraso"
+              name="template_cobranca_atraso"
+              class="settings-input settings-textarea"
+              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+            ><%= user.template_cobranca_atraso || '' %></textarea>
+          </div>
+
+          <div class="settings-field">
+            <label for="templateConfirmacao">Confirmação de pagamento</label>
+            <textarea
+              id="templateConfirmacao"
+              name="template_cobranca_confirmacao"
+              class="settings-input settings-textarea"
+              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+            ><%= user.template_cobranca_confirmacao || '' %></textarea>
+          </div>
+
+          <div class="settings-field">
+            <label for="templateCancelamento">Cancelamento</label>
+            <textarea
+              id="templateCancelamento"
+              name="template_cobranca_cancelamento"
+              class="settings-input settings-textarea"
+              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+            ><%= user.template_cobranca_cancelamento || '' %></textarea>
+          </div>
+        </div>
+
+        <div class="template-help">
+          <strong>Placeholders disponíveis:</strong>
+          <div class="token-list">
+            <code>{{nome}}</code>
+            <code>{{primeiro_nome}}</code>
+            <code>{{valor}}</code>
+            <code>{{valor_pago}}</code>
+            <code>{{vencimento}}</code>
+            <code>{{data_pagamento}}</code>
+            <code>{{forma_pagamento}}</code>
+            <code>{{descricao}}</code>
+            <code>{{chave_pix}}</code>
+            <code>{{link_pagamento}}</code>
+            <code>{{quando_vence}}</code>
+            <code>{{dias_atraso}}</code>
+            <code>{{encargos}}</code>
+            <code>{{extras}}</code>
+          </div>
+          <small class="muted">
+            Para blocos opcionais, use este formato: <code>{{#chave_pix}}...{{chave_pix}}...{{/chave_pix}}</code>.
+          </small>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary small" id="btnSaveTemplates">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Salvar Templates
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <hr>
+
     <section class="section">
       <h2><i class="fa-solid fa-box"></i> Plano</h2>
 
@@ -74,12 +373,10 @@
         <%= statusMap[user.subscription_status] || user.subscription_status %>
       </p>
 
-      <!-- ASSINATURA ATIVA -->
-      <% if (user.subscription_status === "active" && lastPaymentAt) { 
-        const nextBilling = lastPaymentAt + 30*24*60*60*1000;
-        const daysLeft = Math.ceil((nextBilling - now) / (1000*60*60*24));
+      <% if (user.subscription_status === "active" && lastPaymentAt) {
+        const nextBilling = lastPaymentAt + 30 * 24 * 60 * 60 * 1000;
+        const daysLeft = Math.ceil((nextBilling - now) / (1000 * 60 * 60 * 24));
       %>
-
         <p class="muted">
           <i class="fa-solid fa-rotate"></i>
           Próxima cobrança:
@@ -92,14 +389,11 @@
             Cobrança em <b><%= daysLeft %> dias</b>
           </p>
         <% } %>
-
       <% } %>
 
-      <!-- TRIAL -->
-      <% if (user.subscription_status === "trial" && user.plan_expires_at) { 
-        const daysLeft = Math.ceil((user.plan_expires_at - now) / (1000*60*60*24));
+      <% if (user.subscription_status === "trial" && user.plan_expires_at) {
+        const daysLeft = Math.ceil((user.plan_expires_at - now) / (1000 * 60 * 60 * 24));
       %>
-
         <p class="active">
           <i class="fa-solid fa-gift"></i>
           Avaliação ativa até
@@ -112,10 +406,8 @@
             Teste expira em <b><%= daysLeft %> dias</b>
           </p>
         <% } %>
-
       <% } %>
 
-      <!-- PAGAMENTO PENDENTE -->
       <% if (user.subscription_status === "past_due") { %>
         <p class="expired">
           <i class="fa-solid fa-circle-xmark"></i>
@@ -138,14 +430,12 @@
 
     <hr>
 
-    <!-- PAGAMENTOS -->
     <section class="section">
       <h2><i class="fa-solid fa-receipt"></i> Histórico de Pagamentos</h2>
 
       <% if (!payments || payments.length === 0) { %>
         <p class="muted">Nenhum pagamento encontrado.</p>
       <% } else { %>
-
         <div class="table-wrapper">
           <table class="table">
             <thead>
@@ -157,7 +447,7 @@
               </tr>
             </thead>
             <tbody>
-              <% payments.forEach(p => { %>
+              <% payments.forEach((p) => { %>
                 <tr>
                   <td><%= new Date(p.created_at).toLocaleDateString("pt-BR") %></td>
                   <td>R$ <%= p.amount.toFixed(2) %></td>
@@ -171,11 +461,138 @@
             </tbody>
           </table>
         </div>
-
       <% } %>
     </section>
-
   </main>
 
+  <script src="/js/loading-utils.js"></script>
+  <script src="/js/toast.js"></script>
+  <script>
+    const ddiForm = document.getElementById("defaultDdiForm");
+    const ddiInput = document.getElementById("defaultDdi");
+    const btnSaveDdi = document.getElementById("btnSaveDdi");
+    const accountGeneralForm = document.getElementById("accountGeneralForm");
+    const btnSaveGeneral = document.getElementById("btnSaveGeneral");
+    const billingDefaultsForm = document.getElementById("billingDefaultsForm");
+    const btnSaveBillingDefaults = document.getElementById("btnSaveBillingDefaults");
+    const messageTemplatesForm = document.getElementById("messageTemplatesForm");
+    const btnSaveTemplates = document.getElementById("btnSaveTemplates");
+    const timezoneSelect = document.getElementById("timezoneOffset");
+    const currentTimezoneOffset = "<%= String(user.timezone_offset ?? -180) %>";
+
+    if (timezoneSelect) {
+      timezoneSelect.value = currentTimezoneOffset;
+    }
+
+    ddiInput?.addEventListener("input", () => {
+      ddiInput.value = String(ddiInput.value || "").replace(/\D/g, "").slice(0, 4);
+    });
+
+    async function postJson(url, payload) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Erro ao salvar");
+      }
+
+      return data;
+    }
+
+    ddiForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const defaultDdi = String(ddiInput?.value || "").replace(/\D/g, "").slice(0, 4) || "55";
+      ddiInput.value = defaultDdi;
+      setButtonLoading(btnSaveDdi, true, "Salvando...");
+
+      try {
+        const data = await postJson("/user/default-ddi", {
+          default_ddi: defaultDdi,
+        });
+        ddiInput.value = data.default_ddi || "55";
+        showToast("success", `DDI padrão salvo: +${ddiInput.value}`);
+      } catch (error) {
+        console.error(error);
+        showToast("error", error.message || "Erro ao salvar DDI padrão");
+      } finally {
+        setButtonLoading(btnSaveDdi, false);
+      }
+    });
+
+    accountGeneralForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setButtonLoading(btnSaveGeneral, true, "Salvando...");
+
+      try {
+        const data = await postJson("/user/account-general", {
+          timezoneOffset: Number(document.getElementById("timezoneOffset")?.value || -180),
+          default_session_name: document.getElementById("defaultSessionName")?.value || "",
+        });
+
+        if (timezoneSelect) {
+          timezoneSelect.value = String(data.timezoneOffset);
+        }
+
+        showToast("success", "Preferências operacionais salvas");
+      } catch (error) {
+        console.error(error);
+        showToast("error", error.message || "Erro ao salvar preferências operacionais");
+      } finally {
+        setButtonLoading(btnSaveGeneral, false);
+      }
+    });
+
+    billingDefaultsForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setButtonLoading(btnSaveBillingDefaults, true, "Salvando...");
+
+      try {
+        await postJson("/user/billing-defaults", {
+          billing_default_type: document.getElementById("billingDefaultType")?.value || "PIX",
+          billing_default_description: document.getElementById("billingDefaultDescription")?.value || "",
+          billing_default_pix_key: document.getElementById("billingDefaultPixKey")?.value || "",
+          billing_default_link_pagamento: document.getElementById("billingDefaultLink")?.value || "",
+          billing_default_multa: document.getElementById("billingDefaultMulta")?.value || 0,
+          billing_default_juros: document.getElementById("billingDefaultJuros")?.value || 0,
+          billing_default_desconto: document.getElementById("billingDefaultDesconto")?.value || 0,
+          billing_default_desconto_dias: document.getElementById("billingDefaultDescontoDias")?.value || 0,
+        });
+
+        showToast("success", "Dados padrão de cobrança salvos");
+      } catch (error) {
+        console.error(error);
+        showToast("error", error.message || "Erro ao salvar dados padrão de cobrança");
+      } finally {
+        setButtonLoading(btnSaveBillingDefaults, false);
+      }
+    });
+
+    messageTemplatesForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setButtonLoading(btnSaveTemplates, true, "Salvando...");
+
+      try {
+        await postJson("/user/message-templates", {
+          template_cobranca_criacao: document.getElementById("templateCriacao")?.value || "",
+          template_cobranca_lembrete: document.getElementById("templateLembrete")?.value || "",
+          template_cobranca_atraso: document.getElementById("templateAtraso")?.value || "",
+          template_cobranca_confirmacao: document.getElementById("templateConfirmacao")?.value || "",
+          template_cobranca_cancelamento: document.getElementById("templateCancelamento")?.value || "",
+        });
+
+        showToast("success", "Templates padrão salvos");
+      } catch (error) {
+        console.error(error);
+        showToast("error", error.message || "Erro ao salvar templates");
+      } finally {
+        setButtonLoading(btnSaveTemplates, false);
+      }
+    });
+  </script>
 </body>
 </html>

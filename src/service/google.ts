@@ -1,7 +1,16 @@
 import { GoogleGenerativeAI, type ChatSession } from "@google/generative-ai";
 import dotenv from "dotenv";
-import { getDB } from "../database";
+import { getDB, withDBTransaction } from "../database";
+import {
+  decodeCompressedJson,
+  encodeCompressedJson,
+} from "../utils/chatHistoryCodec";
 import { withTimeout } from "../utils/withTimeout";
+import {
+  createLRUCache,
+  clearTimerSafely,
+  describeLRUCache,
+} from "../utils/lru";
 
 dotenv.config();
 
@@ -20,7 +29,11 @@ type ChatHistory = {
 type CachedHistory = { history: ChatHistory; expiresAt: number };
 
 const CHAT_CACHE_TTL_MS = 30 * 60 * 1000;
-const activeChats = new Map<string, CachedHistory>();
+const activeChats = createLRUCache<string, CachedHistory>(
+  "GOOGLE_ACTIVE_CHAT_CACHE_MAX",
+  5_000,
+  { ttl: CHAT_CACHE_TTL_MS }
+);
 const PERSIST_DEBOUNCE_MS = 3000;
 const PERSIST_FORCE_EVERY = 10;
 const CHAT_HISTORY_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
@@ -41,10 +54,21 @@ type GeminiStreamTimeoutError = Error & {
   collected: string;
 };
 
-const persistQueue = new Map<string, PersistState>();
+const persistQueue = createLRUCache<string, PersistState>(
+  "GOOGLE_PERSIST_QUEUE_MAX",
+  5_000,
+  {
+    dispose: (state) => clearTimerSafely(state?.timer),
+  }
+);
 const HISTORY_MAX_TURNS = 32;
 const HISTORY_MAX_CHARS = 12000;
-const historyCleanupMarkers = new Map<number, number>();
+const historyCleanupMarkers = createLRUCache<number, number>(
+  "GOOGLE_HISTORY_CLEANUP_CACHE_MAX",
+  10_000,
+  { ttl: CHAT_HISTORY_CLEAN_INTERVAL_MS }
+);
+const historyCleanupInFlight = new Map<number, Promise<void>>();
 
 const normalizeUserId = (userId: number | string) => String(userId).trim();
 
@@ -244,7 +268,7 @@ async function loadHistoryFromDB({
   try {
     const numericUserId = Number(userId);
     const db = getDB();
-    const row = await db.get<{ history: string | null }>(
+    const row = await db.get<{ history: Buffer | string | null }>(
       `SELECT history
        FROM chat_histories
        WHERE user_id = ? AND chat_id = ?
@@ -252,7 +276,7 @@ async function loadHistoryFromDB({
       [numericUserId, chatId]
     );
     if (!row?.history) return null;
-    const parsed = JSON.parse(row.history);
+    const parsed = await decodeCompressedJson<unknown>(row.history);
     if (!Array.isArray(parsed)) return null;
     return parsed as ChatHistory;
   } catch (err) {
@@ -276,6 +300,7 @@ async function persistHistory({
     const numericUserId = Number(userId);
     const db = getDB();
     const trimmed = trimHistory(history);
+    const compressedHistory = await encodeCompressedJson(trimmed);
     await db.run(
       `
       INSERT INTO chat_histories (user_id, session_name, chat_id, history)
@@ -285,7 +310,7 @@ async function persistHistory({
         session_name = VALUES(session_name),
         updated_at = CURRENT_TIMESTAMP
       `,
-      [numericUserId, sessionName, chatId, JSON.stringify(trimmed)]
+      [numericUserId, sessionName, chatId, compressedHistory]
     );
 
     maybeCleanupChatHistory(numericUserId);
@@ -349,41 +374,76 @@ const shouldCleanupHistory = (userId: number) => {
 
 const maybeCleanupChatHistory = (userId: number) => {
   if (!shouldCleanupHistory(userId)) return;
-  historyCleanupMarkers.set(userId, Date.now());
-  cleanupChatHistory(userId).catch((err) => {
-    console.warn("Nao foi possivel limpar chat_histories:", err);
-  });
+  if (historyCleanupInFlight.has(userId)) return;
+
+  const job = cleanupChatHistory(userId)
+    .catch((err) => {
+      console.warn("Nao foi possivel limpar chat_histories:", err);
+    })
+    .finally(() => {
+      historyCleanupInFlight.delete(userId);
+    });
+
+  historyCleanupInFlight.set(userId, job);
 };
 
 async function cleanupChatHistory(userId: number) {
-  const db = getDB();
+  const now = Date.now();
+  const cleanedAt = await withDBTransaction<number | null>(async (db) => {
+    const userRow = await db.get<{ chat_history_cleaned_at: number | null }>(
+      `SELECT chat_history_cleaned_at
+       FROM users
+       WHERE id = ?
+       FOR UPDATE`,
+      [userId]
+    );
+    if (!userRow) return null;
 
-  const cutoffSeconds = Math.floor((Date.now() - CHAT_HISTORY_RETENTION_MS) / 1000);
-  await db.run(
-    `DELETE FROM chat_histories WHERE user_id = ? AND UNIX_TIMESTAMP(updated_at) < ?`,
-    [userId, cutoffSeconds]
-  );
+    const lastCleanupAt = Number(userRow.chat_history_cleaned_at || 0) || 0;
+    if (lastCleanupAt && now - lastCleanupAt < CHAT_HISTORY_CLEAN_INTERVAL_MS) {
+      return lastCleanupAt;
+    }
 
-  const countRow = await db.get<{ total: number }>(
-    `SELECT COUNT(*) AS total FROM chat_histories WHERE user_id = ?`,
-    [userId]
-  );
-  const total = countRow?.total || 0;
-  if (total <= CHAT_HISTORY_MAX_PER_USER) return;
+    const cutoffSeconds = Math.floor((now - CHAT_HISTORY_RETENTION_MS) / 1000);
+    await db.run(
+      `DELETE FROM chat_histories WHERE user_id = ? AND UNIX_TIMESTAMP(updated_at) < ?`,
+      [userId, cutoffSeconds]
+    );
 
-  await db.run(
-    `DELETE FROM chat_histories
-     WHERE user_id = ?
-       AND id NOT IN (
-         SELECT id FROM (
-           SELECT id FROM chat_histories
-           WHERE user_id = ?
-           ORDER BY updated_at DESC
-           LIMIT ?
-         ) AS recent
-       )`,
-    [userId, userId, CHAT_HISTORY_MAX_PER_USER]
-  );
+    const countRow = await db.get<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM chat_histories WHERE user_id = ?`,
+      [userId]
+    );
+    const total = countRow?.total || 0;
+
+    if (total > CHAT_HISTORY_MAX_PER_USER) {
+      await db.run(
+        `DELETE FROM chat_histories
+         WHERE user_id = ?
+           AND id NOT IN (
+             SELECT id FROM (
+               SELECT id FROM chat_histories
+               WHERE user_id = ?
+               ORDER BY updated_at DESC
+               LIMIT ?
+             ) AS recent
+           )`,
+        [userId, userId, CHAT_HISTORY_MAX_PER_USER]
+      );
+    }
+
+    await db.run(
+      `UPDATE users
+       SET chat_history_cleaned_at = ?
+       WHERE id = ?`,
+      [now, userId]
+    );
+    return now;
+  });
+
+  if (cleanedAt) {
+    historyCleanupMarkers.set(userId, cleanedAt);
+  }
 }
 
 export const mainGoogle = async ({
@@ -523,6 +583,15 @@ export const mainGoogle = async ({
     return "Ocorreu um erro inesperado ao tentar responder.";
   }
 };
+
+export function getGoogleRuntimeCacheStats() {
+  return {
+    activeChats: describeLRUCache(activeChats),
+    persistQueue: describeLRUCache(persistQueue),
+    historyCleanupMarkers: describeLRUCache(historyCleanupMarkers),
+    historyCleanupInFlight: historyCleanupInFlight.size,
+  };
+}
 
 export const stopChatSession = async (
   userId: number,

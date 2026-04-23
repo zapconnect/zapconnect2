@@ -54,6 +54,9 @@
 .green  { background: #16a34a; }
 .blue   { background: #0284c7; }
 .teal   { background: #0f9fa8; }
+.orange { background: #b45309; }
+
+.orange:hover { background: #92400e; }
 
 .qr-area {
   margin-top: 16px;

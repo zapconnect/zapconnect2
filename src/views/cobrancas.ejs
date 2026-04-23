@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cobranças • ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  />
+  <link rel="stylesheet" href="/css/cobrancas.css" />
+  <link rel="icon" href="/img/favinco.png" />
+</head>
+<body data-default-ddi="<%= user.default_ddi || '55' %>">
+  <header class="topbar">
+    <div class="brand">
+      <i class="fa-solid fa-file-invoice-dollar"></i>
+      <h1>Cobranças</h1>
+    </div>
+
+    <a href="/painel" class="btn-back">
+      <i class="fa-solid fa-arrow-left"></i>
+      Voltar
+    </a>
+  </header>
+
+  <div class="cobrancas-wrap">
+    <nav class="tabs-nav">
+      <button class="tab-btn active" data-tab="cobrancas" onclick="switchTab('cobrancas')">
+        <i class="fa-solid fa-file-invoice"></i> Cobranças
+      </button>
+      <button class="tab-btn" data-tab="recorrencias" onclick="switchTab('recorrencias')">
+        <i class="fa-solid fa-rotate"></i> Recorrências
+      </button>
+      <button class="tab-btn" data-tab="clientes" onclick="switchTab('clientes')">
+        <i class="fa-solid fa-address-book"></i> Clientes
+      </button>
+    </nav>
+
+    <div id="tab-cobrancas" class="tab-panel active">
+      <div class="summary-cards" id="summaryCards">
+        <% for (let i = 0; i < 4; i++) { %>
+          <div class="summary-card skeleton">
+            <div class="summary-card-icon"></div>
+            <div class="summary-card-body">
+              <div class="summary-card-value">—</div>
+              <div class="summary-card-label">Carregando</div>
+            </div>
+          </div>
+        <% } %>
+      </div>
+
+      <div class="toolbar">
+        <button class="btn-primary-cob" onclick="abrirModalNovaCobranca()">
+          <i class="fa-solid fa-plus"></i> Nova Cobrança
+        </button>
+
+        <div class="filters-row">
+          <select class="filter-select" id="filtroStatus" onchange="loadCobrancas()">
+            <option value="all">Todos os status</option>
+            <option value="PENDENTE">Pendentes</option>
+            <option value="PAGO">Pagos</option>
+            <option value="VENCIDO">Vencidos</option>
+            <option value="CANCELADO">Cancelados</option>
+          </select>
+          <input
+            class="filter-input"
+            id="filtroBusca"
+            placeholder="Buscar cliente..."
+            oninput="debounceSearch()"
+          />
+          <input type="date" class="filter-input" id="filtroFrom" onchange="loadCobrancas()" />
+          <input type="date" class="filter-input" id="filtroTo" onchange="loadCobrancas()" />
+        </div>
+      </div>
+
+      <div class="cobrancas-table-wrap">
+        <table class="cobrancas-table">
+          <thead>
+            <tr>
+              <th>Cliente</th>
+              <th>Tipo</th>
+              <th>Valor</th>
+              <th>Vencimento</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="cobrancasTableBody">
+            <tr>
+              <td colspan="6" class="table-loading">Carregando cobranças...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="paginacao" id="paginacao"></div>
+    </div>
+
+    <div id="tab-recorrencias" class="tab-panel">
+      <div class="toolbar">
+        <button class="btn-primary-cob" onclick="abrirModalNovaRecorrencia()">
+          <i class="fa-solid fa-plus"></i> Nova Recorrência
+        </button>
+      </div>
+
+      <div class="cobrancas-table-wrap">
+        <table class="cobrancas-table">
+          <thead>
+            <tr>
+              <th>Cliente</th>
+              <th>Ciclo</th>
+              <th>Valor</th>
+              <th>Próxima cobrança</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="recorrenciasTableBody">
+            <tr>
+              <td colspan="6" class="table-loading">Carregando recorrências...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div id="tab-clientes" class="tab-panel">
+      <div class="toolbar">
+        <button class="btn-primary-cob" onclick="abrirModalNovoCliente()">
+          <i class="fa-solid fa-user-plus"></i> Novo Cliente
+        </button>
+
+        <input
+          class="filter-input"
+          id="filtroCliente"
+          placeholder="Buscar cliente..."
+          oninput="debounceClientes()"
+        />
+      </div>
+
+      <div class="cobrancas-table-wrap">
+        <table class="cobrancas-table">
+          <thead>
+            <tr>
+              <th>Nome</th>
+              <th>Telefone</th>
+              <th>Email</th>
+              <th>CPF/CNPJ</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="clientesTableBody">
+            <tr>
+              <td colspan="5" class="table-loading">Carregando clientes...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay-cob" id="modalNovaCobranca">
+    <div class="modal-box-cob wide">
+      <div class="modal-header-cob">
+        <h2><i class="fa-solid fa-plus"></i> Nova Cobrança</h2>
+        <button class="modal-close-btn" onclick="fecharModal('modalNovaCobranca')">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="formNovaCobranca" onsubmit="return false">
+        <div class="form-section">
+          <div class="form-section-title">
+            <i class="fa-solid fa-user"></i> Dados do Cliente
+          </div>
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label>Nome *</label>
+              <input class="form-input" id="cbNome" placeholder="Nome completo" required />
+            </div>
+            <div class="form-field">
+              <label>Telefone WhatsApp *</label>
+              <input class="form-input" id="cbTelefone" placeholder="<%= user.default_ddi || '55' %> 11 99999-9999" required />
+            </div>
+            <div class="form-field">
+              <label>E-mail</label>
+              <input class="form-input" id="cbEmail" type="email" placeholder="email@exemplo.com" />
+            </div>
+            <div class="form-field">
+              <label>CPF / CNPJ</label>
+              <input
+                class="form-input"
+                id="cbCpfCnpj"
+                placeholder="000.000.000-00"
+                oninput="maskCpfCnpj(this)"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">
+            <i class="fa-solid fa-file-invoice-dollar"></i> Dados da Cobrança
+          </div>
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label>Forma de Pagamento *</label>
+              <select class="form-select" id="cbBillingType">
+                <option value="PIX">PIX</option>
+                <option value="BOLETO">Boleto / Depósito</option>
+                <option value="CARTAO">Cartão</option>
+                <option value="TRANSFERENCIA">Transferência</option>
+                <option value="DINHEIRO">Dinheiro</option>
+                <option value="OUTRO">Outro</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Valor (R$) *</label>
+              <input class="form-input" id="cbValor" type="text" inputmode="decimal" placeholder="0,00" required />
+            </div>
+            <div class="form-field">
+              <label>Vencimento *</label>
+              <input class="form-input" id="cbVencimento" type="date" required />
+            </div>
+            <div class="form-field">
+              <label>Parcelas</label>
+              <select class="form-select" id="cbParcelas">
+                <option value="1">À vista (1x)</option>
+                <option value="2">2x</option>
+                <option value="3">3x</option>
+                <option value="4">4x</option>
+                <option value="5">5x</option>
+                <option value="6">6x</option>
+                <option value="12">12x</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-field" style="margin-top:10px;">
+            <label>Descrição *</label>
+            <input class="form-input" id="cbDescricao" placeholder="Ex: Mensalidade, serviço, consultoria..." required />
+          </div>
+
+          <div class="form-field" style="margin-top:10px;">
+            <label>Observações internas</label>
+            <textarea class="form-textarea" id="cbObservacoes" placeholder="Observações opcionais da cobrança"></textarea>
+          </div>
+        </div>
+
+        <div class="form-section" id="secaoPix" style="display:none;">
+          <div class="form-section-title">
+            <i class="fa-solid fa-qrcode"></i> Dados do PIX
+          </div>
+          <div class="form-field">
+            <label>Sua chave PIX</label>
+            <input class="form-input" id="cbChavePix" placeholder="CPF, telefone, e-mail ou chave aleatória" />
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="section-toggle" onclick="toggleSection(this)">
+            <span class="form-section-title" style="margin:0">
+              <i class="fa-solid fa-percent"></i> Encargos e Descontos
+            </span>
+            <i class="fa-solid fa-chevron-down chevron-icon"></i>
+          </div>
+          <div class="section-toggle-content">
+            <div class="form-grid-2" style="margin-top:12px;">
+              <div class="form-field">
+                <label>Multa (%)</label>
+                <input class="form-input" id="cbMulta" type="number" min="0" max="100" step="0.1" placeholder="0" />
+              </div>
+              <div class="form-field">
+                <label>Juros ao mês (%)</label>
+                <input class="form-input" id="cbJuros" type="number" min="0" max="100" step="0.1" placeholder="0" />
+              </div>
+              <div class="form-field">
+                <label>Desconto (%)</label>
+                <input class="form-input" id="cbDesconto" type="number" min="0" max="100" step="0.1" placeholder="0" />
+              </div>
+              <div class="form-field">
+                <label>Desconto válido até X dias antes do venc.</label>
+                <input class="form-input" id="cbDescontoDias" type="number" min="0" placeholder="0" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">
+            <i class="fa-brands fa-whatsapp"></i> Enviar via WhatsApp
+          </div>
+          <label class="switch-line">
+            <input type="checkbox" id="cbEnviarWpp" onchange="toggleWppSection()" style="width:auto" />
+            <span>Enviar cobrança no WhatsApp ao criar</span>
+          </label>
+          <div id="wppSection" style="display:none; margin-top:12px;">
+            <div class="form-field">
+              <label>Sessão WhatsApp</label>
+              <select class="form-select" id="cbSession">
+                <option value="">Carregando sessões...</option>
+              </select>
+            </div>
+            <div class="form-field" style="margin-top:10px;">
+              <label>Preview da mensagem</label>
+              <div class="whatsapp-preview" id="wppPreview">Preencha os dados acima para ver o preview...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <label class="switch-line">
+            <input type="checkbox" id="cbRecorrente" onchange="toggleRecorrenciaSection()" style="width:auto" />
+            <span>Cobrança recorrente (assinatura)</span>
+          </label>
+          <div id="recorrenciaSection" style="display:none; margin-top:12px;">
+            <div class="form-grid-2">
+              <div class="form-field">
+                <label>Ciclo de cobrança</label>
+                <select class="form-select" id="cbCycle">
+                  <option value="SEMANAL">Semanal</option>
+                  <option value="QUINZENAL">Quinzenal</option>
+                  <option value="MENSAL" selected>Mensal</option>
+                  <option value="TRIMESTRAL">Trimestral</option>
+                  <option value="SEMESTRAL">Semestral</option>
+                  <option value="ANUAL">Anual</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label>Data de encerramento (opcional)</label>
+                <input class="form-input" id="cbDataFim" type="date" />
+              </div>
+            </div>
+            <small class="helper-text">
+              Ao marcar esta cobrança como paga, o sistema gera automaticamente a próxima.
+            </small>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-field">
+            <label>Link de pagamento externo (opcional)</label>
+            <input class="form-input" id="cbLinkPagamento" placeholder="https://..." />
+            <small class="helper-text">
+              Inclua um link do seu banco, app ou checkout externo se desejar facilitar o acesso.
+            </small>
+          </div>
+        </div>
+
+        <div class="modal-footer-cob">
+          <button class="btn-ghost-cob" type="button" onclick="fecharModal('modalNovaCobranca')">
+            Cancelar
+          </button>
+          <button class="btn-primary-cob" id="btnCriarCobranca" onclick="criarCobranca()">
+            <i class="fa-solid fa-paper-plane"></i> Gerar Cobrança
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay-cob" id="modalDetalhes">
+    <div class="modal-box-cob">
+      <div class="modal-header-cob">
+        <h2><i class="fa-solid fa-file-invoice"></i> Detalhes da Cobrança</h2>
+        <button class="modal-close-btn" onclick="fecharModal('modalDetalhes')">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div id="detalhesContent"></div>
+      <div class="modal-footer-cob" id="detalhesBtns"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay-cob" id="modalPagar">
+    <div class="modal-box-cob" style="max-width:440px;">
+      <div class="modal-header-cob">
+        <h2><i class="fa-solid fa-check-circle"></i> Confirmar Pagamento</h2>
+        <button class="modal-close-btn" onclick="fecharModal('modalPagar')">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <input type="hidden" id="pagarCobrancaId" />
+
+      <div class="form-field" style="margin-bottom:14px;">
+        <label>Valor recebido (R$)</label>
+        <input class="form-input" id="pagarValor" type="text" inputmode="decimal" placeholder="Deixe vazio para valor total" />
+      </div>
+
+      <div class="form-field">
+        <label>Data do pagamento</label>
+        <input class="form-input" id="pagarData" type="date" />
+      </div>
+
+      <label class="switch-line" style="margin-top:14px;">
+        <input type="checkbox" id="pagarEnviarConfirmacao" checked style="width:auto" />
+        <span>Enviar confirmação via WhatsApp</span>
+      </label>
+
+      <div class="modal-footer-cob">
+        <button class="btn-ghost-cob" onclick="fecharModal('modalPagar')">Cancelar</button>
+        <button class="btn-primary-cob" id="btnConfirmarPagamento" onclick="confirmarPagamento()">
+          <i class="fa-solid fa-check"></i> Confirmar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay-cob" id="modalNovaRecorrencia">
+    <div class="modal-box-cob wide">
+      <div class="modal-header-cob">
+        <h2><i class="fa-solid fa-rotate"></i> Nova Recorrência</h2>
+        <button class="modal-close-btn" onclick="fecharModal('modalNovaRecorrencia')">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="formNovaRecorrencia" onsubmit="return false">
+        <div class="form-section">
+          <div class="form-section-title">
+            <i class="fa-solid fa-user"></i> Dados do Cliente
+          </div>
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label>Nome *</label>
+              <input class="form-input" id="rcNome" placeholder="Nome completo" required />
+            </div>
+            <div class="form-field">
+              <label>Telefone WhatsApp *</label>
+              <input class="form-input" id="rcTelefone" placeholder="<%= user.default_ddi || '55' %> 11 99999-9999" required />
+            </div>
+            <div class="form-field">
+              <label>E-mail</label>
+              <input class="form-input" id="rcEmail" type="email" placeholder="email@exemplo.com" />
+            </div>
+            <div class="form-field">
+              <label>CPF / CNPJ</label>
+              <input
+                class="form-input"
+                id="rcCpfCnpj"
+                placeholder="000.000.000-00"
+                oninput="maskCpfCnpj(this)"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">
+            <i class="fa-solid fa-repeat"></i> Configuração da Recorrência
+          </div>
+          <div class="form-grid-2">
+            <div class="form-field">
+              <label>Forma de Pagamento *</label>
+              <select class="form-select" id="rcBillingType">
+                <option value="PIX">PIX</option>
+                <option value="BOLETO">Boleto / Depósito</option>
+                <option value="CARTAO">Cartão</option>
+                <option value="TRANSFERENCIA">Transferência</option>
+                <option value="DINHEIRO">Dinheiro</option>
+                <option value="OUTRO">Outro</option>
+              </select>
+            </div>
+            <div class="form-field">
+              <label>Valor (R$) *</label>
+              <input class="form-input" id="rcValor" type="text" inputmode="decimal" placeholder="0,00" required />
+            </div>
+            <div class="form-field">
+              <label>Primeiro vencimento *</label>
+              <input class="form-input" id="rcVencimento" type="date" required />
+            </div>
+            <div class="form-field">
+              <label>Ciclo *</label>
+              <select class="form-select" id="rcCycle">
+                <option value="SEMANAL">Semanal</option>
+                <option value="QUINZENAL">Quinzenal</option>
+                <option value="MENSAL" selected>Mensal</option>
+                <option value="TRIMESTRAL">Trimestral</option>
+                <option value="SEMESTRAL">Semestral</option>
+                <option value="ANUAL">Anual</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-field" style="margin-top:10px;">
+            <label>Descrição *</label>
+            <input class="form-input" id="rcDescricao" placeholder="Ex: Mensalidade Premium, plano anual..." required />
+          </div>
+
+          <div class="form-grid-2" style="margin-top:10px;">
+            <div class="form-field">
+              <label>Data de encerramento (opcional)</label>
+              <input class="form-input" id="rcDataFim" type="date" />
+            </div>
+            <div class="form-field">
+              <label>Link de pagamento externo</label>
+              <input class="form-input" id="rcLinkPagamento" placeholder="https://..." />
+            </div>
+          </div>
+
+          <div class="form-field" style="margin-top:10px;">
+            <label>Observações internas</label>
+            <textarea class="form-textarea" id="rcObservacoes" placeholder="Observações opcionais da recorrência"></textarea>
+          </div>
+        </div>
+
+        <div class="form-section" id="secaoPixRecorrencia" style="display:none;">
+          <div class="form-section-title">
+            <i class="fa-solid fa-qrcode"></i> Dados do PIX
+          </div>
+          <div class="form-field">
+            <label>Sua chave PIX</label>
+            <input class="form-input" id="rcChavePix" placeholder="CPF, telefone, e-mail ou chave aleatória" />
+          </div>
+        </div>
+
+        <div class="form-section">
+          <div class="form-section-title">
+            <i class="fa-brands fa-whatsapp"></i> Enviar primeira cobrança via WhatsApp
+          </div>
+          <label class="switch-line">
+            <input type="checkbox" id="rcEnviarWpp" onchange="toggleRecorrenciaWppSection()" style="width:auto" />
+            <span>Notificar o cliente ao criar a recorrência</span>
+          </label>
+          <div id="rcWppSection" style="display:none; margin-top:12px;">
+            <div class="form-field">
+              <label>Sessão WhatsApp</label>
+              <select class="form-select" id="rcSession">
+                <option value="">Carregando sessões...</option>
+              </select>
+            </div>
+            <div class="form-field" style="margin-top:10px;">
+              <label>Preview da mensagem</label>
+              <div class="whatsapp-preview" id="rcWppPreview">Preencha os dados acima para ver o preview...</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer-cob">
+          <button class="btn-ghost-cob" type="button" onclick="fecharModal('modalNovaRecorrencia')">
+            Cancelar
+          </button>
+          <button class="btn-primary-cob" id="btnCriarRecorrencia" onclick="criarRecorrencia()">
+            <i class="fa-solid fa-repeat"></i> Criar Recorrência
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay-cob" id="modalCliente">
+    <div class="modal-box-cob" style="max-width:480px;">
+      <div class="modal-header-cob">
+        <h2 id="clienteModalTitle"><i class="fa-solid fa-user"></i> Novo Cliente</h2>
+        <button class="modal-close-btn" onclick="fecharModal('modalCliente')">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="formCliente" onsubmit="return false">
+        <input type="hidden" id="clienteId" />
+
+        <div class="form-field" style="margin-bottom:12px;">
+          <label>Nome *</label>
+          <input class="form-input" id="clienteNome" placeholder="Nome completo" required />
+        </div>
+
+        <div class="form-field" style="margin-bottom:12px;">
+          <label>Telefone WhatsApp *</label>
+          <input class="form-input" id="clienteTelefone" placeholder="<%= user.default_ddi || '55' %> 11 99999-9999" required />
+        </div>
+
+        <div class="form-field" style="margin-bottom:12px;">
+          <label>E-mail</label>
+          <input class="form-input" id="clienteEmail" type="email" placeholder="email@exemplo.com" />
+        </div>
+
+        <div class="form-field" style="margin-bottom:12px;">
+          <label>CPF / CNPJ</label>
+          <input
+            class="form-input"
+            id="clienteCpfCnpj"
+            placeholder="000.000.000-00"
+            oninput="maskCpfCnpj(this)"
+          />
+        </div>
+
+        <div class="form-field">
+          <label>Observações</label>
+          <textarea class="form-textarea" id="clienteObservacoes" placeholder="Anotações sobre este cliente"></textarea>
+        </div>
+
+        <div class="modal-footer-cob">
+          <button class="btn-ghost-cob" type="button" onclick="fecharModal('modalCliente')">
+            Cancelar
+          </button>
+          <button class="btn-primary-cob" id="btnSalvarCliente" onclick="salvarCliente()">
+            <i class="fa-solid fa-floppy-disk"></i> Salvar Cliente
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <footer>
+    © 2026 ZapConnect — Todos os direitos reservados.<br />
+    Desenvolvido por
+    <a href="https://www.instagram.com/vini__n10?igsh=NzF4am94bjhmdHJ6" target="_blank">Vinicius Souza</a>
+  </footer>
+
+  <script>
+    window.USER_ID = <%- JSON.stringify(Number(user?.id || 0)) %>;
+  </script>
+  <script id="cobrancaAccountDefaults" type="application/json"><%- JSON.stringify({
+    defaultSessionName: user.default_session_name || "",
+    billingDefaults: {
+      billing_type: user.billing_default_type || "PIX",
+      descricao: user.billing_default_description || "",
+      chave_pix: user.billing_default_pix_key || "",
+      link_pagamento: user.billing_default_link_pagamento || "",
+      multa_percentual: Number(user.billing_default_multa || 0),
+      juros_percentual: Number(user.billing_default_juros || 0),
+      desconto_percentual: Number(user.billing_default_desconto || 0),
+      desconto_limite_dias: Number(user.billing_default_desconto_dias || 0),
+    },
+    messageTemplates: {
+      criacao: user.template_cobranca_criacao || "",
+      lembrete_vencimento: user.template_cobranca_lembrete || "",
+      atraso: user.template_cobranca_atraso || "",
+      confirmacao_pagamento: user.template_cobranca_confirmacao || "",
+      cancelamento: user.template_cobranca_cancelamento || "",
+    },
+  }).replace(/</g, "\\u003c") %></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/js/loading-utils.js"></script>
+  <script src="/js/toast.js"></script>
+  <script src="/js/cobrancas.js"></script>
+</body>
+</html>

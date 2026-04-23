@@ -1,12 +1,17 @@
 // src/database.ts
-import mysql, { RowDataPacket, ResultSetHeader } from "mysql2/promise";
+import mysql, { PoolConnection, RowDataPacket, ResultSetHeader } from "mysql2/promise";
 
 let pool: mysql.Pool;
+type Queryable = mysql.Pool | PoolConnection;
 
 type IndexRow = RowDataPacket & {
   Key_name: string;
   Column_name: string;
   Seq_in_index: number;
+};
+
+type ColumnRow = RowDataPacket & {
+  DATA_TYPE: string;
 };
 
 async function getIndexColumns(tableName: string, indexName: string): Promise<string[]> {
@@ -15,6 +20,24 @@ async function getIndexColumns(tableName: string, indexName: string): Promise<st
     .filter((row) => row.Key_name === indexName)
     .sort((a, b) => Number(a.Seq_in_index) - Number(b.Seq_in_index))
     .map((row) => String(row.Column_name));
+}
+
+async function getColumnType(
+  tableName: string,
+  columnName: string
+): Promise<string | null> {
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT DATA_TYPE
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [tableName, columnName]
+  );
+
+  const dataType = String((rows as ColumnRow[])[0]?.DATA_TYPE || "").trim().toLowerCase();
+  return dataType || null;
 }
 
 async function migrateChatHistoriesToSharedScope() {
@@ -79,6 +102,26 @@ async function migrateChatHistoriesToSharedScope() {
     );
   } catch {
     // índice legado pode não existir
+  }
+}
+
+async function migrateChatHistoriesStorage() {
+  const currentType = await getColumnType("chat_histories", "history");
+  if (!currentType) return;
+
+  if (currentType === "json") {
+    await pool.query(
+      "ALTER TABLE chat_histories MODIFY COLUMN history LONGTEXT NOT NULL"
+    );
+    console.log("✅ chat_histories.history migrado de JSON para LONGTEXT");
+  }
+
+  const updatedType = await getColumnType("chat_histories", "history");
+  if (updatedType !== "longblob") {
+    await pool.query(
+      "ALTER TABLE chat_histories MODIFY COLUMN history LONGBLOB NOT NULL"
+    );
+    console.log("✅ chat_histories.history agora usa LONGBLOB");
   }
 }
 
@@ -211,6 +254,22 @@ export async function initDB() {
       ia_silence_start INT DEFAULT NULL,
       ia_silence_end INT DEFAULT NULL,
       timezone_offset INT DEFAULT -180,
+      default_ddi VARCHAR(4) DEFAULT '55',
+      default_session_name VARCHAR(255) DEFAULT NULL,
+      billing_default_type VARCHAR(30) DEFAULT 'PIX',
+      billing_default_description VARCHAR(255) DEFAULT NULL,
+      billing_default_pix_key VARCHAR(255) DEFAULT NULL,
+      billing_default_link_pagamento TEXT,
+      billing_default_multa DECIMAL(5,2) DEFAULT 0,
+      billing_default_juros DECIMAL(5,2) DEFAULT 0,
+      billing_default_desconto DECIMAL(5,2) DEFAULT 0,
+      billing_default_desconto_dias INT DEFAULT 0,
+      template_cobranca_criacao TEXT,
+      template_cobranca_lembrete TEXT,
+      template_cobranca_atraso TEXT,
+      template_cobranca_confirmacao TEXT,
+      template_cobranca_cancelamento TEXT,
+      chat_history_cleaned_at BIGINT DEFAULT NULL,
 
       plan VARCHAR(50) DEFAULT 'free',
       plan_expires_at BIGINT,
@@ -304,6 +363,80 @@ export async function initDB() {
       deal_value DECIMAL(10,2) DEFAULT 0,
       follow_up_date BIGINT DEFAULT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS cobranca_clientes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      nome VARCHAR(255) NOT NULL,
+      telefone VARCHAR(30) NOT NULL,
+      email VARCHAR(255),
+      cpf_cnpj VARCHAR(20),
+      observacoes TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      UNIQUE KEY uniq_cliente_telefone (user_id, telefone),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS cobrancas_recorrencias (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      cliente_id INT NOT NULL,
+      cliente_nome VARCHAR(255) NOT NULL,
+      billing_type VARCHAR(30) NOT NULL,
+      cycle VARCHAR(20) NOT NULL,
+      valor DECIMAL(10,2) NOT NULL,
+      descricao TEXT,
+      proxima_cobranca VARCHAR(20) NOT NULL,
+      data_fim VARCHAR(20),
+      ativa TINYINT DEFAULT 1,
+      session_name VARCHAR(255),
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (cliente_id) REFERENCES cobranca_clientes(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS cobrancas (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      cliente_id INT NOT NULL,
+      cliente_nome VARCHAR(255) NOT NULL,
+      cliente_telefone VARCHAR(30) NOT NULL,
+      billing_type VARCHAR(30) NOT NULL,
+      valor DECIMAL(10,2) NOT NULL,
+      valor_pago DECIMAL(10,2),
+      descricao TEXT NOT NULL,
+      vencimento VARCHAR(20) NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'PENDENTE',
+      observacoes TEXT,
+      chave_pix VARCHAR(255),
+      link_pagamento TEXT,
+      multa_percentual DECIMAL(5,2) DEFAULT 0,
+      juros_percentual DECIMAL(5,2) DEFAULT 0,
+      desconto_percentual DECIMAL(5,2) DEFAULT 0,
+      desconto_limite_dias INT DEFAULT 0,
+      parcelas INT DEFAULT 1,
+      parcela_atual INT DEFAULT 1,
+      cobranca_pai_id INT,
+      recorrente TINYINT DEFAULT 0,
+      recorrencia_id INT,
+      session_name VARCHAR(255),
+      notificado_criacao TINYINT DEFAULT 0,
+      notificado_vencimento TINYINT DEFAULT 0,
+      notificado_atraso TINYINT DEFAULT 0,
+      pago_em BIGINT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (cliente_id) REFERENCES cobranca_clientes(id) ON DELETE CASCADE
     )
     `,
 
@@ -500,7 +633,7 @@ export async function initDB() {
       user_id INT NOT NULL,
       session_name VARCHAR(255),
       chat_id VARCHAR(255) NOT NULL,
-      history JSON NOT NULL,
+      history LONGBLOB NOT NULL,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uniq_chat_history (user_id, chat_id),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -652,16 +785,6 @@ export async function initDB() {
     `,
 
     `
-    CREATE TABLE IF NOT EXISTS worker_locks (
-      lock_key VARCHAR(100) PRIMARY KEY,
-      owner_id VARCHAR(255) NOT NULL,
-      expires_at BIGINT NOT NULL,
-      heartbeat_at BIGINT NOT NULL,
-      created_at BIGINT NOT NULL
-    )
-    `,
-
-    `
     CREATE TABLE IF NOT EXISTS webhook_delivery_failures (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
@@ -703,6 +826,22 @@ export async function initDB() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day6_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_last_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_onboarding_done TINYINT DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS default_ddi VARCHAR(4) DEFAULT '55'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS default_session_name VARCHAR(255) DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_type VARCHAR(30) DEFAULT 'PIX'`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_description VARCHAR(255) DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_pix_key VARCHAR(255) DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_link_pagamento TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_multa DECIMAL(5,2) DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_juros DECIMAL(5,2) DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_desconto DECIMAL(5,2) DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_desconto_dias INT DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS template_cobranca_criacao TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS template_cobranca_lembrete TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS template_cobranca_atraso TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS template_cobranca_confirmacao TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS template_cobranca_cancelamento TEXT`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_history_cleaned_at BIGINT DEFAULT NULL`,
     `ALTER TABLE kb_sources ADD COLUMN IF NOT EXISTS embedding_version INT DEFAULT 1`
   ];
 
@@ -715,6 +854,7 @@ export async function initDB() {
   }
 
   await migrateChatHistoriesToSharedScope();
+  await migrateChatHistoriesStorage();
 
   const indexes = [
     "CREATE INDEX IF NOT EXISTS idx_schedules_status_send_at ON schedules (status, send_at)",
@@ -723,6 +863,11 @@ export async function initDB() {
     "CREATE INDEX IF NOT EXISTS idx_chat_histories_updated ON chat_histories (updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_chat_histories_user_updated ON chat_histories (user_id, updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_crm_user_phone ON crm (user_id, phone)",
+    "CREATE INDEX IF NOT EXISTS idx_cobrancas_user_status ON cobrancas (user_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_cobrancas_vencimento ON cobrancas (vencimento)",
+    "CREATE INDEX IF NOT EXISTS idx_cobrancas_cliente ON cobrancas (user_id, cliente_id)",
+    "CREATE INDEX IF NOT EXISTS idx_recorrencias_user ON cobrancas_recorrencias (user_id, ativa)",
+    "CREATE INDEX IF NOT EXISTS idx_clientes_user ON cobranca_clientes (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_dispatch_suppressions_user_status_phone ON dispatch_suppressions (user_id, status, phone)",
     "CREATE INDEX IF NOT EXISTS idx_dispatch_contact_events_user_phone_created ON dispatch_contact_events (user_id, phone, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_dispatch_contact_events_user_session_created ON dispatch_contact_events (user_id, session_name, created_at)",
@@ -733,7 +878,6 @@ export async function initDB() {
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users (email_normalized)",
     "CREATE INDEX IF NOT EXISTS idx_users_signup_device ON users (signup_device_id)",
     "CREATE INDEX IF NOT EXISTS idx_device_fingerprints_blocked ON device_fingerprints (blocked)",
-    "CREATE INDEX IF NOT EXISTS idx_worker_locks_expires_at ON worker_locks (expires_at)",
     "CREATE INDEX IF NOT EXISTS idx_webhook_delivery_failures_user_created ON webhook_delivery_failures (user_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_webhook_delivery_failures_status_created ON webhook_delivery_failures (status, created_at)",
     "CREATE FULLTEXT INDEX idx_kb_chunks_content ON kb_chunks (content)",
@@ -761,16 +905,14 @@ export async function closeDB() {
   }
 }
 
-export function getDB() {
-  if (!pool) throw new Error("DB não inicializado");
-
+function createDBClient(executor: Queryable) {
   return {
     /**
      * Retorna UM registro ou null
      * Uso: db.get<User>()
      */
     async get<T = any>(sql: string, params?: any[]): Promise<T | null> {
-      const [rows] = await pool.query<RowDataPacket[]>(sql, params);
+      const [rows] = await executor.query<RowDataPacket[]>(sql, params);
       return (rows as T[])[0] ?? null;
     },
 
@@ -779,7 +921,7 @@ export function getDB() {
      * Uso seguro: rows.length, for..of, map
      */
     async all<T = any>(sql: string, params?: any[]): Promise<T[]> {
-      const [rows] = await pool.query<RowDataPacket[]>(sql, params);
+      const [rows] = await executor.query<RowDataPacket[]>(sql, params);
       return rows as T[];
     },
 
@@ -787,8 +929,40 @@ export function getDB() {
      * INSERT / UPDATE / DELETE
      */
     async run(sql: string, params?: any[]): Promise<ResultSetHeader> {
-      const [result] = await pool.query<ResultSetHeader>(sql, params);
+      const [result] = await executor.query<ResultSetHeader>(sql, params);
       return result;
     }
   };
+}
+
+export type DBClient = ReturnType<typeof createDBClient>;
+
+export function getDB() {
+  if (!pool) throw new Error("DB não inicializado");
+
+  return createDBClient(pool);
+}
+
+export async function withDBTransaction<T>(
+  handler: (db: DBClient, connection: PoolConnection) => Promise<T>
+): Promise<T> {
+  if (!pool) throw new Error("DB nao inicializado");
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const db = createDBClient(connection);
+    const result = await handler(db, connection);
+    await connection.commit();
+    return result;
+  } catch (err) {
+    try {
+      await connection.rollback();
+    } catch {
+      // ignore rollback failure so the original error can surface
+    }
+    throw err;
+  } finally {
+    connection.release();
+  }
 }

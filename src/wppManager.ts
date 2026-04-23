@@ -17,6 +17,11 @@ import { assertValidPhone, buildWhatsAppJid, sanitizePhone, validatePhone } from
 import { withTimeout } from "./utils/withTimeout";
 import { deliverWebhook } from "./utils/webhookDelivery";
 import {
+  createLRUCache,
+  clearTimerSafely,
+  describeLRUCache,
+} from "./utils/lru";
+import {
   checkFallbackTriggers,
   clearFallbackRuntime,
   primeFallbackCache,
@@ -66,7 +71,11 @@ function ensureDir(dir: string) {
  * Não tenta forçar LID manualmente
  */
 const NUMBER_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 dias
-const numberValidationCache = new Map<string, number>(); // jid -> timestamp
+const numberValidationCache = createLRUCache<string, number>(
+  "WPP_NUMBER_VALIDATION_CACHE_MAX",
+  50_000,
+  { ttl: NUMBER_CACHE_TTL_MS }
+); // jid -> timestamp
 type NumberStatusCheckResult = { canReceiveMessage?: boolean } | null;
 
 export async function ensureChat(
@@ -330,7 +339,10 @@ async function saveCRMClient(
 
 // Controle de IA por chat (true = ligado, false = desligado)
 // chave = USER{userId}_{chatId}
-export const chatAILock = new Map<string, boolean>();
+export const chatAILock = createLRUCache<string, boolean>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000
+);
 // ⏱️ Controle de humano / tempo
 
 
@@ -396,6 +408,13 @@ const eventsAttached = new Set<string>();
 // ===========================
 const reconnecting = new Set<string>();
 const reconnectAttempts = new Map<string, number>();
+const reconnectDebounce = createLRUCache<string, NodeJS.Timeout>(
+  "WPP_RECONNECT_DEBOUNCE_CACHE_MAX",
+  10_000,
+  {
+    dispose: (timer) => clearTimerSafely(timer),
+  }
+);
 type ReconnectCircuitState = {
   openedAt: number;
   attempts: number;
@@ -414,6 +433,9 @@ const RECONNECT_MAX_ATTEMPTS = Math.max(
   1,
   Number(process.env.WPP_RECONNECT_MAX_ATTEMPTS || 6)
 );
+const RECONNECT_BASE_DELAY_MS = 2_000;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+const RECONNECT_JITTER_RATIO = 0.3;
 const RECONNECT_STATUS_CIRCUIT_OPEN = "circuit_open";
 const BANNED_SESSION_STATUS = "banned";
 const REAUTH_REQUIRED_SESSION_STATUS = "reauth_required";
@@ -432,21 +454,51 @@ const BANNED_SESSION_USER_MESSAGE =
   "Possivel banimento detectado nesta sessao. Nao tente reconectar imediatamente. Aguarde e procure o suporte antes de autenticar de novo.";
 const REAUTH_REQUIRED_SESSION_USER_MESSAGE =
   "A sessao precisa de autenticacao manual. A recuperacao automatica foi interrompida para evitar loop. Clique em reconectar quando quiser gerar um novo QR.";
+let reconnectShutdownInProgress = false;
 let speechClient: SpeechClient | null = null;
 const AUDIO_TRANSCRIBE_PROVIDER = (process.env.AUDIO_TRANSCRIBE_PROVIDER || "").toLowerCase(); // "google", "deepgram" ou vazio (desativado)
 const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY || "";
-const inboundCount = new Map<string, number>(); // chatKey -> quantidade de mensagens recebidas (para firstMessageOnly)
-const chatAICacheLoaded = new Map<number, number>(); // userId -> timestamp do último preload
+const CRM_UPDATE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const CHAT_AI_CACHE_TTL_MS = 5 * 60 * 1000; // recarrega configurações de IA a cada 5 minutos
+const inboundCount = createLRUCache<string, number>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000
+); // chatKey -> quantidade de mensagens recebidas (para firstMessageOnly)
+const chatAICacheLoaded = createLRUCache<number, number>(
+  "WPP_CHAT_AI_USER_CACHE_MAX",
+  10_000,
+  { ttl: CHAT_AI_CACHE_TTL_MS }
+); // userId -> timestamp do último preload
 const sessionLocks = new Map<string, Promise<void>>(); // garante exclusão mútua por sessão para attach/reconnect
 const sessionCreationPromises = new Map<
   string,
   Promise<{ sessionName: string; exists?: boolean }>
 >();
-const chatActivity = new Map<string, number>(); // chatKey -> last activity
-const chatAIActivity = new Map<string, number>(); // aiKey -> last activity
-const CRM_UPDATE_TTL_MS = 5 * 60 * 1000; // 5 minutos
-const CHAT_AI_CACHE_TTL_MS = 5 * 60 * 1000; // recarrega configurações de IA a cada 5 minutos
-const crmWriteCache = new Map<string, { name: string | null; avatar: string | null; lastWrite: number }>();
+const chatActivityCleanupGuard = new Set<string>();
+const chatActivity = createLRUCache<string, number>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000,
+  {
+    dispose: (_lastSeen, chatKey, reason) => {
+      if (reason !== "evict" || chatActivityCleanupGuard.has(chatKey)) return;
+      clearInactiveChatState(chatKey, { skipChatActivityDelete: true });
+    },
+  }
+); // chatKey -> last activity
+const chatAIActivity = createLRUCache<string, number>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000,
+  {
+    dispose: (_lastSeen, key, reason) => {
+      if (reason !== "evict") return;
+      chatAILock.delete(key);
+    },
+  }
+); // aiKey -> last activity
+const crmWriteCache = createLRUCache<
+  string,
+  { name: string | null; avatar: string | null; lastWrite: number }
+>("WPP_CRM_WRITE_CACHE_MAX", 10_000, { ttl: CRM_UPDATE_TTL_MS });
 const CHAT_ACTIVITY_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 const CHAT_ACTIVITY_SWEEP_MS = 60 * 60 * 1000; // 1h
 const WPP_TIMEOUT_MS = Number(process.env.WPP_TIMEOUT_MS || 12_000);
@@ -615,7 +667,28 @@ async function updateSessionStatus(userId: number, sessionName: string, status: 
   } catch { }
 }
 
+function clearScheduledReconnect(full: string) {
+  reconnectDebounce.delete(full);
+}
+
+function clearAllScheduledReconnects() {
+  for (const full of Array.from(reconnectDebounce.keys())) {
+    reconnectDebounce.delete(full);
+  }
+}
+
+function getReconnectDelayMs(attempts: number) {
+  const safeAttempts = Math.max(0, Math.trunc(attempts));
+  const baseDelay = Math.min(
+    RECONNECT_MAX_DELAY_MS,
+    RECONNECT_BASE_DELAY_MS * Math.pow(2, safeAttempts)
+  );
+  const jitter = Math.random() * baseDelay * RECONNECT_JITTER_RATIO;
+  return Math.floor(baseDelay + jitter);
+}
+
 function resetReconnectTracking(full: string) {
+  clearScheduledReconnect(full);
   reconnectAttempts.delete(full);
   reconnectCircuitOpen.delete(full);
   bannedSessions.delete(full);
@@ -774,26 +847,35 @@ async function markSessionAsReauthRequired(
   } catch { }
 }
 
-function clearInactiveChatState(chatKey: string) {
-  chatActivity.delete(chatKey);
-  chatHumanLock.delete(chatKey);
-  chatHumanDuration.delete(chatKey);
-  chatHumanLastActivity.delete(chatKey);
-  pausedChats.delete(chatKey);
-  inboundCount.delete(chatKey);
-  messageBuffer.delete(chatKey);
+function clearInactiveChatState(
+  chatKey: string,
+  options: { skipChatActivityDelete?: boolean } = {}
+) {
+  if (chatActivityCleanupGuard.has(chatKey)) return;
 
-  const chatHumanTimeout = chatHumanTimer.get(chatKey);
-  if (chatHumanTimeout) clearTimeout(chatHumanTimeout);
-  chatHumanTimer.delete(chatKey);
+  chatActivityCleanupGuard.add(chatKey);
+  try {
+    if (!options.skipChatActivityDelete) {
+      chatActivity.delete(chatKey);
+    }
+    chatHumanLock.delete(chatKey);
+    chatHumanDuration.delete(chatKey);
+    chatHumanLastActivity.delete(chatKey);
+    pausedChats.delete(chatKey);
+    inboundCount.delete(chatKey);
+    messageBuffer.delete(chatKey);
 
-  const debounceTimeout = messageTimeouts.get(chatKey);
-  if (debounceTimeout) clearTimeout(debounceTimeout);
-  messageTimeouts.delete(chatKey);
+    clearTimerSafely(chatHumanTimer.get(chatKey));
+    chatHumanTimer.delete(chatKey);
 
-  const humanModeTimeout = humanTimeouts.get(chatKey);
-  if (humanModeTimeout) clearTimeout(humanModeTimeout);
-  humanTimeouts.delete(chatKey);
+    clearTimerSafely(messageTimeouts.get(chatKey));
+    messageTimeouts.delete(chatKey);
+
+    clearTimerSafely(humanTimeouts.get(chatKey));
+    humanTimeouts.delete(chatKey);
+  } finally {
+    chatActivityCleanupGuard.delete(chatKey);
+  }
 }
 
 // Limpeza periódica para evitar vazamento de memória em chats inativos
@@ -837,6 +919,25 @@ function cleanupInactiveChats() {
 }
 
 setInterval(cleanupInactiveChats, CHAT_ACTIVITY_SWEEP_MS);
+
+export function getWppRuntimeCacheStats() {
+  return {
+    numberValidationCache: describeLRUCache(numberValidationCache),
+    crmWriteCache: describeLRUCache(crmWriteCache),
+    inboundCount: describeLRUCache(inboundCount),
+    reconnectDebounce: describeLRUCache(reconnectDebounce),
+    chatActivity: describeLRUCache(chatActivity),
+    chatAIActivity: describeLRUCache(chatAIActivity),
+    chatAILock: describeLRUCache(chatAILock),
+    chatAICacheLoaded: describeLRUCache(chatAICacheLoaded),
+    messageBuffer: describeLRUCache(messageBuffer),
+    messageTimeouts: describeLRUCache(messageTimeouts),
+    chatHumanLock: describeLRUCache(chatHumanLock),
+    chatHumanTimer: describeLRUCache(chatHumanTimer),
+    chatHumanLastActivity: describeLRUCache(chatHumanLastActivity),
+    chatHumanDuration: describeLRUCache(chatHumanDuration),
+  };
+}
 
 function getSpeechClientSafe(): SpeechClient | null {
   if (AUDIO_TRANSCRIBE_PROVIDER !== "google") return null;
@@ -1260,10 +1361,40 @@ function isDisconnectedState(state: string) {
 
 
 //  Agora todos os mapas são por sessão+chat (full::chatId)
-export const messageBuffer = new Map<string, string[]>();
-export const messageTimeouts = new Map<string, NodeJS.Timeout>();
-const pausedChats = new Map<string, boolean>();
-const humanTimeouts = new Map<string, NodeJS.Timeout>();
+export const messageBuffer = createLRUCache<string, string[]>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000,
+  {
+    dispose: (_buffer, chatKey, reason) => {
+      if (reason !== "evict") return;
+      clearTimerSafely(messageTimeouts.get(chatKey));
+      messageTimeouts.delete(chatKey);
+    },
+  }
+);
+export const messageTimeouts = createLRUCache<string, NodeJS.Timeout>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000,
+  {
+    dispose: (timer, chatKey, reason) => {
+      clearTimerSafely(timer);
+      if (reason === "evict") {
+        messageBuffer.delete(chatKey);
+      }
+    },
+  }
+);
+const pausedChats = createLRUCache<string, boolean>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000
+);
+const humanTimeouts = createLRUCache<string, NodeJS.Timeout>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000,
+  {
+    dispose: (timer) => clearTimerSafely(timer),
+  }
+);
 
 export function cancelAIDebounce(chatKey: string) {
   // cancela timeout
@@ -1330,14 +1461,29 @@ function clearSessionMemory(full: string) {
 const HUMAN_INACTIVITY_DEFAULT_MS = 5 * 60 * 1000; // padrão: 5 min
 
 // true = humano ativo (IA bloqueada)
-export const chatHumanLock = new Map<string, boolean>();
+export const chatHumanLock = createLRUCache<string, boolean>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000
+);
 
 // timer por chat
-export const chatHumanTimer = new Map<string, NodeJS.Timeout>();
+export const chatHumanTimer = createLRUCache<string, NodeJS.Timeout>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000,
+  {
+    dispose: (timer) => clearTimerSafely(timer),
+  }
+);
 
 // último timestamp de atividade do cliente
-export const chatHumanLastActivity = new Map<string, number>();
-export const chatHumanDuration    = new Map<string, number | null>(); // null = sem limite
+export const chatHumanLastActivity = createLRUCache<string, number>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000
+);
+export const chatHumanDuration = createLRUCache<string, number | null>(
+  "WPP_CHAT_RUNTIME_CACHE_MAX",
+  50_000
+); // null = sem limite
 
 function getHumanKey(
   userId: string | number,
@@ -1753,6 +1899,7 @@ function killSessionBrowserProcesses(dir: string) {
 }
 
 async function closeSessionRuntime(full: string, sessionDir?: string, clientOverride?: any) {
+  clearScheduledReconnect(full);
   const trackedClient = clients.get(full);
   const client = trackedClient || clientOverride;
   if (client) {
@@ -2501,10 +2648,57 @@ async function attachEvents(
 // ===========================
 //  RECONNECT SESSION
 // ===========================
+function scheduleReconnect(userId: number, shortName: string, reason: unknown = "disconnected") {
+  const full = `USER${userId}_${shortName}`;
+
+  if (reconnectShutdownInProgress) {
+    console.log("ALERTA Shutdown em andamento, ignorando auto-reconnect:", full);
+    return;
+  }
+
+  if (reconnectCircuitOpen.has(full) || bannedSessions.has(full)) {
+    return;
+  }
+
+  if (reconnecting.has(full)) {
+    console.log("ALERTA Reconexão já em andamento:", full);
+    return;
+  }
+
+  const attempts = reconnectAttempts.get(full) || 0;
+  if (attempts >= RECONNECT_MAX_ATTEMPTS) {
+    void openReconnectCircuit(userId, shortName, reason, attempts);
+    return;
+  }
+
+  const hadPendingTimer = reconnectDebounce.has(full);
+  clearScheduledReconnect(full);
+
+  const delay = getReconnectDelayMs(attempts);
+  console.log(
+    `⏳ ${hadPendingTimer ? "Reagendando" : "Agendando"} reconexão para ${full} em ${delay}ms (próxima tentativa ${attempts + 1}/${RECONNECT_MAX_ATTEMPTS})`
+  );
+
+  const timer = setTimeout(() => {
+    reconnectDebounce.delete(full);
+    void reconnectSession(userId, shortName, reason).catch((err) => {
+      console.error("ERRO Falha no timer de reconexão:", full, err);
+    });
+  }, delay);
+  timer.unref?.();
+
+  reconnectDebounce.set(full, timer);
+}
+
 async function reconnectSession(userId: number, shortName: string, reason: unknown = "disconnected") {
   const full = `USER${userId}_${shortName}`;
   const TOKENS_DIR = process.env.TOKENS_DIR || "tokens";
   const sessionDir = path.join(TOKENS_DIR, full);
+
+  if (reconnectShutdownInProgress) {
+    console.log("ALERTA Shutdown em andamento, abortando reconexão:", full);
+    return;
+  }
 
   if (reconnectCircuitOpen.has(full)) {
     const circuit = reconnectCircuitOpen.get(full)!;
@@ -2533,11 +2727,9 @@ async function reconnectSession(userId: number, shortName: string, reason: unkno
         return;
       }
 
-      // backoff simples (2s, 5s, 10s, 20s, 30s...)
-      const delay = Math.min(30000, attempts === 1 ? 2000 : attempts * 5000);
-
-      console.log(` Tentando reconectar ${full} (tentativa ${attempts}) em ${delay}ms...`);
-      await wait(delay);
+      console.log(
+        ` Tentando reconectar ${full} (tentativa ${attempts}/${RECONNECT_MAX_ATTEMPTS})...`
+      );
 
       await closeSessionRuntime(full, sessionDir);
       await updateSessionStatus(userId, shortName, "reconnecting");
@@ -2819,8 +3011,8 @@ async function doCreateWppSession(
           emitToUser(userId, "server:offline", { userId });
         } catch { }
 
-        // tenta reconectar
-        reconnectSession(userId, shortName, state);
+        // tenta reconectar com debounce/backoff+jitter
+        scheduleReconnect(userId, shortName, state);
       }
 
       // reset tentativas quando conectar
@@ -2844,6 +3036,7 @@ export async function createWppSession(
   options: CreateWppSessionOptions = {}
 ): Promise<{ sessionName: string; exists?: boolean }> {
   const full = `USER${userId}_${shortName}`;
+  clearScheduledReconnect(full);
 
   if (clients.has(full)) {
     console.log("ALERTA Sessão já está carregada:", full);
@@ -2887,6 +3080,8 @@ export function invalidateChatAICache(userId: number, chatId?: string) {
 
 // Fecha todas as sessões WPP sem apagar tokens (para shutdown gracioso)
 export async function shutdownWppClients(): Promise<void> {
+  reconnectShutdownInProgress = true;
+  clearAllScheduledReconnects();
   const total = clients.size;
   const closures: Promise<any>[] = [];
 

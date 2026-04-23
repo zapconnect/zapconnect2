@@ -18,6 +18,7 @@ import { sendResetPasswordEmail } from "./utils/sendResetPasswordEmail";
 import { sendEmail } from "./utils/sendEmail";
 
 import adminRoutes from "./routes/admin";
+import cobrancasRoutes from "./routes/cobrancas";
 import { getChatAI, setChatAI } from "./services/chatAiService";
 import {
   type FallbackSettings,
@@ -25,7 +26,7 @@ import {
   saveFallbackSettings,
   resetFallbackCache,
 } from "./services/fallbackService";
-import { stopChatSession } from "./service/google";
+import { getGoogleRuntimeCacheStats, stopChatSession } from "./service/google";
 import emailVerifyRoutes from "./routes/emailVerify";
 import {
   ingestTextSource,
@@ -34,6 +35,7 @@ import {
   queryKb,
   ingestFileSource,
 } from "./services/kbService";
+import { clearSilenceConfigCache } from "./services/silenceUtils";
 import { summarizeConversationToCrm } from "./services/conversationSummary";
 import {
   availableTrialKeys,
@@ -60,6 +62,10 @@ import { withTimeout } from "./utils/withTimeout";
 import { runChatHistoryCleanup } from "./services/chatHistoryCleaner";
 import { getPlanConfig, listPlanConfigs } from "./services/planConfigs";
 import {
+  enviarNotificacaoWhatsApp,
+  verificarEAtualizarVencidos,
+} from "./services/cobrancaService";
+import {
   DISPATCH_CONSECUTIVE_FAILURE_LIMIT,
   DISPATCH_ERROR_RATE_SAMPLE_SIZE,
   DISPATCH_ERROR_RATE_THRESHOLD,
@@ -74,12 +80,6 @@ import {
   validateNumberList,
 } from "./services/listValidator";
 import { setSocketServer } from "./lib/socketEmitter";
-import {
-  acquireWorkerLock,
-  releaseWorkerLock,
-  renewWorkerLock,
-  WORKER_INSTANCE_ID,
-} from "./services/workerLock";
 import { logAudit } from "./utils/audit";
 import {
   disparoUserLimiter,
@@ -222,6 +222,7 @@ import {
   chatHumanLastActivity,
   chatHumanDuration,
   invalidateChatAICache,
+  getWppRuntimeCacheStats,
   shutdownWppClients,
 } from "./wppManager";
 import { simulateFlowRun, simulateWelcomeFlow } from "./wppManager";
@@ -586,6 +587,8 @@ function startTrialEmailCron() {
   runTrialEmailSweep();
   setInterval(runTrialEmailSweep, TRIAL_EMAIL_SWEEP_MS);
 }
+
+let cobrancasSweepInterval: NodeJS.Timeout | null = null;
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const ALLOWED_UPLOAD_MIMES = new Set<string>([
@@ -1045,6 +1048,10 @@ app.get("/health", (_req, res) => {
     ok: true,
     uptime: Math.round(process.uptime() * 1000),
     shuttingDown,
+    caches: {
+      wppManager: getWppRuntimeCacheStats(),
+      googleAI: getGoogleRuntimeCacheStats(),
+    },
   });
 });
 
@@ -1084,6 +1091,7 @@ app.use("/webhook", webhookRoutes);
 // ⚠️ OBRIGATÓRIO: antes das rotas normais
 app.use("/subscription", subscriptionRoutes);
 app.use("/admin", authMiddleware, adminRoutes);
+app.use("/", authMiddleware, cobrancasRoutes);
 
 // ===============================
 // 📊 STATS DO PAINEL
@@ -1794,6 +1802,81 @@ app.get("/verify-email-required", authMiddleware, (req, res) => {
 // =======================================
 // 📌 Rotas de Páginas (EJS)
 // =======================================
+function normalizeDefaultDdi(value: unknown) {
+  const digits = String(value ?? "")
+    .replace(/\D/g, "")
+    .slice(0, 4);
+
+  return digits || "55";
+}
+
+const ACCOUNT_BILLING_TYPES = new Set([
+  "PIX",
+  "BOLETO",
+  "CARTAO",
+  "TRANSFERENCIA",
+  "DINHEIRO",
+  "OUTRO",
+]);
+
+function normalizeOptionalText(value: unknown, maxLength = 0) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  return maxLength > 0 ? text.slice(0, maxLength) : text;
+}
+
+function normalizePreferredSession(
+  explicitValue: unknown,
+  fallbackValue: unknown
+) {
+  return (
+    normalizeOptionalText(explicitValue, 255) ||
+    normalizeOptionalText(fallbackValue, 255) ||
+    null
+  );
+}
+
+function normalizePercentField(
+  value: unknown,
+  fieldLabel: string,
+  max = 100
+) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return 0;
+
+  const numeric = Number(raw.replace(",", "."));
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > max) {
+    throw new Error(`${fieldLabel} inválido`);
+  }
+
+  return Math.round(numeric * 100) / 100;
+}
+
+function normalizeNonNegativeIntegerField(
+  value: unknown,
+  fieldLabel: string,
+  max = 3650
+) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return 0;
+
+  const numeric = Number(raw);
+  if (!Number.isFinite(numeric) || numeric < 0 || numeric > max) {
+    throw new Error(`${fieldLabel} inválido`);
+  }
+
+  return Math.floor(numeric);
+}
+
+function normalizeBillingTypeSetting(value: unknown) {
+  const billingType = String(value ?? "PIX").trim().toUpperCase();
+  if (!ACCOUNT_BILLING_TYPES.has(billingType)) {
+    throw new Error("Forma de pagamento padrão inválida");
+  }
+
+  return billingType;
+}
+
 // 👤 Página do usuário / assinatura
 app.get("/user", authMiddleware, async (req, res) => {
   const user = (req as any).user;
@@ -1826,12 +1909,277 @@ app.get("/user", authMiddleware, async (req, res) => {
     [user.id]
   );
 
+  const sessions = await db.all(
+    `
+    SELECT session_name, status
+    FROM sessions
+    WHERE user_id = ?
+    ORDER BY (status = 'connected') DESC, created_at DESC, id DESC
+    `,
+    [user.id]
+  );
+
   res.render("user", {
     user,
+    sessions: sessions || [],
     payments: payments || [],          // 🔥 SEMPRE define
     lastPaymentAt: lastPayment?.created_at || null,
     now: Date.now()
   });
+});
+
+app.post("/user/default-ddi", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const rawDigits = String(req.body?.default_ddi ?? "").replace(/\D/g, "");
+
+    if (rawDigits.length > 4) {
+      return res.status(400).json({ ok: false, error: "DDI inválido" });
+    }
+
+    const defaultDdi = normalizeDefaultDdi(rawDigits);
+    const db = getDB();
+
+    await db.run("UPDATE users SET default_ddi = ? WHERE id = ?", [defaultDdi, user.id]);
+    await logAudit("user_default_ddi_update", user.id, "user", user.id, {
+      defaultDdi,
+    });
+
+    return res.json({ ok: true, default_ddi: defaultDdi });
+  } catch (err) {
+    console.error("Erro ao salvar DDI padrão:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao salvar DDI padrão" });
+  }
+});
+
+app.post("/user/account-general", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user as User;
+    const timezoneOffset = Number(req.body?.timezoneOffset);
+    const defaultSessionName = normalizeOptionalText(
+      req.body?.default_session_name,
+      255
+    );
+
+    if (
+      !Number.isFinite(timezoneOffset) ||
+      timezoneOffset < -720 ||
+      timezoneOffset > 840
+    ) {
+      return res.status(400).json({ ok: false, error: "Fuso inválido" });
+    }
+
+    const db = getDB();
+
+    if (defaultSessionName) {
+      const sessionExists = await db.get<{ total: number }>(
+        `
+        SELECT COUNT(*) AS total
+        FROM sessions
+        WHERE user_id = ? AND session_name = ?
+        `,
+        [user.id, defaultSessionName]
+      );
+
+      if (!Number(sessionExists?.total || 0)) {
+        return res.status(400).json({
+          ok: false,
+          error: "Sessão padrão inválida",
+        });
+      }
+    }
+
+    await db.run(
+      `
+      UPDATE users
+      SET timezone_offset = ?, default_session_name = ?
+      WHERE id = ?
+      `,
+      [timezoneOffset, defaultSessionName, user.id]
+    );
+
+    clearSilenceConfigCache(user.id);
+    await logAudit("user_account_general_update", user.id, "user", user.id, {
+      timezoneOffset,
+      defaultSessionName,
+    });
+
+    return res.json({
+      ok: true,
+      timezoneOffset,
+      default_session_name: defaultSessionName,
+    });
+  } catch (err) {
+    console.error("Erro ao salvar preferências gerais da conta:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Erro ao salvar preferências gerais",
+    });
+  }
+});
+
+app.post("/user/billing-defaults", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user as User;
+    const billingType = normalizeBillingTypeSetting(req.body?.billing_default_type);
+    const billingDescription = normalizeOptionalText(
+      req.body?.billing_default_description,
+      255
+    );
+    const billingPixKey = normalizeOptionalText(
+      req.body?.billing_default_pix_key,
+      255
+    );
+    const billingLinkPagamento = normalizeOptionalText(
+      req.body?.billing_default_link_pagamento,
+      4000
+    );
+    const billingMulta = normalizePercentField(
+      req.body?.billing_default_multa,
+      "Multa padrão"
+    );
+    const billingJuros = normalizePercentField(
+      req.body?.billing_default_juros,
+      "Juros padrão"
+    );
+    const billingDesconto = normalizePercentField(
+      req.body?.billing_default_desconto,
+      "Desconto padrão"
+    );
+    const billingDescontoDias = normalizeNonNegativeIntegerField(
+      req.body?.billing_default_desconto_dias,
+      "Prazo de desconto padrão"
+    );
+
+    const db = getDB();
+    await db.run(
+      `
+      UPDATE users
+      SET
+        billing_default_type = ?,
+        billing_default_description = ?,
+        billing_default_pix_key = ?,
+        billing_default_link_pagamento = ?,
+        billing_default_multa = ?,
+        billing_default_juros = ?,
+        billing_default_desconto = ?,
+        billing_default_desconto_dias = ?
+      WHERE id = ?
+      `,
+      [
+        billingType,
+        billingDescription,
+        billingPixKey,
+        billingLinkPagamento,
+        billingMulta,
+        billingJuros,
+        billingDesconto,
+        billingDescontoDias,
+        user.id,
+      ]
+    );
+
+    await logAudit("user_billing_defaults_update", user.id, "user", user.id, {
+      billingType,
+      billingDescription,
+      billingPixKey: Boolean(billingPixKey),
+      billingLinkPagamento: Boolean(billingLinkPagamento),
+      billingMulta,
+      billingJuros,
+      billingDesconto,
+      billingDescontoDias,
+    });
+
+    return res.json({
+      ok: true,
+      defaults: {
+        billing_default_type: billingType,
+        billing_default_description: billingDescription,
+        billing_default_pix_key: billingPixKey,
+        billing_default_link_pagamento: billingLinkPagamento,
+        billing_default_multa: billingMulta,
+        billing_default_juros: billingJuros,
+        billing_default_desconto: billingDesconto,
+        billing_default_desconto_dias: billingDescontoDias,
+      },
+    });
+  } catch (err) {
+    console.error("Erro ao salvar dados padrão de cobrança:", err);
+    const message =
+      err instanceof Error
+        ? err.message
+        : "Erro ao salvar dados padrão de cobrança";
+    const status = message.toLowerCase().includes("inválido") ? 400 : 500;
+
+    return res.status(status).json({
+      ok: false,
+      error: message,
+    });
+  }
+});
+
+app.post("/user/message-templates", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user as User;
+    const templates = {
+      template_cobranca_criacao: normalizeOptionalText(
+        req.body?.template_cobranca_criacao,
+        6000
+      ),
+      template_cobranca_lembrete: normalizeOptionalText(
+        req.body?.template_cobranca_lembrete,
+        6000
+      ),
+      template_cobranca_atraso: normalizeOptionalText(
+        req.body?.template_cobranca_atraso,
+        6000
+      ),
+      template_cobranca_confirmacao: normalizeOptionalText(
+        req.body?.template_cobranca_confirmacao,
+        6000
+      ),
+      template_cobranca_cancelamento: normalizeOptionalText(
+        req.body?.template_cobranca_cancelamento,
+        6000
+      ),
+    };
+
+    const db = getDB();
+    await db.run(
+      `
+      UPDATE users
+      SET
+        template_cobranca_criacao = ?,
+        template_cobranca_lembrete = ?,
+        template_cobranca_atraso = ?,
+        template_cobranca_confirmacao = ?,
+        template_cobranca_cancelamento = ?
+      WHERE id = ?
+      `,
+      [
+        templates.template_cobranca_criacao,
+        templates.template_cobranca_lembrete,
+        templates.template_cobranca_atraso,
+        templates.template_cobranca_confirmacao,
+        templates.template_cobranca_cancelamento,
+        user.id,
+      ]
+    );
+
+    await logAudit("user_message_templates_update", user.id, "user", user.id, {
+      customTemplates: Object.fromEntries(
+        Object.entries(templates).map(([key, value]) => [key, Boolean(value)])
+      ),
+    });
+
+    return res.json({ ok: true, templates });
+  } catch (err) {
+    console.error("Erro ao salvar templates de mensagem:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Erro ao salvar templates de mensagem",
+    });
+  }
 });
 
 
@@ -2496,11 +2844,14 @@ app.post(
       return res.status(400).json({ error: "Nenhuma sessao ativa para este usuario." });
     }
 
-    const preferred = String(req.body?.session_name || req.body?.sessionName || "").trim();
+    const preferred = normalizePreferredSession(
+      req.body?.session_name || req.body?.sessionName,
+      user.default_session_name
+    );
     const listValidation = await runListQualityValidation({
       userId: user.id,
       rawNumbers: buildRawNumbersFromBody(req.body),
-      preferredSession: preferred || null,
+      preferredSession: preferred,
       connectedSessions: connected,
       unavailableWarning:
         "Nao foi possivel validar a qualidade da lista com as sessoes conectadas no momento.",
@@ -2569,7 +2920,10 @@ app.post(
       return res.status(400).json({ error: "Nenhuma sessao ativa para este usuario." });
     }
 
-    const preferred = String(req.body?.session_name || req.body?.sessionName || "").trim();
+    const preferred = normalizePreferredSession(
+      req.body?.session_name || req.body?.sessionName,
+      user.default_session_name
+    );
     const candidates = buildSessionCandidates(preferred, connected);
     const riskSession = candidates[0] || null;
     const policyResult = await evaluateDispatchPolicy({
@@ -2585,7 +2939,7 @@ app.post(
     const listValidation = await runListQualityValidation({
       userId: user.id,
       rawNumbers: policyResult.allowedContacts.map((contact) => contact.number),
-      preferredSession: preferred || null,
+      preferredSession: preferred,
       connectedSessions: connected,
       unavailableWarning:
         "Nao foi possivel validar a qualidade da lista agora porque nenhuma sessao respondeu a checagem preventiva.",
@@ -2699,7 +3053,10 @@ app.post(
         return res.status(400).json({ error: "Nenhuma sessão ativa para este usuário" });
       }
 
-      const preferred = (session_name || sessionName || "").trim();
+      const preferred = normalizePreferredSession(
+        session_name || sessionName,
+        user.default_session_name
+      );
       const candidates = buildSessionCandidates(preferred, connected);
       const effectivePreferred = candidates[0] || null;
       const campaignRef = `broadcast:${Date.now()}:${crypto.randomUUID()}`;
@@ -2743,7 +3100,7 @@ app.post(
       const listValidation = await runListQualityValidation({
         userId: user.id,
         rawNumbers: policyResult.allowedContacts.map((contact) => contact.number),
-        preferredSession: preferred || null,
+        preferredSession: preferred,
         connectedSessions: connected,
         unavailableWarning:
           "Nao foi possivel validar a qualidade da lista agora porque nenhuma sessao respondeu a checagem preventiva.",
@@ -3033,7 +3390,10 @@ app.post("/api/agendamentos/create", authMiddleware, subscriptionGuard, async (r
   if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
 
   const db = getDB();
-  const preferredSession = (session_name || sessionName || "").trim() || null;
+  const preferredSession = normalizePreferredSession(
+    session_name || sessionName,
+    user.default_session_name
+  );
   const policyContacts = hasPersonalized
     ? contactList
     : normalized.map((entry) => ({
@@ -3245,7 +3605,10 @@ app.put("/api/agendamentos/update/:id", authMiddleware, subscriptionGuard, async
 
   if (!normalized.length) return res.status(400).json({ error: "Nenhum número válido" });
 
-  const preferredSession = (session_name || sessionName || "").trim() || null;
+  const preferredSession = normalizePreferredSession(
+    session_name || sessionName,
+    user.default_session_name
+  );
   const policyContacts = hasPersonalized
     ? contactList
     : normalized.map((entry) => ({
@@ -3678,578 +4041,7 @@ async function requeueScheduleForLater(
   );
 }
 
-// ===============================
-// ⏱️ AGENDADOR — VERSÃO FINAL, ESTÁVEL E SEM "No LID for user"
-// ===============================
-const SCHEDULE_WATCHDOG_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
-const SCHEDULE_PROCESSING_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos
-const SCHEDULE_COORDINATION_TTL_MS = 60 * 1000; // 1 minuto
-const SCHEDULE_HEARTBEAT_INTERVAL_MS = 20 * 1000; // 20 segundos
-const SCHEDULER_DISPATCH_LOCK_KEY = "scheduler_dispatcher";
-const SCHEDULER_WATCHDOG_LOCK_KEY = "scheduler_watchdog";
-const SCHEDULE_POLICY_RETRY_DELAY_MS = 60 * 60 * 1000; // 1 hora
-
-let schedulerRunning = false;
-let scheduleWatchdogRunning = false;
-
-function startLockHeartbeat(lockKey: string, leaseName: string) {
-  let leaseLost = false;
-
-  const timer = setInterval(async () => {
-    try {
-      const renewed = await renewWorkerLock(lockKey, WORKER_INSTANCE_ID, SCHEDULE_COORDINATION_TTL_MS);
-      if (!renewed && !leaseLost) {
-        leaseLost = true;
-        console.error(`❌ Lease perdido para ${leaseName}; esta instância deixará de coordenar novas execuções.`);
-      }
-    } catch (err) {
-      console.error(`❌ Erro ao renovar lease ${leaseName}:`, err);
-    }
-  }, SCHEDULE_HEARTBEAT_INTERVAL_MS);
-
-  timer.unref();
-
-  return {
-    stop() {
-      clearInterval(timer);
-    },
-  };
-}
-
-setInterval(async () => {
-  if (shuttingDown) return;
-  if (schedulerRunning) return;
-  schedulerRunning = true;
-  try {
-    const acquired = await acquireWorkerLock(
-      SCHEDULER_DISPATCH_LOCK_KEY,
-      WORKER_INSTANCE_ID,
-      SCHEDULE_COORDINATION_TTL_MS
-    );
-    if (!acquired) return;
-
-    const heartbeat = startLockHeartbeat(SCHEDULER_DISPATCH_LOCK_KEY, "agendador");
-    const db = getDB();
-    const now = Date.now();
-
-    try {
-      const schedules = await db.all<ScheduleRow>(
-        `SELECT * FROM schedules
-         WHERE status = 'pending' AND send_at <= ?`,
-        [now]
-      );
-
-      const schedulerUserIds = Array.from(
-        new Set(schedules.map((row) => row.user_id).filter((id) => Number.isFinite(id)))
-      );
-      const connectedSessionsByUser = await loadConnectedSessionsByUser(db, schedulerUserIds);
-      const notificationUsersById = await loadScheduleNotificationUsers(db, schedulerUserIds);
-
-      for (const row of schedules) {
-        try {
-          // 🔒 tentativa de lock otimista: só um worker muda status para "processing"
-          const claimedAt = Date.now();
-          const claimed = await db.run(
-            `UPDATE schedules
-             SET status = 'processing', processing_started_at = ?
-             WHERE id = ? AND status = 'pending'`,
-            [claimedAt, row.id]
-          );
-          if (!claimed.affectedRows) continue; // já foi pego por outro worker
-
-          const campaignRef = `schedule:${row.id}:${claimedAt}`;
-          const rawNumbers = JSON.parse(row.numbers || "[]");
-          const contactsList: PersonalizedContact[] = buildContactsFromStored(rawNumbers, row.message);
-          const userId = row.user_id;
-          const notificationUser = notificationUsersById.get(userId) || null;
-          let successCount = 0;
-          let failureCount = 0;
-          let itemLogs: { number: string; status: "sent" | "error"; error?: string; sentAt: number }[] = [];
-          const preferredSession = (row as any).preferred_session as string | null;
-
-          // 🔎 Buscar sessões conectadas (com preferência do agendamento)
-          const connectedSessions = connectedSessionsByUser.get(userId) || [];
-          if (!connectedSessions.length) {
-            console.warn("⚠️ Nenhuma sessão conectada para user:", userId);
-            await requeueScheduleForLater(
-              db,
-              row.id,
-              SCHEDULE_POLICY_RETRY_DELAY_MS,
-              "Nenhuma sessão conectada disponível para este agendamento."
-            );
-            continue;
-          }
-          const sessionCandidates = buildSessionCandidates(preferredSession, connectedSessions);
-
-          let safeRowFile: PreparedMediaFile | null = null;
-          let storedFilePath: string | null = null;
-          if (row.file) {
-            const ensured = await ensureScheduleFileOnDisk(db, row as ScheduleRow);
-            safeRowFile = ensured.file;
-            storedFilePath = ensured.storedPath;
-          }
-
-          if (row.file && !safeRowFile) {
-            const failureReason =
-              "A mídia anexada a este agendamento não está mais disponível no storage configurado. Reenvie o arquivo antes de tentar novamente.";
-            console.error(`❌ Agendamento ${row.id} bloqueado: ${failureReason}`);
-            await failScheduleDueToMissingMedia(
-              db,
-              row as ScheduleRow,
-              contactsList,
-              failureReason,
-              notificationUser
-            );
-            continue;
-          }
-
-          const policyResult = await evaluateDispatchPolicy({
-            db,
-            userId,
-            contacts: contactsList,
-            campaignKind: "schedule",
-            preferredSession,
-            scheduledAt: row.send_at,
-            plannedCount: contactsList.length,
-          });
-          await recordSkippedDispatchContacts(db, {
-            userId,
-            campaignKind: "schedule",
-            campaignRef,
-            skips: policyResult.skippedContacts,
-          });
-
-          const policyWarnings = uniqueWarnings(policyResult.warnings);
-          const shouldRetryPolicyBlock = isRetryableDispatchPolicyBlock(
-            policyResult.blockReason || "",
-            policyResult.skippedContacts.map((skip) => skip.code)
-          );
-
-          if (policyResult.blocked && shouldRetryPolicyBlock) {
-            await requeueScheduleForLater(
-              db,
-              row.id,
-              SCHEDULE_POLICY_RETRY_DELAY_MS,
-              policyResult.blockReason || "Agendamento pausado pela política de envio."
-            );
-            continue;
-          }
-
-          for (const skippedContact of policyResult.skippedContacts) {
-            failureCount += 1;
-            itemLogs.push({
-              number: skippedContact.number,
-              status: "error",
-              error: skippedContact.reason,
-              sentAt: Date.now(),
-            });
-          }
-
-          const contactsToSend = policyResult.allowedContacts as PersonalizedContact[];
-          const listValidation = await runListQualityValidation({
-            userId,
-            rawNumbers: contactsToSend.map((contact) => contact.number),
-            preferredSession,
-            connectedSessions,
-            unavailableWarning:
-              "Nao foi possivel revalidar a qualidade da lista deste agendamento antes do envio.",
-          });
-          let scheduleWarnings = uniqueWarnings([
-            ...policyWarnings,
-            ...listValidation.warnings,
-          ]);
-          if (
-            preferredSession &&
-            listValidation.sessionName &&
-            preferredSession !== listValidation.sessionName
-          ) {
-            scheduleWarnings.push(
-              `A sessao ${preferredSession} nao estava disponivel para validar a lista. A checagem usou ${listValidation.sessionName}.`
-            );
-          }
-
-          if (listValidation.validation?.blocked) {
-            const failureReason =
-              listValidation.validation.blockReason ||
-              listValidation.validation.recommendation ||
-              "Agendamento bloqueado por baixa qualidade da lista.";
-            const processedAt = Date.now();
-            const failedLogs = contactsToSend.map((contact) => ({
-              number: contact.number,
-              status: "error" as const,
-              error: failureReason,
-              sentAt: processedAt,
-            }));
-
-            await db.run(
-              `UPDATE schedules SET status = 'failed', processing_started_at = NULL WHERE id = ?`,
-              [row.id]
-            );
-            await insertScheduleExecutionLog(
-              db,
-              row as ScheduleRow,
-              0,
-              itemLogs.length + failedLogs.length,
-              [...itemLogs, ...failedLogs],
-              processedAt
-            );
-            console.warn(`⚠️ Agendamento ${row.id} bloqueado por baixa qualidade da lista: ${failureReason}`);
-            continue;
-          }
-
-          let sessionUsed: string | null = null;
-          let lastSendError: any = policyResult.blocked
-            ? policyResult.blockReason || "Nenhum contato elegível para este agendamento."
-            : null;
-          let nextContactIndex = 0;
-          let consecutiveFailures = 0;
-          let campaignPauseReason: string | null = null;
-          scheduleWarnings = uniqueWarnings(scheduleWarnings);
-
-          for (const shortName of sessionCandidates) {
-            const sessionThrottleKey = `USER${userId}_${shortName}`;
-            const client = getClient(sessionThrottleKey);
-            if (!client) continue;
-
-            const sessionHealth = await evaluateDispatchSessionHealth({
-              db,
-              userId,
-              sessionName: shortName,
-            });
-            scheduleWarnings = uniqueWarnings([...scheduleWarnings, ...sessionHealth.warnings]);
-            if (sessionHealth.blocked) {
-              lastSendError = sessionHealth.reason;
-              continue;
-            }
-
-            const sessionRisk = await evaluateDispatchCampaignRisk({
-              db,
-              userId,
-              sessionName: shortName,
-              plannedCount: contactsToSend.length - nextContactIndex,
-              scheduledAt: row.send_at,
-            });
-            scheduleWarnings = uniqueWarnings([...scheduleWarnings, ...sessionRisk.warnings]);
-            if (sessionRisk.blocked) {
-              lastSendError = sessionRisk.reason;
-              continue;
-            }
-
-            let sessionRateLimited = false;
-
-            for (
-              let contactIndex = nextContactIndex;
-              contactIndex < contactsToSend.length;
-              contactIndex += 1
-            ) {
-              const contact = contactsToSend[contactIndex];
-              try {
-                assertSessionCanSend(sessionThrottleKey);
-
-                // ✅ valida número (SEM @c.us)
-                const target = await ensureChat(client, contact.number);
-                const finalMessage = renderTemplate(contact.message ?? row.message ?? "", contact);
-
-                if (safeRowFile) {
-                  // 📎 MÍDIA
-                  await withTimeout(
-                    client.sendFile(
-                      target,
-                      safeRowFile.content,
-                      safeRowFile.filename,
-                      finalMessage || ""
-                    ),
-                    WPP_TIMEOUT_MS,
-                    "sendFile"
-                  );
-                } else if (finalMessage) {
-                  // 💬 TEXTO — MÉTODO CORRETO
-                  await withTimeout(client.sendText(target, finalMessage), WPP_TIMEOUT_MS, "sendText");
-                } else {
-                  throw new Error("Mensagem vazia e mídia inválida");
-                }
-                sessionUsed = sessionUsed || shortName;
-                successCount += 1;
-                consecutiveFailures = 0;
-                nextContactIndex = contactIndex + 1;
-                itemLogs.push({ number: contact.number, status: "sent", sentAt: Date.now() });
-                await recordDispatchContactEvent(
-                  {
-                    userId,
-                    sessionName: shortName,
-                    campaignKind: "schedule",
-                    campaignRef,
-                    phone: contact.number,
-                    status: "sent",
-                  },
-                  db
-                );
-
-                recordSessionSend(sessionThrottleKey);
-
-                if (nextContactIndex < contactsToSend.length) {
-                  await sleep(getHumanDelay(sessionThrottleKey));
-                }
-
-              } catch (err: any) {
-                if (err instanceof SessionRateLimitError) {
-                  sessionRateLimited = true;
-                  lastSendError = err.message;
-                  console.warn(
-                    "⚠️ Limite conservador de envio atingido na sessão:",
-                    sessionThrottleKey,
-                    err.message
-                  );
-                  break;
-                }
-
-                const classified = classifyDispatchError(err);
-                console.error(
-                  "⚠️ Erro envio agendado (número):",
-                  contact.number,
-                  err?.message || err
-                );
-                failureCount += 1;
-                consecutiveFailures += 1;
-                nextContactIndex = contactIndex + 1;
-                itemLogs.push({
-                  number: contact.number,
-                  status: "error",
-                  error: classified.message,
-                  sentAt: Date.now(),
-                });
-                lastSendError = classified.message;
-                await recordDispatchContactEvent(
-                  {
-                    userId,
-                    sessionName: shortName,
-                    campaignKind: "schedule",
-                    campaignRef,
-                    phone: contact.number,
-                    status: "error",
-                    errorCode: classified.code,
-                    errorMessage: classified.message,
-                  },
-                  db
-                );
-
-                const runtimePauseReason = getCampaignPauseReason({
-                  sessionName: shortName,
-                  processed: successCount + failureCount,
-                  failures: failureCount,
-                  consecutiveFailures,
-                });
-                if (runtimePauseReason) {
-                  campaignPauseReason = runtimePauseReason;
-                  lastSendError = runtimePauseReason;
-                  scheduleWarnings = uniqueWarnings([...scheduleWarnings, runtimePauseReason]);
-                  break;
-                }
-              }
-            }
-
-            if (campaignPauseReason) {
-              break;
-            }
-
-            if (nextContactIndex >= contactsToSend.length) {
-              break;
-            }
-
-            if (sessionRateLimited) continue;
-          }
-
-          const retryableNoProgress =
-            nextContactIndex === 0 &&
-            isRetryableDispatchPolicyBlock(
-              String(campaignPauseReason || lastSendError || "")
-            );
-
-          if (retryableNoProgress) {
-            await requeueScheduleForLater(
-              db,
-              row.id,
-              SCHEDULE_POLICY_RETRY_DELAY_MS,
-              String(lastSendError || "Agendamento pausado temporariamente pelas regras de envio.")
-            );
-            continue;
-          }
-
-          if (nextContactIndex < contactsToSend.length) {
-            const remainingError = String(
-              campaignPauseReason ||
-              lastSendError ||
-              "Nenhuma sessão disponível para concluir o envio"
-            );
-
-            for (
-              let contactIndex = nextContactIndex;
-              contactIndex < contactsToSend.length;
-              contactIndex += 1
-            ) {
-              const contact = contactsToSend[contactIndex];
-              failureCount += 1;
-              itemLogs.push({
-                number: contact.number,
-                status: "error",
-                error: remainingError,
-                sentAt: Date.now(),
-              });
-              await recordDispatchContactEvent(
-                {
-                  userId,
-                  sessionName: sessionUsed,
-                  campaignKind: "schedule",
-                  campaignRef,
-                  phone: contact.number,
-                  status: "skipped",
-                  errorCode: campaignPauseReason ? "campaign_paused" : "no_session",
-                  errorMessage: remainingError,
-                },
-                db
-              );
-            }
-          }
-
-          if (!sessionUsed && itemLogs.length) {
-            sessionUsed = preferredSession || sessionCandidates[0] || "__processed__";
-          }
-
-          if (!sessionUsed) {
-            console.warn("⚠️ Nenhuma sessão conseguiu enviar o agendamento:", row.id, sessionCandidates);
-            await requeueScheduleForLater(
-              db,
-              row.id,
-              SCHEDULE_POLICY_RETRY_DELAY_MS,
-              String(lastSendError || "Nenhuma sessão conseguiu concluir o envio do agendamento.")
-            );
-            continue;
-          }
-
-          // ✅ MARCAR COMO ENVIADO
-          await db.run(
-            `UPDATE schedules SET status = 'sent', processing_started_at = NULL WHERE id = ?`,
-            [row.id]
-          );
-
-          const recurrence = (row as any).recurrence || "none";
-          const recurrenceEnd = (row as any).recurrence_end || null;
-          const nextSendAt = calculateNextSendAt(row.send_at, recurrence, recurrenceEnd);
-
-          // 📝 Registrar log de execução
-          const sentAt = Date.now();
-          await insertScheduleExecutionLog(db, row as ScheduleRow, successCount, failureCount, itemLogs, sentAt);
-
-          // 📧 Notificação por e-mail (best-effort)
-          try {
-            const user = notificationUser;
-
-            if (user?.email) {
-              const subject = `Agendamento #${row.id} concluído`;
-              const successLine = `<li>Sucesso: <b>${successCount}</b></li>`;
-              const failureLine = `<li>Falhas: <b>${failureCount}</b></li>`;
-              const nextLine = nextSendAt
-                ? `<p>Próximo envio agendado para ${new Date(nextSendAt).toLocaleString("pt-BR")}</p>`
-                : "";
-              const html = `
-                <p>Olá ${user.name || ""},</p>
-                <p>Seu agendamento #${row.id} foi concluído em ${new Date(sentAt).toLocaleString("pt-BR")}.</p>
-                <ul>${successLine}${failureLine}</ul>
-                ${nextLine}
-                <p>Mensagem: ${row.message ? row.message.substring(0, 120) : "(sem texto)"}${row.message && row.message.length > 120 ? "..." : ""}</p>
-              `;
-
-              await sendEmail(user.email, subject, html);
-            }
-          } catch (err: any) {
-            console.error("⚠️ Falha ao enviar notificação de agendamento:", err?.message || err);
-          }
-
-          if (nextSendAt) {
-            const nextFilePath = storedFilePath ?? null;
-            const nextFilename = safeRowFile?.filename ?? row.filename ?? null;
-            await db.run(
-              `INSERT INTO schedules (user_id, numbers, message, file, filename, preferred_session, send_at, recurrence, recurrence_end)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [userId, row.numbers, row.message, nextFilePath, nextFilename, preferredSession ?? null, nextSendAt, recurrence, recurrenceEnd]
-            );
-          }
-
-          if (scheduleWarnings.length) {
-            console.warn("⚠️ Alertas de política no agendamento:", row.id, scheduleWarnings);
-          }
-          console.log("✅ Agendamento enviado:", row.id);
-
-        } catch (err) {
-          console.error("❌ Erro geral no agendador:", err);
-          // devolve para pending para tentar novamente depois
-          try {
-            await getDB().run(
-              `UPDATE schedules SET status = 'pending', processing_started_at = NULL WHERE id = ? AND status = 'processing'`,
-              [row.id]
-            );
-          } catch { }
-        }
-      }
-
-    } finally {
-      heartbeat.stop();
-      try {
-        await releaseWorkerLock(SCHEDULER_DISPATCH_LOCK_KEY, WORKER_INSTANCE_ID);
-      } catch (err) {
-        console.error("❌ Erro ao liberar lease do agendador:", err);
-      }
-    }
-  } catch (err) {
-    console.error("❌ Erro crítico no loop do agendador:", err);
-  } finally {
-    schedulerRunning = false;
-  }
-}, 10000);
-
-// 🛡️ Watchdog para destravar agendamentos travados em "processing"
-setInterval(async () => {
-  if (shuttingDown) return;
-  if (scheduleWatchdogRunning) return;
-
-  scheduleWatchdogRunning = true;
-  try {
-    const acquired = await acquireWorkerLock(
-      SCHEDULER_WATCHDOG_LOCK_KEY,
-      WORKER_INSTANCE_ID,
-      SCHEDULE_COORDINATION_TTL_MS
-    );
-    if (!acquired) return;
-
-    const heartbeat = startLockHeartbeat(SCHEDULER_WATCHDOG_LOCK_KEY, "watchdog de agendamentos");
-    try {
-      const db = getDB();
-      const timeoutThreshold = Date.now() - SCHEDULE_PROCESSING_TIMEOUT_MS;
-
-      const reset = await db.run(
-        `UPDATE schedules
-         SET status = 'pending', processing_started_at = NULL
-         WHERE status = 'processing' AND (processing_started_at IS NULL OR processing_started_at <= ?)`,
-        [timeoutThreshold]
-      );
-
-      if (reset.affectedRows) {
-        console.warn(`🔁 Watchdog: ${reset.affectedRows} agendamento(s) reaberto(s) para pending`);
-      }
-    } finally {
-      heartbeat.stop();
-      try {
-        await releaseWorkerLock(SCHEDULER_WATCHDOG_LOCK_KEY, WORKER_INSTANCE_ID);
-      } catch (err) {
-        console.error("❌ Erro ao liberar lease do watchdog:", err);
-      }
-    }
-  } catch (err) {
-    console.error("❌ Erro no watchdog de agendamentos:", err);
-  } finally {
-    scheduleWatchdogRunning = false;
-  }
-}, SCHEDULE_WATCHDOG_INTERVAL_MS);
+// ⏱️ Agendador movido para src/workers/scheduleWorker.ts
 
 // 🔄 Atualizar pipeline
 // Atualizar estágio do CRM Kanban
@@ -5338,6 +5130,7 @@ app.post("/user/ia-silence", authMiddleware, async (req, res) => {
         `UPDATE users SET ia_silence_start = NULL, ia_silence_end = NULL WHERE id = ?`,
         [user.id]
       );
+      clearSilenceConfigCache(user.id);
       return res.json({ ok: true, active: false });
     }
 
@@ -5353,6 +5146,7 @@ app.post("/user/ia-silence", authMiddleware, async (req, res) => {
       `UPDATE users SET ia_silence_start = ?, ia_silence_end = ? WHERE id = ?`,
       [s, e, user.id]
     );
+    clearSilenceConfigCache(user.id);
 
     return res.json({ ok: true, active: true, start: s, end: e });
   } catch (err) {
@@ -5572,7 +5366,58 @@ process.on("SIGINT", (signal) => gracefulShutdown(signal));
 // =======================================
 // 🚀 Iniciar servidor
 // =======================================
+async function runCobrancasSweep() {
+  if (shuttingDown) return;
+  let db;
+  try {
+    db = getDB();
+  } catch {
+    // DB ainda não inicializado — o bootstrap chama o start depois do initDB.
+    return;
+  }
+
+  try {
+    await verificarEAtualizarVencidos();
+
+    const vencendoBreve = await db.all(
+      `SELECT * FROM cobrancas
+       WHERE status = 'PENDENTE'
+         AND notificado_vencimento = 0
+         AND DATEDIFF(vencimento, CURDATE()) BETWEEN 0 AND 2`,
+      []
+    );
+
+    for (const c of vencendoBreve) {
+      await enviarNotificacaoWhatsApp(c.user_id, c, "lembrete_vencimento");
+    }
+
+    const atrasados = await db.all(
+      `SELECT * FROM cobrancas
+       WHERE status = 'VENCIDO'
+         AND notificado_atraso = 0
+         AND DATEDIFF(CURDATE(), vencimento) BETWEEN 1 AND 7`,
+      []
+    );
+
+    for (const c of atrasados) {
+      await enviarNotificacaoWhatsApp(c.user_id, c, "atraso");
+    }
+  } catch (err) {
+    console.error("Erro no sweep de cobranças:", err);
+  }
+}
+
 startTrialEmailCron();
+
+export function startCobrancasSweepCron() {
+  if (cobrancasSweepInterval) return;
+
+  void runCobrancasSweep();
+  cobrancasSweepInterval = setInterval(() => {
+    void runCobrancasSweep();
+  }, 6 * 60 * 60 * 1000);
+}
+
 // Limpeza diária de históricos de chat (randomiza start em até 1h para evitar pico)
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 setTimeout(() => {
@@ -5603,6 +5448,7 @@ app.post("/user/timezone", authMiddleware, async (req, res) => {
     }
     const db = getDB();
     await db.run("UPDATE users SET timezone_offset = ? WHERE id = ?", [offset, user.id]);
+    clearSilenceConfigCache(user.id);
     return res.json({ ok: true, timezoneOffset: offset });
   } catch (err) {
     console.error("Erro ao salvar timezone:", err);

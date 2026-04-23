@@ -3,9 +3,14 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import { initDB } from "./database";
-import { restoreSessionsOnStartup, markAppReady } from "./server";
+import {
+  restoreSessionsOnStartup,
+  markAppReady,
+  startCobrancasSweepCron,
+} from "./server";
 import { cleanupInactiveTokens } from "./wppManager"; // 👉 NOVO
 import { setupLogging } from "./utils/logger";
+import { startScheduleWorker } from "./workers/scheduleWorker";
 
 async function start() {
   try {
@@ -23,6 +28,10 @@ async function start() {
     console.log("♻️ Sessões restauradas");
 
     // 4️⃣ Sinalizar readiness
+    startScheduleWorker();
+    console.log("Worker de agendamentos iniciado");
+    startCobrancasSweepCron();
+    console.log("Sweep de cobranças iniciado");
     markAppReady(true);
 
   } catch (err) {

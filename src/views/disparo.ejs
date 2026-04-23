@@ -16,7 +16,7 @@
   <link rel="stylesheet" href="/css/disparo.css">
 </head>
 
-<body>
+<body data-default-ddi="<%= user.default_ddi || '55' %>">
 
   <!-- HEADER -->
   <header class="topbar">
@@ -45,10 +45,10 @@
 
         <textarea
           id="numbers"
-          placeholder="5531999999999&#10;5511988888888"
+          placeholder="<%= user.default_ddi || '55' %> (31) 99999-9999&#10;<%= user.default_ddi || '55' %> (11) 98888-8888"
         ></textarea>
 
-        <small>Inclua o DDI + DDD, sem espaços.</small>
+        <small>O campo aplica máscara automática e inicia cada linha com DDI <%= user.default_ddi || '55' %>.</small>
       </div>
 
       <!-- MENSAGEM -->

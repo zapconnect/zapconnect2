@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/css/agendamentos.css">
 </head>
 
-<body data-user-tz="<%= user.timezone_offset || -180 %>">
+<body data-user-tz="<%= user.timezone_offset || -180 %>" data-default-ddi="<%= user.default_ddi || '55' %>">
 
   <header class="topbar">
     <div class="brand">
@@ -59,8 +59,9 @@
             </button>
             <input type="file" id="csvInput" accept=".csv,text/csv" style="display:none" onchange="importarCSV(this)">
           </div>
-          <textarea id="nums" rows="4" placeholder="54999999999&#10;55988888888" oninput="updateNumCount()"></textarea>
+          <textarea id="nums" rows="4" placeholder="<%= user.default_ddi || '55' %> (49) 99999-9999&#10;<%= user.default_ddi || '55' %> (11) 98888-8888" oninput="handleNumsInput()"></textarea>
           <div class="field-hint" id="num-count">0 números</div>
+          <small class="hint">O campo aplica máscara automática e inicia cada linha com DDI <%= user.default_ddi || '55' %>.</small>
 
           <label>
             <i class="fa-solid fa-message"></i>
@@ -280,6 +281,9 @@
     let agPage = 1;
     let agTotalPages = 1;
     let USER_TZ = Number(document.body.dataset.userTz || -180); // minutos em relação ao UTC
+    const PHONE_PREFIX = getConfiguredDefaultDdi();
+    const PHONE_MIN_LENGTH = PHONE_PREFIX.length + 10;
+    const PHONE_MAX_LENGTH = PHONE_PREFIX.length + 11;
 
     // Fallback de notify para esta página, caso não esteja carregado do layout
     function notify(msg, type = "info") {
@@ -334,6 +338,166 @@
 
     function getTimezoneOffsetSelected() {
       return Number(document.getElementById("timezoneSelect")?.value || USER_TZ || -180);
+    }
+
+    function getConfiguredDefaultDdi() {
+      const digits = String(document.body?.dataset?.defaultDdi || "55")
+        .replace(/\D/g, "")
+        .slice(0, 4);
+
+      return digits || "55";
+    }
+
+    function normalizeScheduledPhoneDigits(value, options = {}) {
+      const digits = String(value || "").replace(/\D/g, "");
+      if (!digits) return options.emptyAsPrefix ? PHONE_PREFIX : "";
+      if (PHONE_PREFIX.startsWith(digits) && digits.length <= PHONE_PREFIX.length) {
+        return PHONE_PREFIX;
+      }
+
+      const raw = digits.startsWith(PHONE_PREFIX) ? digits : `${PHONE_PREFIX}${digits}`;
+      return raw.slice(0, PHONE_MAX_LENGTH);
+    }
+
+    function formatScheduledPhoneDigits(digits) {
+      const normalized = normalizeScheduledPhoneDigits(digits, { emptyAsPrefix: true });
+      const ddiLength = PHONE_PREFIX.length;
+      const countryCode = normalized.slice(0, ddiLength);
+      const ddd = normalized.slice(ddiLength, ddiLength + 2);
+      const phone = normalized.slice(ddiLength + 2);
+
+      let formatted = countryCode;
+      if (ddd) {
+        formatted += ` (${ddd}`;
+        if (ddd.length === 2) formatted += ")";
+      }
+      if (phone) {
+        formatted += ` ${formatScheduledPhoneLocal(phone)}`;
+      }
+      return formatted;
+    }
+
+    function formatScheduledPhoneLocal(phone) {
+      if (phone.length <= 4) return phone;
+      if (phone.length <= 8) {
+        return `${phone.slice(0, 4)}-${phone.slice(4)}`;
+      }
+      return `${phone.slice(0, 5)}-${phone.slice(5, 9)}`;
+    }
+
+    function formatPhoneDisplay(value) {
+      const digits = String(value || "").replace(/\D/g, "");
+      if (!digits) return "—";
+      if (digits.length > PHONE_MAX_LENGTH && !digits.startsWith(PHONE_PREFIX)) {
+        return digits;
+      }
+      return formatScheduledPhoneDigits(digits);
+    }
+
+    function formatPhoneLine(line) {
+      const digits = normalizeScheduledPhoneDigits(line, { emptyAsPrefix: false });
+      if (!digits) return "";
+      return formatScheduledPhoneDigits(digits);
+    }
+
+    function normalizeContactsList(list) {
+      return Array.isArray(list)
+        ? list
+            .map((item) => {
+              if (!item || typeof item !== "object") return null;
+              const number = normalizeScheduledPhoneDigits(item.number || "", { emptyAsPrefix: false });
+              if (!number) return null;
+              return {
+                ...item,
+                number,
+              };
+            })
+            .filter(Boolean)
+        : [];
+    }
+
+    function getTextareaCaretMeta(value, position) {
+      const before = String(value || "").slice(0, Number(position || 0));
+      const parts = before.split("\n");
+      return {
+        lineIndex: parts.length - 1,
+        digitCount: String(parts[parts.length - 1] || "").replace(/\D/g, "").length,
+      };
+    }
+
+    function getPositionAfterDigits(line, digitCount) {
+      if (!digitCount) return 0;
+
+      let seen = 0;
+      for (let i = 0; i < line.length; i++) {
+        if (/\d/.test(line[i])) seen++;
+        if (seen >= digitCount) return i + 1;
+      }
+      return line.length;
+    }
+
+    function getTextareaCaretPosition(lines, meta) {
+      const safeLineIndex = Math.max(0, Math.min(meta.lineIndex, Math.max(lines.length - 1, 0)));
+      let absolute = 0;
+
+      for (let i = 0; i < safeLineIndex; i++) {
+        absolute += String(lines[i] || "").length + 1;
+      }
+
+      return absolute + getPositionAfterDigits(String(lines[safeLineIndex] || ""), meta.digitCount);
+    }
+
+    function applyNumsMask() {
+      const textarea = document.getElementById("nums");
+      if (!textarea) return;
+
+      const rawValue = String(textarea.value || "");
+      const startMeta = getTextareaCaretMeta(rawValue, textarea.selectionStart);
+      const endMeta = getTextareaCaretMeta(rawValue, textarea.selectionEnd);
+      const formattedLines = rawValue.split("\n").map(formatPhoneLine);
+      const formattedValue = formattedLines.join("\n");
+
+      if (formattedValue !== rawValue) {
+        textarea.value = formattedValue;
+      }
+
+      const start = getTextareaCaretPosition(formattedLines, startMeta);
+      const end = getTextareaCaretPosition(formattedLines, endMeta);
+      textarea.setSelectionRange(start, end);
+    }
+
+    function ensureNumsPrefixOnFocus() {
+      const textarea = document.getElementById("nums");
+      if (!textarea) return;
+      if (!textarea.value.trim()) {
+        textarea.value = PHONE_PREFIX;
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      }
+      applyNumsMask();
+    }
+
+    function handleNumsKeydown(event) {
+      if (event.key !== "Enter") return;
+      const textarea = document.getElementById("nums");
+      if (!textarea) return;
+
+      event.preventDefault();
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const value = textarea.value;
+      const insertion = `\n${PHONE_PREFIX}`;
+
+      textarea.value = `${value.slice(0, start)}${insertion}${value.slice(end)}`;
+      const caret = start + insertion.length;
+      textarea.setSelectionRange(caret, caret);
+      updateNumCount();
+      updatePreview();
+    }
+
+    function handleNumsInput() {
+      applyNumsMask();
+      updateNumCount();
+      updatePreview();
     }
 
     // ── Contador de números ────────────────────────────────
@@ -448,7 +612,7 @@
         const first = contactsData[0];
         const vars = first?.vars || {};
         return {
-          numero: first.number || "55999990000",
+          numero: formatPhoneDisplay(first.number || `${PHONE_PREFIX}999990000`),
           nome: vars.nome || vars.name || "Maria",
           pedido: vars.pedido || vars.order || "#12345",
           data: dataHoje,
@@ -458,7 +622,7 @@
       }
 
       return {
-        numero: "55999990000",
+        numero: formatPhoneDisplay(`${PHONE_PREFIX}999990000`),
         nome: "Maria",
         pedido: "#12345",
         data: dataHoje,
@@ -549,7 +713,7 @@
         if (idxNum >= 0) {
           for (let i = 1; i < lines.length; i++) {
             const cols = lines[i].split(delim);
-            const num = (cols[idxNum] || "").replace(/[^\d+]/g, "");
+            const num = normalizeScheduledPhoneDigits(cols[idxNum] || "", { emptyAsPrefix: false });
             if (!num) continue;
             const msg = idxMsg >= 0 ? (cols[idxMsg] || "") : "";
 
@@ -571,7 +735,10 @@
             .split(/[\n;,]+/)
             .map(t => t.trim())
             .filter(Boolean);
-          parsed = tokens.map(t => ({ number: t.replace(/[^\d+]/g, ""), message: "" }))
+          parsed = tokens.map(t => ({
+              number: normalizeScheduledPhoneDigits(t, { emptyAsPrefix: false }),
+              message: ""
+            }))
             .filter(p => p.number);
         }
 
@@ -582,7 +749,7 @@
 
         contactsData = parsed;
         const textarea = document.getElementById("nums");
-        textarea.value = parsed.map(p => p.number).join("\n");
+        textarea.value = parsed.map(p => formatPhoneDisplay(p.number)).join("\n");
         updateNumCount();
         updatePreview();
       };
@@ -594,7 +761,9 @@
     async function agendar() {
       clearAllFieldErrors();
       const numbers = document.getElementById("nums").value
-        .split("\n").map(n => n.trim()).filter(Boolean);
+        .split("\n")
+        .map((n) => normalizeScheduledPhoneDigits(n, { emptyAsPrefix: false }))
+        .filter(Boolean);
       const totalCount = contactsData.length ? contactsData.length : numbers.length;
 
       if (!numbers.length && !contactsData.length) {
@@ -643,7 +812,7 @@
 
       const payload = {
         numbers,
-        contacts: contactsData.length ? contactsData : undefined,
+        contacts: contactsData.length ? normalizeContactsList(contactsData) : undefined,
         message,
         sendAt,
         recurrence: document.getElementById("recurrence").value || "none",
@@ -667,8 +836,10 @@
       // Preenche campos
       const nums = JSON.parse(row.numbers || "[]");
       const hasPersonalized = Array.isArray(nums) && nums.length && typeof nums[0] === "object";
-      contactsData = hasPersonalized ? nums : [];
-      document.getElementById("nums").value = nums.map((n) => typeof n === "object" ? n.number : n).join("\n");
+      contactsData = hasPersonalized ? normalizeContactsList(nums) : [];
+      document.getElementById("nums").value = nums
+        .map((n) => formatPhoneDisplay(typeof n === "object" ? n.number : n))
+        .join("\n");
       document.getElementById("msg").value = row.message || "";
       const dtStr = fromUtcToInput(row.send_at, getTimezoneOffsetSelected());
       document.getElementById("sendAt").value = dtStr;
@@ -714,8 +885,10 @@
       try {
         const nums = JSON.parse(row.numbers || "[]");
         const hasPersonalized = Array.isArray(nums) && nums.length && typeof nums[0] === "object";
-        contactsData = hasPersonalized ? nums : [];
-        document.getElementById("nums").value = nums.map((n) => typeof n === "object" ? n.number : n).join("\n");
+        contactsData = hasPersonalized ? normalizeContactsList(nums) : [];
+        document.getElementById("nums").value = nums
+          .map((n) => formatPhoneDisplay(typeof n === "object" ? n.number : n))
+          .join("\n");
       } catch {
         contactsData = [];
         document.getElementById("nums").value = "";
@@ -938,8 +1111,8 @@
           const nums = JSON.parse(row.numbers || "[]");
           const hasPersonalized = Array.isArray(nums) && nums.length && typeof nums[0] === "object";
           const numsDisplay = hasPersonalized
-            ? nums.map((c) => `${c.number || ""} <span class="pill-personalized">msg personalizada</span>`).join("<br>")
-            : nums.join("<br>");
+            ? nums.map((c) => `${formatPhoneDisplay(c.number || "")} <span class="pill-personalized">msg personalizada</span>`).join("<br>")
+            : nums.map((n) => formatPhoneDisplay(n)).join("<br>");
           const recurrenceHtml = recurrenceBadge(row.recurrence);
           const isPending = row.status === "pending";
           const actionButtons = isPending
@@ -1109,7 +1282,7 @@
           const status = it.status === "sent" ? "✅" : "⚠️";
           const when = new Date(Number(it.sent_at || 0)).toLocaleString("pt-BR");
           const err = it.error ? `<div class=\"item-error\">${it.error}</div>` : "";
-          return `<div class=\"item-row\"><div>${status} ${it.number}</div><div class=\"item-date\">${when}</div>${err}</div>`;
+          return `<div class=\"item-row\"><div>${status} ${formatPhoneDisplay(it.number)}</div><div class=\"item-date\">${when}</div>${err}</div>`;
         }).join("") || "<p>Sem itens detalhados.</p>";
 
         body.innerHTML = `
@@ -1132,6 +1305,9 @@
 
     updateNumCount();
     updatePreview();
+    const numsEl = document.getElementById("nums");
+    numsEl?.addEventListener("focus", ensureNumsPrefixOnFocus);
+    numsEl?.addEventListener("keydown", handleNumsKeydown);
     const tzSel = document.getElementById("timezoneSelect");
     if (tzSel) tzSel.value = String(USER_TZ);
     toggleRecurrenceEnd();

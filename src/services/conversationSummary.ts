@@ -1,5 +1,6 @@
 import { getDB } from "../database";
 import { mainGoogle } from "../service/google";
+import { decodeCompressedJson } from "../utils/chatHistoryCodec";
 
 type HistoryEntry = { role: "user" | "model"; parts: { text: string }[] };
 
@@ -69,7 +70,7 @@ export async function summarizeConversationToCrm({
 }) {
   try {
     const db = getDB();
-    const row = await db.get<{ history: string | null }>(
+    const row = await db.get<{ history: Buffer | string | null }>(
       `SELECT history
        FROM chat_histories
        WHERE user_id = ? AND chat_id = ?
@@ -80,7 +81,7 @@ export async function summarizeConversationToCrm({
 
     let history: any = null;
     try {
-      history = JSON.parse(row.history);
+      history = await decodeCompressedJson(row.history);
     } catch {
       return;
     }

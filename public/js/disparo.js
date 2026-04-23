@@ -23,12 +23,16 @@ let isPaused = false;
 let cancelRequested = false;
 let isPreviewing = false;
 let shownWarnings = new Set();
+const PHONE_BR_PREFIX = getConfiguredDefaultDdi();
+const PHONE_BR_MAX_LENGTH = PHONE_BR_PREFIX.length + 11;
 const btnStart = document.getElementById("btnStart");
 const btnPause = document.getElementById("btnPause");
 const btnCancel = document.getElementById("btnCancel");
+const numbersInput = document.getElementById("numbers");
 btnStart.addEventListener("click", startDisparo);
 btnPause.addEventListener("click", togglePause);
 btnCancel.addEventListener("click", cancelDisparo);
+bindNumbersTextareaMask();
 
 function notifyWarnings(warnings = []) {
   warnings.forEach((warning) => {
@@ -227,16 +231,16 @@ async function startDisparo() {
   // Validações
   // ===============================
   if (!numbers.length) {
-    showFieldError("numbers", "Informe pelo menos um número válido (10-15 dígitos).");
-    notify("⚠️ Informe pelo menos um número válido (10-15 dígitos).", "error");
+    showFieldError("numbers", `Informe pelo menos um número válido com DDI ${PHONE_BR_PREFIX} e DDD.`);
+    notify(`⚠️ Informe pelo menos um número válido com DDI ${PHONE_BR_PREFIX} e DDD.`, "error");
     resetButton(originalLabel);
     return;
   }
 
   if (invalidNumbers.length) {
     notify(
-      `⚠️ Números suspeitos (fora de 10-15 dígitos): ${invalidNumbers
-        .map((n) => `<span class="pill-suspect">${n}</span>`)
+      `⚠️ Números suspeitos (fora do padrão com DDI ${PHONE_BR_PREFIX}): ${invalidNumbers
+        .map((n) => `<span class="pill-suspect">${formatPhoneDisplay(n)}</span>`)
         .join(" ")}`,
       "warn"
     );
@@ -329,7 +333,7 @@ async function startDisparo() {
     for (let i = 0; i < numbers.length; i++) {
       const num = numbers[i];
       await waitWhilePausedOrCancelled();
-      setProgressStatus(`Enviando para ${num}...`);
+      setProgressStatus(`Enviando para ${formatPhoneDisplay(num)}...`);
 
       const result = await sendWithRetry({
         number: num,
@@ -344,8 +348,8 @@ async function startDisparo() {
       } else {
         failCount++;
         const failureMessage = result.error || "Falha ao enviar.";
-        setProgressStatus(`Falha ao enviar para ${num}: ${failureMessage}`);
-        notify(`⚠️ ${num}: ${failureMessage}`, "warn");
+        setProgressStatus(`Falha ao enviar para ${formatPhoneDisplay(num)}: ${failureMessage}`);
+        notify(`⚠️ ${formatPhoneDisplay(num)}: ${failureMessage}`, "warn");
 
         if (shouldStopDisparo(result)) {
           throw new Error(failureMessage);
@@ -514,7 +518,7 @@ async function showPreviewSummary({
         ? `<div class="preview-invalid">
              <strong>Inválidos (${invalid}):</strong>
              <div>${invalidList
-               .map((n) => `<span class="pill-suspect">${n}</span>`)
+               .map((n) => `<span class="pill-suspect">${formatPhoneDisplay(n)}</span>`)
                .join(" ")}${hasMoreInvalid ? " ..." : ""}</div>
            </div>`
         : "";
@@ -522,7 +526,7 @@ async function showPreviewSummary({
     progress.innerHTML = `
       <div class="preview-box">
         <div class="preview-row"><span>Total detectados:</span><strong>${total}</strong></div>
-        <div class="preview-row"><span>Válidos (10-15 dígitos):</span><strong>${valid}</strong></div>
+        <div class="preview-row"><span>Válidos (DDI ${PHONE_BR_PREFIX} + DDD):</span><strong>${valid}</strong></div>
         <div class="preview-row"><span>Serão ignorados:</span><strong>${invalid}</strong></div>
         ${invalidHtml}
         <div class="preview-actions">
@@ -570,4 +574,149 @@ async function logDisparoHistory({ total, success, fail, message, status }) {
   } catch (err) {
     console.error("Erro ao registrar histórico de disparo:", err);
   }
+}
+
+function bindNumbersTextareaMask() {
+  if (!numbersInput || numbersInput.dataset.phoneMaskBound === "1") return;
+
+  numbersInput.dataset.phoneMaskBound = "1";
+  numbersInput.addEventListener("focus", handleNumbersFocus);
+  numbersInput.addEventListener("input", handleNumbersInput);
+  numbersInput.addEventListener("keydown", handleNumbersKeydown);
+}
+
+function handleNumbersFocus() {
+  if (!numbersInput) return;
+  if (!numbersInput.value.trim()) {
+    numbersInput.value = PHONE_BR_PREFIX;
+    numbersInput.setSelectionRange(numbersInput.value.length, numbersInput.value.length);
+    return;
+  }
+  applyNumbersTextareaMask(numbersInput);
+}
+
+function handleNumbersInput() {
+  if (!numbersInput) return;
+  applyNumbersTextareaMask(numbersInput);
+}
+
+function handleNumbersKeydown(event) {
+  if (!numbersInput || event.key !== "Enter") return;
+
+  event.preventDefault();
+  const start = numbersInput.selectionStart;
+  const end = numbersInput.selectionEnd;
+  const value = numbersInput.value;
+  const insertion = `\n${PHONE_BR_PREFIX}`;
+
+  numbersInput.value = `${value.slice(0, start)}${insertion}${value.slice(end)}`;
+  const caret = start + insertion.length;
+  numbersInput.setSelectionRange(caret, caret);
+}
+
+function applyNumbersTextareaMask(textarea) {
+  const rawValue = String(textarea.value || "");
+  const startMeta = getTextareaCaretMeta(rawValue, textarea.selectionStart);
+  const endMeta = getTextareaCaretMeta(rawValue, textarea.selectionEnd);
+  const formattedLines = rawValue.split("\n").map(formatPhoneLine);
+  const formattedValue = formattedLines.join("\n");
+
+  if (formattedValue !== rawValue) {
+    textarea.value = formattedValue;
+  }
+
+  const start = getTextareaCaretPosition(formattedLines, startMeta);
+  const end = getTextareaCaretPosition(formattedLines, endMeta);
+  textarea.setSelectionRange(start, end);
+}
+
+function getTextareaCaretMeta(value, position) {
+  const before = String(value || "").slice(0, Number(position || 0));
+  const parts = before.split("\n");
+  return {
+    lineIndex: parts.length - 1,
+    digitCount: String(parts[parts.length - 1] || "").replace(/\D/g, "").length,
+  };
+}
+
+function getTextareaCaretPosition(lines, meta) {
+  const safeLineIndex = Math.max(0, Math.min(meta.lineIndex, Math.max(lines.length - 1, 0)));
+  let absolute = 0;
+
+  for (let i = 0; i < safeLineIndex; i++) {
+    absolute += String(lines[i] || "").length + 1;
+  }
+
+  return absolute + getPositionAfterDigits(String(lines[safeLineIndex] || ""), meta.digitCount);
+}
+
+function getPositionAfterDigits(line, digitCount) {
+  if (!digitCount) return 0;
+
+  let seen = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (/\d/.test(line[i])) seen++;
+    if (seen >= digitCount) return i + 1;
+  }
+  return line.length;
+}
+
+function formatPhoneLine(line) {
+  const digits = String(line || "").replace(/\D/g, "");
+  if (!digits) return "";
+  return formatBrazilPhone(normalizeBrazilPhoneDigits(digits));
+}
+
+function normalizeBrazilPhoneDigits(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (PHONE_BR_PREFIX.startsWith(digits) && digits.length <= PHONE_BR_PREFIX.length) {
+    return PHONE_BR_PREFIX;
+  }
+
+  const raw = digits.startsWith(PHONE_BR_PREFIX) ? digits : `${PHONE_BR_PREFIX}${digits}`;
+  return raw.slice(0, PHONE_BR_MAX_LENGTH);
+}
+
+function formatBrazilPhone(digits) {
+  const normalized = normalizeBrazilPhoneDigits(digits);
+  const ddiLength = PHONE_BR_PREFIX.length;
+  const countryCode = normalized.slice(0, ddiLength);
+  const ddd = normalized.slice(ddiLength, ddiLength + 2);
+  const phone = normalized.slice(ddiLength + 2);
+
+  let formatted = countryCode;
+  if (ddd) {
+    formatted += ` (${ddd}`;
+    if (ddd.length === 2) formatted += ")";
+  }
+  if (phone) {
+    formatted += ` ${formatBrazilPhoneLocal(phone)}`;
+  }
+  return formatted;
+}
+
+function formatBrazilPhoneLocal(phone) {
+  if (phone.length <= 4) return phone;
+  if (phone.length <= 8) {
+    return `${phone.slice(0, 4)}-${phone.slice(4)}`;
+  }
+  return `${phone.slice(0, 5)}-${phone.slice(5, 9)}`;
+}
+
+function formatPhoneDisplay(value) {
+  const digits = String(value || "").replace(/\D/g, "");
+  if (!digits) return "—";
+  if (digits.length > PHONE_BR_MAX_LENGTH && !digits.startsWith(PHONE_BR_PREFIX)) {
+    return digits;
+  }
+  return formatBrazilPhone(digits);
+}
+
+function getConfiguredDefaultDdi() {
+  const digits = String(document.body?.dataset?.defaultDdi || "55")
+    .replace(/\D/g, "")
+    .slice(0, 4);
+
+  return digits || "55";
 }
