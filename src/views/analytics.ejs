@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Analytics &bull; ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="/img/favinco.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="/css/analytics.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <div class="page-glow page-glow-a"></div>
+    <div class="page-glow page-glow-b"></div>
+
+    <header class="hero">
+      <div class="hero-copy">
+        <a href="/painel" class="hero-back">
+          <i class="fa-solid fa-arrow-left"></i>
+          Voltar ao painel
+        </a>
+
+        <h1>Entenda o que a IA resolve, onde ela trava e quando o volume sobe.</h1>
+        <p>
+          Acompanhe os temas mais recorrentes, a satisfa&ccedil;&atilde;o estimada, os
+          hor&aacute;rios de pico e os pontos em que o bot precisa de refor&ccedil;o.
+        </p>
+
+        <div class="hero-highlights">
+          <article class="hero-highlight">
+            <span>Relat&oacute;rio em foco</span>
+            <strong id="hero-selected-date">Sem relat&oacute;rio</strong>
+            <small id="hero-selected-window">&Uacute;ltimas 24h</small>
+          </article>
+
+          <article class="hero-highlight">
+            <span>Hist&oacute;rico carregado</span>
+            <strong id="hero-report-count">0</strong>
+            <small id="hero-report-foot">relat&oacute;rios no per&iacute;odo</small>
+          </article>
+
+          <article class="hero-highlight">
+            <span>Acesso do plano</span>
+            <strong id="hero-plan-access"><%= analyticsAccess.plan.toUpperCase() %></strong>
+            <small id="hero-plan-foot">Configurando acesso</small>
+          </article>
+        </div>
+      </div>
+
+      <div class="hero-panel">
+        <div class="hero-panel-top">
+          <div class="plan-chip">
+            <span>Plano atual</span>
+            <strong id="plan-name"><%= analyticsAccess.plan.toUpperCase() %></strong>
+          </div>
+
+          <div class="capability-pills">
+            <span class="status-pill" id="history-cap-pill">Hist&oacute;rico</span>
+            <span class="status-pill" id="pdf-cap-pill">PDF</span>
+          </div>
+        </div>
+
+        <div class="control-surface">
+          <label class="field">
+            <span>Per&iacute;odo</span>
+            <select id="days-select">
+              <option value="7">&Uacute;ltimos 7 dias</option>
+              <option value="30">&Uacute;ltimos 30 dias</option>
+              <option value="90">&Uacute;ltimos 90 dias</option>
+            </select>
+          </label>
+
+          <div class="hero-actions">
+            <button id="refresh-btn" class="btn btn-primary" type="button">
+              <i class="fa-solid fa-sparkles"></i>
+              Atualizar agora
+            </button>
+            <button id="export-btn" class="btn btn-secondary" type="button">
+              <i class="fa-solid fa-file-pdf"></i>
+              Exportar PDF
+            </button>
+          </div>
+        </div>
+
+        <div class="meta-grid">
+          <article class="meta-card">
+            <span>Janela analisada</span>
+            <strong id="meta-window">&Uacute;ltimas 24h</strong>
+          </article>
+          <article class="meta-card">
+            <span>Mensagens estimadas</span>
+            <strong id="meta-messages">0</strong>
+          </article>
+          <article class="meta-card">
+            <span>Motor usado</span>
+            <strong id="meta-model">Aguardando</strong>
+          </article>
+          <article class="meta-card">
+            <span>Atualizado em</span>
+            <strong id="meta-generated-at">--</strong>
+          </article>
+        </div>
+
+        <div id="upgrade-banner" class="upgrade-banner">
+          <div>
+            <strong>Plano Pro libera exporta&ccedil;&atilde;o PDF e hist&oacute;rico completo.</strong>
+            <p>Nos planos b&aacute;sicos, o painel mostra apenas os &uacute;ltimos 7 dias.</p>
+          </div>
+          <a href="/checkout" class="btn btn-inline">Fazer upgrade</a>
+        </div>
+      </div>
+    </header>
+
+    <section class="stats-grid">
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-mint">
+          <i class="fa-solid fa-comments"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Conversas analisadas</span>
+          <strong class="stat-value" id="stat-conversations">&mdash;</strong>
+          <span class="stat-foot" id="stat-window">&Uacute;ltimas 24h</span>
+        </div>
+      </article>
+
+      <article class="stat-card stat-card-accent">
+        <div class="stat-icon stat-icon-blue">
+          <i class="fa-solid fa-face-smile-beam"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Satisfa&ccedil;&atilde;o estimada</span>
+          <strong class="stat-value" id="stat-satisfaction">&mdash;</strong>
+          <span class="stat-foot" id="stat-satisfaction-label">Sem dados</span>
+        </div>
+      </article>
+
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-amber">
+          <i class="fa-solid fa-circle-question"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Perguntas sem resposta</span>
+          <strong class="stat-value" id="stat-unanswered">&mdash;</strong>
+          <span class="stat-foot" id="stat-unanswered-foot">Nenhum item carregado</span>
+        </div>
+      </article>
+
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-rose">
+          <i class="fa-solid fa-bolt"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Pico de atividade</span>
+          <strong class="stat-value" id="stat-peak-hour">&mdash;</strong>
+          <span class="stat-foot" id="stat-peak-count">Sem pico detectado</span>
+        </div>
+      </article>
+    </section>
+
+    <main class="content-grid">
+      <section class="card summary-card span-two">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Resumo executivo</span>
+            <h2>Leitura di&aacute;ria das conversas</h2>
+          </div>
+          <span class="badge" id="report-date-badge">Sem relat&oacute;rio</span>
+        </div>
+
+        <p id="summary-text" class="summary-text">
+          Carregando relat&oacute;rio mais recente...
+        </p>
+
+        <div class="summary-support">
+          <section class="satisfaction-panel">
+            <div class="satisfaction-copy">
+              <span class="subtle-label">Clima da conversa</span>
+              <strong id="satisfaction-summary-title">Sem dados suficientes</strong>
+              <p id="satisfaction-summary-text">
+                Quando houver mais conversa analisada, este bloco mostra o clima predominante das intera&ccedil;&otilde;es.
+              </p>
+            </div>
+
+            <div class="satisfaction-meter">
+              <div class="meter-track" id="meter-track">
+                <span id="meter-positive" class="meter-fill meter-positive" style="width: 0%"></span>
+                <span id="meter-neutral" class="meter-fill meter-neutral" style="width: 0%"></span>
+                <span id="meter-negative" class="meter-fill meter-negative" style="width: 0%"></span>
+              </div>
+              <div class="meter-legend">
+                <span><b id="meter-positive-value">0%</b> positivas</span>
+                <span><b id="meter-neutral-value">0%</b> neutras</span>
+                <span><b id="meter-negative-value">0%</b> negativas</span>
+              </div>
+            </div>
+          </section>
+
+          <div id="report-notes" class="notes-list"></div>
+        </div>
+      </section>
+
+      <aside class="card health-card">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Cobertura</span>
+            <h2>Status do relat&oacute;rio</h2>
+          </div>
+        </div>
+
+        <div class="health-list">
+          <article class="health-item">
+            <span>Volume processado</span>
+            <strong id="health-conversations">0 conversas</strong>
+            <p id="health-messages">0 mensagens estimadas</p>
+          </article>
+
+          <article class="health-item">
+            <span>Motor e gera&ccedil;&atilde;o</span>
+            <strong id="health-engine">Sem execu&ccedil;&atilde;o</strong>
+            <p id="health-engine-foot">Nenhum relat&oacute;rio carregado ainda.</p>
+          </article>
+
+          <article class="health-item">
+            <span>Limites e cobertura</span>
+            <strong id="health-limit">Cobertura completa</strong>
+            <p id="health-limit-foot">Sem truncamentos detectados.</p>
+          </article>
+        </div>
+      </aside>
+
+      <section class="card chart-card span-two">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Top 5 assuntos</span>
+            <h2>Temas mais frequentes</h2>
+          </div>
+        </div>
+
+        <div class="chart-split">
+          <div class="canvas-wrap canvas-wrap-wide">
+            <canvas id="themes-chart"></canvas>
+          </div>
+          <div id="themes-list" class="theme-list"></div>
+        </div>
+      </section>
+
+      <section class="card history-card">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Hist&oacute;rico</span>
+            <h2>Relat&oacute;rios salvos</h2>
+          </div>
+        </div>
+        <div id="history-list" class="history-list"></div>
+      </section>
+
+      <section class="card chart-card span-two">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Tend&ecirc;ncia</span>
+            <h2>Satisfa&ccedil;&atilde;o ao longo dos dias</h2>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="trend-chart"></canvas>
+        </div>
+      </section>
+
+      <section class="card chart-card">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Hor&aacute;rios de pico</span>
+            <h2>Conversas mais ativas</h2>
+          </div>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="peak-chart"></canvas>
+        </div>
+      </section>
+
+      <section class="card list-card span-two">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Perguntas sem resposta</span>
+            <h2>Onde o bot precisa de refor&ccedil;o</h2>
+          </div>
+        </div>
+        <div id="unanswered-list" class="bullet-list"></div>
+      </section>
+
+      <section class="card list-card">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Alertas</span>
+            <h2>Riscos detectados</h2>
+          </div>
+        </div>
+        <div id="risks-list" class="risk-list"></div>
+      </section>
+
+      <section class="card list-card span-full">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Sugest&otilde;es</span>
+            <h2>Melhorias para o prompt</h2>
+          </div>
+        </div>
+        <div id="suggestions-list" class="suggestion-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.__ANALYTICS_ACCESS__ = <%- JSON.stringify(analyticsAccess) %>;
+    window.__ANALYTICS_USER__ = <%- JSON.stringify({
+      id: user?.id,
+      name: user?.name,
+      plan: user?.plan,
+    }) %>;
+  </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <script src="/js/toast.js"></script>
+  <script src="/js/analytics.js"></script>
+</body>
+</html>

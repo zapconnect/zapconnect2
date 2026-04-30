@@ -18,7 +18,7 @@
   </script>
 </head>
 
-<body>
+<body data-default-ddi="<%= user.default_ddi || '55' %>">
 
   <div class="page">
 
@@ -75,6 +75,11 @@
             <i class="fa-solid fa-angles-down"></i>
             Carregar mais
           </button>
+
+          <a href="/drips" class="btn ghost compact-label" title="Abrir automacoes de funil">
+            <i class="fa-solid fa-timeline"></i>
+            <span class="btn-label">Drip Campaigns</span>
+          </a>
 
           <a href="/painel" class="btn ghost back-desktop">
             <i class="fa-solid fa-arrow-left"></i>
@@ -189,13 +194,13 @@
           <input id="modalName">
 
           <label>Telefone</label>
-          <input id="modalPhone">
+          <input id="modalPhone" placeholder="<%= user.default_ddi || '55' %> 11 99999-9999" inputmode="tel">
 
           <label>Cidade / Estado</label>
           <input id="modalCity">
 
           <label>Valor do negócio (R$)</label>
-          <input id="modalValue" type="number" min="0" step="0.01" placeholder="0,00">
+          <input id="modalValue" type="text" inputmode="decimal" placeholder="0,00">
 
           <label>Follow-up — data de retorno</label>
           <input id="modalFollowUp" type="date">

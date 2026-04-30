@@ -38,6 +38,12 @@ router.post(
         mode: "subscription",
         payment_method_types: ["card"],
         customer_email: user.email,
+        subscription_data: {
+          metadata: {
+            user_id: String(user.id),
+            plan,
+          },
+        },
         line_items: [
           {
             price_data: {

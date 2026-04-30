@@ -31,12 +31,17 @@ import {
 } from "./services/fallbackService";
 import { generateAIResponse } from "./services/aiHandler";
 import { getChatAI } from "./services/chatAiService";
+import {
+  getQualificationTextOnlyReminder,
+  processQualificationInboundMessage,
+} from "./services/qualificationService";
 import { isInSilenceWindow } from "./services/silenceUtils";
 import {
   clearDispatchSuppression,
   detectDispatchConsentCommand,
   upsertDispatchSuppression,
 } from "./services/dispatchPolicy";
+import { updateChargeWhatsappAckByMessageId } from "./services/cobrancaWhatsappTracking";
 import { logAudit } from "./utils/audit";
 
 
@@ -2012,6 +2017,31 @@ async function attachEvents(
   console.log(` Anexando eventos para ${full}...`);
   eventsAttached.add(full);
 
+  client.onAck(async (ack) => {
+    try {
+      const occurredAt =
+        Number((ack as any)?.t || 0) > 0
+          ? Number((ack as any).t) * 1000
+          : Date.now();
+      const updated = await updateChargeWhatsappAckByMessageId({
+        userId,
+        sessionName: shortName,
+        messageId: (ack as any)?.id,
+        ack: (ack as any)?.ack,
+        occurredAt,
+      });
+
+      if (updated) {
+        emitToUser(userId, "cobranca:atualizada", {
+          id: updated.cobrancaId,
+          whatsapp_ultimo_status: updated.status,
+        });
+      }
+    } catch (err) {
+      console.error("Erro ao processar ack de cobrança no WhatsApp:", err);
+    }
+  });
+
   client.onMessage(async (msg) => {
     let typingTimeout: NodeJS.Timeout | null = null;
 
@@ -2137,6 +2167,22 @@ async function attachEvents(
         console.error("Erro ao avaliar fallback (mídia sem texto):", err);
       }
 
+      try {
+        const qualificationReminder = await getQualificationTextOnlyReminder({
+          userId,
+          chatId,
+        });
+        if (qualificationReminder) {
+          await withTimeout(
+            client.sendText(chatId, qualificationReminder),
+            WPP_TIMEOUT_MS,
+            "sendText"
+          );
+        }
+      } catch (err) {
+        console.error("Erro ao avisar qualificação para mídia sem texto:", err);
+      }
+
       return;
     }
 
@@ -2144,6 +2190,7 @@ async function attachEvents(
 
     try {
       let isNewContact = false;
+      let crmId: number | null = null;
       let crmForFlow: { stage?: string | null; tags?: string[] } | undefined;
 
       // =================================================
@@ -2152,6 +2199,7 @@ async function attachEvents(
       try {
         const crmResult = await saveCRMClient(userId, shortName, msg);
         isNewContact = crmResult?.isNew || false;
+        crmId = Number(crmResult?.crmId || 0) || null;
         crmForFlow = crmResult?.crmData || undefined;
       } catch { }
       let offsetMinutes = -180;
@@ -2336,6 +2384,37 @@ async function attachEvents(
         }
       } catch (err) {
         console.warn("Erro ao avaliar horário de silêncio:", err);
+      }
+
+      try {
+        const qualificationResult = await processQualificationInboundMessage({
+          userId,
+          sessionName: shortName,
+          chatId,
+          crmId,
+          contactPhone: phoneForCtx,
+          contactName,
+          messageBody: body,
+          crmStage: crmForFlow?.stage || null,
+        });
+
+        if (qualificationResult.handled) {
+          messageBuffer.delete(chatKey);
+          try {
+            await client.stopTyping(chatId);
+          } catch { }
+
+          if (qualificationResult.responseText) {
+            await withTimeout(
+              client.sendText(chatId, qualificationResult.responseText),
+              WPP_TIMEOUT_MS,
+              "sendText"
+            );
+          }
+          return;
+        }
+      } catch (err) {
+        console.error("Erro ao processar qualificação automática:", err);
       }
 
       // =================================================

@@ -53,13 +53,36 @@
         <% } %>
       </div>
 
+      <section class="financial-health-panel" id="financialHealthPanel">
+        <div class="financial-health-card loading">
+          <div class="financial-health-head">
+            <div>
+              <div class="financial-health-kicker">Saúde financeira</div>
+              <h3>Carregando visão consolidada...</h3>
+            </div>
+            <span class="health-status-pill health-neutral">Analisando</span>
+          </div>
+        </div>
+      </section>
+
       <div class="toolbar">
-        <button class="btn-primary-cob" onclick="abrirModalNovaCobranca()">
+        <div class="toolbar-actions">
+          <button class="btn-primary-cob" onclick="abrirModalNovaCobranca()">
           <i class="fa-solid fa-plus"></i> Nova Cobrança
         </button>
 
+          <button
+            type="button"
+            class="btn-ghost-cob"
+            id="btnExportarCsv"
+            onclick="exportarCobrancasCsv()"
+          >
+            <i class="fa-solid fa-file-csv"></i> Exportar CSV
+          </button>
+        </div>
+
         <div class="filters-row">
-          <select class="filter-select" id="filtroStatus" onchange="loadCobrancas()">
+          <select class="filter-select" id="filtroStatus" onchange="handleStatusFilterChange()">
             <option value="all">Todos os status</option>
             <option value="PENDENTE">Pendentes</option>
             <option value="PAGO">Pagos</option>
@@ -72,8 +95,44 @@
             placeholder="Buscar cliente..."
             oninput="debounceSearch()"
           />
-          <input type="date" class="filter-input" id="filtroFrom" onchange="loadCobrancas()" />
-          <input type="date" class="filter-input" id="filtroTo" onchange="loadCobrancas()" />
+          <input type="date" class="filter-input" id="filtroFrom" onchange="handleDateFilterChange()" />
+          <input type="date" class="filter-input" id="filtroTo" onchange="handleDateFilterChange()" />
+
+          <div class="filter-shortcuts" aria-label="Atalhos rápidos de filtro">
+            <span class="filter-shortcuts-label">Atalhos:</span>
+            <button
+              type="button"
+              class="filter-shortcut-btn"
+              data-shortcut="today"
+              onclick="applyCobrancaDateShortcut('today')"
+            >
+              Hoje
+            </button>
+            <button
+              type="button"
+              class="filter-shortcut-btn"
+              data-shortcut="week"
+              onclick="applyCobrancaDateShortcut('week')"
+            >
+              Esta semana
+            </button>
+            <button
+              type="button"
+              class="filter-shortcut-btn"
+              data-shortcut="month"
+              onclick="applyCobrancaDateShortcut('month')"
+            >
+              Este mês
+            </button>
+            <button
+              type="button"
+              class="filter-shortcut-btn overdue"
+              data-shortcut="overdue"
+              onclick="applyCobrancaDateShortcut('overdue')"
+            >
+              Em atraso
+            </button>
+          </div>
         </div>
       </div>
 
@@ -81,6 +140,15 @@
         <table class="cobrancas-table">
           <thead>
             <tr>
+              <th class="checkbox-col">
+                <label class="table-checkbox" aria-label="Selecionar cobranças visíveis">
+                  <input
+                    type="checkbox"
+                    id="selectAllCobrancas"
+                    onchange="toggleSelectAllCobrancas(this.checked)"
+                  />
+                </label>
+              </th>
               <th>Cliente</th>
               <th>Tipo</th>
               <th>Valor</th>
@@ -91,10 +159,52 @@
           </thead>
           <tbody id="cobrancasTableBody">
             <tr>
-              <td colspan="6" class="table-loading">Carregando cobranças...</td>
+              <td colspan="7" class="table-loading">Carregando cobranças...</td>
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <div class="bulk-actions-bar" id="bulkActionsBar" hidden>
+        <div class="bulk-actions-info">
+          <strong id="bulkActionsCount">0 selecionadas</strong>
+          <span id="bulkActionsHint">Selecione cobranças da tabela para usar ações em lote.</span>
+        </div>
+
+        <div class="bulk-actions-controls">
+          <button
+            type="button"
+            class="btn-primary-cob"
+            id="btnBulkPay"
+            onclick="bulkMarcarCobrancasComoPagas()"
+          >
+            <i class="fa-solid fa-check"></i> Marcar pagas
+          </button>
+          <button
+            type="button"
+            class="btn-ghost-cob bulk-whatsapp-btn"
+            id="btnBulkNotify"
+            onclick="bulkEnviarLembretesWhatsApp()"
+          >
+            <i class="fa-brands fa-whatsapp"></i> Enviar lembrete
+          </button>
+          <button
+            type="button"
+            class="btn-ghost-cob"
+            id="btnBulkCancel"
+            onclick="bulkCancelarCobrancasSelecionadas()"
+          >
+            <i class="fa-solid fa-ban"></i> Cancelar
+          </button>
+          <button
+            type="button"
+            class="btn-ghost-cob"
+            id="btnBulkClear"
+            onclick="clearSelectedCobrancas()"
+          >
+            <i class="fa-solid fa-xmark"></i> Limpar seleção
+          </button>
+        </div>
       </div>
 
       <div class="paginacao" id="paginacao"></div>
@@ -173,6 +283,8 @@
       </div>
 
       <form id="formNovaCobranca" onsubmit="return false">
+        <input type="hidden" id="cbClienteId" />
+
         <div class="form-section">
           <div class="form-section-title">
             <i class="fa-solid fa-user"></i> Dados do Cliente
@@ -295,7 +407,7 @@
             <i class="fa-brands fa-whatsapp"></i> Enviar via WhatsApp
           </div>
           <label class="switch-line">
-            <input type="checkbox" id="cbEnviarWpp" onchange="toggleWppSection()" style="width:auto" />
+            <input type="checkbox" id="cbEnviarWpp" onchange="toggleWppSection()" />
             <span>Enviar cobrança no WhatsApp ao criar</span>
           </label>
           <div id="wppSection" style="display:none; margin-top:12px;">
@@ -314,7 +426,7 @@
 
         <div class="form-section">
           <label class="switch-line">
-            <input type="checkbox" id="cbRecorrente" onchange="toggleRecorrenciaSection()" style="width:auto" />
+            <input type="checkbox" id="cbRecorrente" onchange="toggleRecorrenciaSection()" />
             <span>Cobrança recorrente (assinatura)</span>
           </label>
           <div id="recorrenciaSection" style="display:none; margin-top:12px;">
@@ -390,6 +502,9 @@
       <div class="form-field" style="margin-bottom:14px;">
         <label>Valor recebido (R$)</label>
         <input class="form-input" id="pagarValor" type="text" inputmode="decimal" placeholder="Deixe vazio para valor total" />
+        <small class="helper-text" id="pagarResumoAjuda">
+          Deixe vazio para quitar o saldo restante. Se informar um valor menor, a cobrança ficará parcial.
+        </small>
       </div>
 
       <div class="form-field">
@@ -397,8 +512,13 @@
         <input class="form-input" id="pagarData" type="date" />
       </div>
 
+      <div class="form-field" style="margin-top:14px;">
+        <label>Observação do recebimento</label>
+        <textarea class="form-textarea" id="pagarObservacao" placeholder="Ex.: entrada negociada, PIX parcial, pagamento em dinheiro"></textarea>
+      </div>
+
       <label class="switch-line" style="margin-top:14px;">
-        <input type="checkbox" id="pagarEnviarConfirmacao" checked style="width:auto" />
+        <input type="checkbox" id="pagarEnviarConfirmacao" checked />
         <span>Enviar confirmação via WhatsApp</span>
       </label>
 
@@ -406,6 +526,63 @@
         <button class="btn-ghost-cob" onclick="fecharModal('modalPagar')">Cancelar</button>
         <button class="btn-primary-cob" id="btnConfirmarPagamento" onclick="confirmarPagamento()">
           <i class="fa-solid fa-check"></i> Confirmar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay-cob" id="modalMpCheckout">
+    <div class="modal-box-cob" style="max-width:720px;">
+      <div class="modal-header-cob">
+        <h2><i class="fa-solid fa-wallet"></i> Checkout Online</h2>
+        <button class="modal-close-btn" onclick="fecharModal('modalMpCheckout')">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div id="mpCheckoutContent">
+        <div class="table-loading">Preparando checkout do Mercado Pago...</div>
+      </div>
+
+      <div class="modal-footer-cob" id="mpCheckoutFooter"></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay-cob" id="modalWhatsAppPreview">
+    <div class="modal-box-cob" style="max-width:680px;">
+      <div class="modal-header-cob">
+        <h2><i class="fa-brands fa-whatsapp"></i> Confirmar envio</h2>
+        <button class="modal-close-btn" onclick="fecharModalWhatsappPreview()">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="preview-meta-cob">
+        <div class="preview-meta-head">
+          <strong id="whatsPreviewCliente">Carregando...</strong>
+          <span id="whatsPreviewTipo" class="preview-pill">Preparando</span>
+        </div>
+        <div class="preview-meta-pills">
+          <span id="whatsPreviewTelefone" class="preview-pill soft">WhatsApp</span>
+          <span id="whatsPreviewStatus" class="preview-pill soft">Status</span>
+        </div>
+      </div>
+
+      <div class="form-field" style="margin-top:14px;">
+        <label>Mensagem que será enviada</label>
+        <div class="whatsapp-preview" id="whatsPreviewContent">Carregando preview da mensagem...</div>
+      </div>
+
+      <small class="helper-text" id="whatsPreviewHint">
+        Revise o texto antes de confirmar o envio.
+      </small>
+
+      <div class="modal-footer-cob">
+        <button class="btn-ghost-cob" type="button" onclick="fecharModalWhatsappPreview()">
+          Cancelar
+        </button>
+        <button class="btn-primary-cob" id="btnConfirmarWhatsPreview" onclick="confirmarEnvioWhatsAppManual()">
+          <i class="fa-brands fa-whatsapp"></i> Enviar agora
         </button>
       </div>
     </div>
@@ -524,7 +701,7 @@
             <i class="fa-brands fa-whatsapp"></i> Enviar primeira cobrança via WhatsApp
           </div>
           <label class="switch-line">
-            <input type="checkbox" id="rcEnviarWpp" onchange="toggleRecorrenciaWppSection()" style="width:auto" />
+            <input type="checkbox" id="rcEnviarWpp" onchange="toggleRecorrenciaWppSection()" />
             <span>Notificar o cliente ao criar a recorrência</span>
           </label>
           <div id="rcWppSection" style="display:none; margin-top:12px;">
@@ -607,6 +784,30 @@
     </div>
   </div>
 
+  <div class="cliente-dashboard-drawer" id="clienteDashboardDrawer" onclick="handleClienteDashboardBackdrop(event)">
+    <aside
+      class="cliente-dashboard-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="clienteDashboardTitle"
+      onclick="event.stopPropagation()"
+    >
+      <div class="cliente-dashboard-header">
+        <div>
+          <span class="cliente-dashboard-kicker">Painel do cliente</span>
+          <h2 id="clienteDashboardTitle">Visão consolidada</h2>
+        </div>
+        <button class="modal-close-btn" type="button" onclick="fecharClienteDashboard()">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <div class="cliente-dashboard-content" id="clienteDashboardContent">
+        <div class="table-loading">Selecione um cliente para carregar o histórico.</div>
+      </div>
+    </aside>
+  </div>
+
   <footer>
     © 2026 ZapConnect — Todos os direitos reservados.<br />
     Desenvolvido por
@@ -639,6 +840,7 @@
   <script src="/socket.io/socket.io.js"></script>
   <script src="/js/loading-utils.js"></script>
   <script src="/js/toast.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <script src="/js/cobrancas.js"></script>
 </body>
 </html>

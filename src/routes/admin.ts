@@ -2,6 +2,11 @@ import express from "express";
 import { getDB } from "../database";
 import { PLAN_NAMES } from "../config/plans";
 import { listPlanConfigs, savePlanConfig } from "../services/planConfigs";
+import {
+  listStripeWebhookFailures,
+  resolveStripeWebhookFailure,
+  StripeWebhookFailureRow,
+} from "../services/stripeWebhookRecovery";
 import { availableTrialKeys, listTrialTemplates, saveTrialTemplate } from "../services/trialTemplates";
 
 const router = express.Router();
@@ -101,6 +106,42 @@ function buildDashboardUserWhere(query: {
     sql: clauses.join(" AND "),
     params,
   };
+}
+
+function getStripeObjectId(
+  value: string | { id?: string | null } | null | undefined
+): string | null {
+  if (!value) return null;
+  if (typeof value === "string") return value || null;
+  return typeof value.id === "string" && value.id.trim() ? value.id.trim() : null;
+}
+
+function buildStripeFailurePreview(failure: StripeWebhookFailureRow) {
+  try {
+    const payload = JSON.parse(failure.payload);
+
+    if (failure.event_type === "checkout.session.completed") {
+      return {
+        email: payload?.customer_email || null,
+        amount: Number(payload?.amount_total || 0) / 100,
+        plan: payload?.metadata?.plan || null,
+        subscriptionId: getStripeObjectId(payload?.subscription),
+      };
+    }
+
+    if (failure.event_type === "invoice.payment_succeeded") {
+      return {
+        email: payload?.customer_email || null,
+        amount: Number(payload?.amount_paid || 0) / 100,
+        subscriptionId: getStripeObjectId(payload?.subscription),
+        paymentIntentId: getStripeObjectId(payload?.payment_intent),
+      };
+    }
+
+    return {};
+  } catch {
+    return {};
+  }
 }
 
 async function computeDashboardSummary(db: ReturnType<typeof getDB>) {
@@ -790,6 +831,80 @@ router.post("/block-device", async (req, res) => {
   } catch (err) {
     console.error("Erro ao bloquear dispositivo:", err);
     return res.status(500).json({ ok: false, error: "Erro interno" });
+  }
+});
+
+router.get("/stripe-failures", async (req, res) => {
+  const user = (req as any).user;
+  if (user.email !== email) return res.status(403).json({ error: "Acesso negado" });
+
+  const resolvedRaw = String(req.query.resolved || "false").trim().toLowerCase();
+  const resolved =
+    resolvedRaw === "all"
+      ? null
+      : resolvedRaw === "true" || resolvedRaw === "1";
+
+  try {
+    const failures = await listStripeWebhookFailures(resolved);
+    return res.json({
+      ok: true,
+      failures: failures.map((failure) => ({
+        id: failure.id,
+        event_id: failure.event_id,
+        event_type: failure.event_type,
+        reason: failure.reason,
+        resolved: Boolean(failure.resolved),
+        resolved_at: failure.resolved_at,
+        resolved_by: failure.resolved_by,
+        created_at: failure.created_at,
+        preview: buildStripeFailurePreview(failure),
+      })),
+    });
+  } catch (err) {
+    console.error("Erro ao listar falhas do Stripe:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao listar falhas do Stripe" });
+  }
+});
+
+router.post("/stripe-failures/:id/resolve", async (req, res) => {
+  const user = (req as any).user;
+  if (user.email !== email) return res.status(403).json({ error: "Acesso negado" });
+
+  const failureId = Number(req.params.id);
+  const userId = Number(req.body?.userId);
+
+  if (!Number.isFinite(failureId) || failureId <= 0) {
+    return res.status(400).json({ ok: false, error: "Falha inválida" });
+  }
+
+  if (!Number.isFinite(userId) || userId <= 0) {
+    return res.status(400).json({ ok: false, error: "userId inválido" });
+  }
+
+  try {
+    await resolveStripeWebhookFailure({
+      failureId,
+      userId,
+      resolvedBy: String(user.email || "admin"),
+    });
+
+    return res.json({ ok: true });
+  } catch (err: any) {
+    if (err?.message === "FAILURE_NOT_FOUND") {
+      return res.status(404).json({ ok: false, error: "Falha não encontrada" });
+    }
+    if (err?.message === "FAILURE_ALREADY_RESOLVED") {
+      return res.status(409).json({ ok: false, error: "Falha já resolvida" });
+    }
+    if (err?.message === "FAILURE_INVALID_PAYLOAD") {
+      return res.status(400).json({ ok: false, error: "Payload inválido para reprocessamento" });
+    }
+    if (err?.message === "FAILURE_UNSUPPORTED_EVENT") {
+      return res.status(400).json({ ok: false, error: "Tipo de evento não suportado para resolução manual" });
+    }
+
+    console.error("Erro ao resolver falha do Stripe:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao resolver falha do Stripe" });
   }
 });
 

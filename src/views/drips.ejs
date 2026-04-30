@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Drip Campaigns &bull; ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="/img/favinco.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="/css/drips.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <div class="page-glow page-glow-a"></div>
+    <div class="page-glow page-glow-b"></div>
+
+    <header class="hero">
+      <div class="hero-copy">
+        <a href="/painel" class="hero-back">
+          <i class="fa-solid fa-arrow-left"></i>
+          Voltar ao painel
+        </a>
+
+        <h1>Cad&ecirc;ncias que acompanham o lead sem opera&ccedil;&atilde;o manual.</h1>
+        <p>
+          Monte sequ&ecirc;ncias p&oacute;s-cadastro, p&oacute;s-compra ou por mudan&ccedil;a de etapa no CRM.
+          O sistema inscreve o contato sozinho e executa cada passo no tempo certo.
+        </p>
+
+        <div class="hero-highlights">
+          <article class="hero-highlight">
+            <span>Campanha em foco</span>
+            <strong id="hero-selected-campaign">Nova campanha</strong>
+            <small id="hero-selected-foot">Nenhuma campanha selecionada ainda.</small>
+          </article>
+
+          <article class="hero-highlight">
+            <span>Janela total</span>
+            <strong id="hero-window-total">0min</strong>
+            <small id="hero-window-foot">Tempo at&eacute; o &uacute;ltimo passo do editor.</small>
+          </article>
+
+          <article class="hero-highlight">
+            <span>Enrollments agora</span>
+            <strong id="hero-active-enrollments">0</strong>
+            <small id="hero-enrollment-foot">Sem leads em andamento.</small>
+          </article>
+        </div>
+      </div>
+
+      <div class="hero-panel">
+        <div class="hero-panel-top">
+          <div class="plan-chip">
+            <span>Plano atual</span>
+            <strong id="plan-name"><%= String(dripBootstrap?.access?.plan || user?.plan || 'free').toUpperCase() %></strong>
+          </div>
+
+          <div class="capability-pills">
+            <span class="status-pill" id="usage-pill">Capacidade</span>
+            <span class="status-pill" id="sessions-pill">Sess&otilde;es</span>
+          </div>
+        </div>
+
+        <div class="usage-card">
+          <div class="usage-head">
+            <div>
+              <span>Enrollments no m&ecirc;s</span>
+              <strong id="usage-counter">--</strong>
+            </div>
+            <strong class="usage-percent" id="usage-percent">--</strong>
+          </div>
+
+          <div class="usage-track">
+            <div id="usage-bar" class="usage-bar"></div>
+          </div>
+
+          <div id="usage-foot" class="usage-subtle">Carregando limite do plano...</div>
+
+          <div class="usage-meta">
+            <article class="usage-meta-card">
+              <span>Campanhas ativas</span>
+              <strong id="usage-active-campaigns">0</strong>
+            </article>
+            <article class="usage-meta-card">
+              <span>Sess&otilde;es conectadas</span>
+              <strong id="usage-connected-sessions">0</strong>
+            </article>
+            <article class="usage-meta-card">
+              <span>Limite do plano</span>
+              <strong id="usage-limit-label">--</strong>
+            </article>
+          </div>
+        </div>
+
+        <div id="upgrade-banner" class="upgrade-banner">
+          <div>
+            <strong>Plano Pro libera hist&oacute;rico sem teto mensal.</strong>
+            <p>Starter e Free usam limite mensal de enrollments ativos no funil.</p>
+          </div>
+          <a href="/checkout" class="btn btn-inline">Fazer upgrade</a>
+        </div>
+
+        <div class="hero-actions">
+          <button id="create-new-btn" class="btn btn-primary" type="button">
+            <i class="fa-solid fa-plus"></i>
+            Nova campanha
+          </button>
+          <button id="reload-btn" class="btn btn-secondary" type="button">
+            <i class="fa-solid fa-rotate"></i>
+            Atualizar
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <section class="stats-grid">
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-blue">
+          <i class="fa-solid fa-diagram-project"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Campanhas configuradas</span>
+          <strong class="stat-value" id="stat-campaigns">0</strong>
+          <span class="stat-foot" id="stat-campaigns-foot">Nenhum funil criado ainda</span>
+        </div>
+      </article>
+
+      <article class="stat-card stat-card-accent">
+        <div class="stat-icon stat-icon-mint">
+          <i class="fa-solid fa-user-clock"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Enrollments ativos</span>
+          <strong class="stat-value" id="stat-active-enrollments">0</strong>
+          <span class="stat-foot" id="stat-active-foot">Sem leads em andamento</span>
+        </div>
+      </article>
+
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-amber">
+          <i class="fa-solid fa-flag-checkered"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Fluxos conclu&iacute;dos</span>
+          <strong class="stat-value" id="stat-completed">0</strong>
+          <span class="stat-foot" id="stat-completed-foot">Sem hist&oacute;rico conclu&iacute;do</span>
+        </div>
+      </article>
+
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-rose">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Falhas recentes</span>
+          <strong class="stat-value" id="stat-failed">0</strong>
+          <span class="stat-foot" id="stat-failed-foot">Nenhuma falha relevante</span>
+        </div>
+      </article>
+    </section>
+
+    <main class="content-grid">
+      <section class="card editor-card span-two">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Editor visual</span>
+            <h2>Monte a sequ&ecirc;ncia do funil</h2>
+          </div>
+          <span class="badge" id="editor-badge">Nova campanha</span>
+        </div>
+
+        <p class="editor-note">
+          Cada atraso &eacute; relativo ao passo anterior. Exemplo: mensagem imediata, depois de 1h, depois de 24h.
+        </p>
+
+        <div id="editor-overview" class="editor-overview"></div>
+
+        <div class="editor-grid">
+          <label class="field field-wide">
+            <span>Nome da campanha</span>
+            <input id="campaign-name" type="text" maxlength="120" placeholder="Ex: Sequ&ecirc;ncia p&oacute;s-cadastro" />
+          </label>
+
+          <label class="field">
+            <span>Gatilho no CRM</span>
+            <select id="trigger-stage"></select>
+          </label>
+
+          <label class="field">
+            <span>Sess&atilde;o preferencial</span>
+            <select id="preferred-session"></select>
+          </label>
+
+          <div class="toggle-field field-wide">
+            <span>Status</span>
+            <div id="campaign-active-shell" class="toggle-shell">
+              <div class="toggle-copy">
+                <strong id="campaign-active-label">Campanha ativa</strong>
+                <small id="campaign-active-copy">Leads que entrarem no gatilho ser&atilde;o inscritos automaticamente.</small>
+              </div>
+              <label class="switch">
+                <input id="campaign-active" type="checkbox" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-divider">
+          <h3>Passos da automa&ccedil;&atilde;o</h3>
+          <button id="add-step-btn" class="btn btn-ghost" type="button">
+            <i class="fa-solid fa-plus"></i>
+            Adicionar passo
+          </button>
+        </div>
+
+        <div id="steps-container" class="steps-list"></div>
+
+        <div class="editor-actions">
+          <span id="editor-status" class="editor-status">Pronto para criar uma nova automa&ccedil;&atilde;o.</span>
+          <div class="hero-actions hero-actions-compact">
+            <button id="delete-btn" class="btn btn-danger" type="button" disabled>
+              <i class="fa-solid fa-trash"></i>
+              Excluir
+            </button>
+            <button id="save-btn" class="btn btn-primary" type="button">
+              <i class="fa-solid fa-floppy-disk"></i>
+              Salvar campanha
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="card selection-card">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Opera&ccedil;&atilde;o</span>
+            <h2>Campanha em foco</h2>
+          </div>
+        </div>
+
+        <div id="selection-summary" class="selection-summary"></div>
+        <div id="selection-health" class="selection-health"></div>
+      </aside>
+
+      <section class="card preview-card span-two">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Orquestra&ccedil;&atilde;o</span>
+            <h2>Preview da sequ&ecirc;ncia</h2>
+          </div>
+        </div>
+
+        <div id="metrics-grid" class="metrics-grid"></div>
+        <div id="timeline-preview" class="timeline-list"></div>
+      </section>
+
+      <section class="card campaign-card">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Campanhas</span>
+            <h2>Funis salvos</h2>
+          </div>
+        </div>
+
+        <div id="campaign-list" class="campaign-list"></div>
+      </section>
+
+      <section class="card enrollment-card span-full">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Enrollments</span>
+            <h2>Leads em andamento</h2>
+          </div>
+        </div>
+
+        <div id="enrollment-summary" class="enrollment-summary"></div>
+        <div id="enrollment-list" class="enrollment-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.__DRIP_BOOTSTRAP__ = <%- JSON.stringify(dripBootstrap || {}) %>;
+    window.__DRIP_USER__ = <%- JSON.stringify({
+      id: user?.id,
+      name: user?.name,
+      plan: user?.plan,
+    }) %>;
+  </script>
+  <script src="/js/toast.js"></script>
+  <script src="/js/drips.js"></script>
+</body>
+</html>

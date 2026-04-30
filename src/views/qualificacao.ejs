@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Qualificacao de Leads &bull; ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="/img/favinco.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="/css/qualification.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <div class="page-glow page-glow-a"></div>
+    <div class="page-glow page-glow-b"></div>
+
+    <header class="hero">
+      <div class="hero-copy">
+        <a href="/painel" class="hero-back">
+          <i class="fa-solid fa-arrow-left"></i>
+          Voltar ao painel
+        </a>
+
+        <h1>Qualifique antes da IA livre e entregue o lead pronto para vender.</h1>
+        <p>
+          Estruture perguntas antes da conversa aberta, colete dados essenciais,
+          aplique score autom&aacute;tico e mova o lead para o est&aacute;gio certo no CRM.
+        </p>
+
+        <div class="hero-highlights">
+          <article class="hero-highlight">
+            <span>Fluxo em foco</span>
+            <strong id="hero-selected-flow">Novo fluxo</strong>
+            <small id="hero-selected-foot">Nenhum question&aacute;rio selecionado ainda.</small>
+          </article>
+
+          <article class="hero-highlight">
+            <span>Perguntas ativas</span>
+            <strong id="hero-question-count">0</strong>
+            <small id="hero-question-foot">O editor ainda n&atilde;o tem perguntas definidas.</small>
+          </article>
+
+          <article class="hero-highlight">
+            <span>Score quente</span>
+            <strong id="hero-score-target">70+</strong>
+            <small id="hero-score-foot">Aciona a faixa de prioridade mais alta.</small>
+          </article>
+        </div>
+      </div>
+
+      <div class="hero-panel">
+        <div class="hero-panel-top">
+          <div class="plan-chip">
+            <span>Plano atual</span>
+            <strong id="plan-name"><%= String(qualificationBootstrap?.access?.plan || user?.plan || 'free').toUpperCase() %></strong>
+          </div>
+
+          <div class="capability-pills">
+            <span class="status-pill" id="usage-pill">Capacidade</span>
+            <span class="status-pill" id="crm-pill">CRM</span>
+          </div>
+        </div>
+
+        <div class="usage-card">
+          <div class="usage-head">
+            <div>
+              <span>Fluxos ativos</span>
+              <strong id="usage-counter">--</strong>
+            </div>
+            <strong class="usage-percent" id="usage-percent">--</strong>
+          </div>
+
+          <div class="usage-track">
+            <div id="usage-bar" class="usage-bar"></div>
+          </div>
+
+          <div id="usage-foot" class="usage-subtle">Carregando limite do plano...</div>
+
+          <div class="usage-meta">
+            <article class="usage-meta-card">
+              <span>Fluxos ativos</span>
+              <strong id="usage-active-flows">0</strong>
+            </article>
+            <article class="usage-meta-card">
+              <span>Leads concluidos</span>
+              <strong id="usage-completed-sessions">0</strong>
+            </article>
+            <article class="usage-meta-card">
+              <span>Limite do plano</span>
+              <strong id="usage-limit-label">--</strong>
+            </article>
+          </div>
+        </div>
+
+        <div id="upgrade-banner" class="upgrade-banner">
+          <div>
+            <strong>Plano Pro libera multiplos fluxos ativos por palavra-chave.</strong>
+            <p>Starter e Free mantem 1 fluxo ativo por vez para a entrada automatica do lead.</p>
+          </div>
+          <a href="/checkout" class="btn btn-inline">Fazer upgrade</a>
+        </div>
+
+        <div class="hero-actions">
+          <button id="create-new-btn" class="btn btn-primary" type="button">
+            <i class="fa-solid fa-plus"></i>
+            Novo fluxo
+          </button>
+          <button id="reload-btn" class="btn btn-secondary" type="button">
+            <i class="fa-solid fa-rotate"></i>
+            Atualizar
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <section class="stats-grid">
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-blue">
+          <i class="fa-solid fa-list-check"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Fluxos criados</span>
+          <strong class="stat-value" id="stat-flows">0</strong>
+          <span class="stat-foot" id="stat-flows-foot">Nenhum questionario salvo</span>
+        </div>
+      </article>
+
+      <article class="stat-card stat-card-accent">
+        <div class="stat-icon stat-icon-mint">
+          <i class="fa-solid fa-user-gear"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Sessoes ativas</span>
+          <strong class="stat-value" id="stat-active-sessions">0</strong>
+          <span class="stat-foot" id="stat-active-foot">Sem qualificacoes em andamento</span>
+        </div>
+      </article>
+
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-amber">
+          <i class="fa-solid fa-check-double"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Qualificacoes concluidas</span>
+          <strong class="stat-value" id="stat-completed">0</strong>
+          <span class="stat-foot" id="stat-completed-foot">Nenhum lead finalizado</span>
+        </div>
+      </article>
+
+      <article class="stat-card">
+        <div class="stat-icon stat-icon-rose">
+          <i class="fa-solid fa-gauge-high"></i>
+        </div>
+        <div class="stat-body">
+          <span class="stat-label">Score medio</span>
+          <strong class="stat-value" id="stat-average-score">--</strong>
+          <span class="stat-foot" id="stat-average-foot">Sem dados consolidados</span>
+        </div>
+      </article>
+    </section>
+
+    <main class="content-grid">
+      <section class="card editor-card span-two">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Editor de fluxo</span>
+            <h2>Configure o questionario de qualificacao</h2>
+          </div>
+          <span class="badge" id="editor-badge">Novo fluxo</span>
+        </div>
+
+        <p class="editor-note">
+          O lead passa por estas perguntas antes da IA livre. Ao final, o CRM recebe os dados e o score.
+        </p>
+
+        <div id="editor-overview" class="editor-overview"></div>
+
+        <div class="editor-grid">
+          <label class="field field-wide">
+            <span>Nome do fluxo</span>
+            <input id="flow-name" type="text" maxlength="120" placeholder="Ex: Quiz de pre-venda" />
+          </label>
+
+          <label class="field field-wide">
+            <span>Palavras-chave de entrada (opcional)</span>
+            <input id="flow-trigger-keywords" type="text" maxlength="240" placeholder="Ex: orcamento, consultoria, plano premium" />
+          </label>
+
+          <div class="toggle-field field-wide">
+            <span>Status</span>
+            <div id="flow-active-shell" class="toggle-shell">
+              <div class="toggle-copy">
+                <strong id="flow-active-label">Fluxo ativo</strong>
+                <small id="flow-active-copy">Leads novos entram nesse questionario antes da IA livre.</small>
+              </div>
+              <label class="switch">
+                <input id="flow-active" type="checkbox" checked />
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-grid">
+          <label class="field">
+            <span>Mensagem inicial</span>
+            <textarea id="intro-message" placeholder="Vou te fazer algumas perguntas rapidas..."></textarea>
+          </label>
+
+          <label class="field">
+            <span>Mensagem final</span>
+            <textarea id="completion-message" placeholder="Perfeito! Ja organizei suas respostas..."></textarea>
+          </label>
+        </div>
+
+        <div class="section-divider">
+          <h3>Regras de score</h3>
+        </div>
+
+        <div class="settings-grid score-grid">
+          <label class="field">
+            <span>Score quente a partir de</span>
+            <input id="hot-threshold" type="number" min="0" max="100" step="1" />
+          </label>
+
+          <label class="field">
+            <span>Score morno a partir de</span>
+            <input id="warm-threshold" type="number" min="0" max="100" step="1" />
+          </label>
+
+          <label class="field">
+            <span>Estagio quente</span>
+            <select id="hot-stage"></select>
+          </label>
+
+          <label class="field">
+            <span>Estagio morno</span>
+            <select id="warm-stage"></select>
+          </label>
+
+          <label class="field">
+            <span>Estagio frio</span>
+            <select id="cold-stage"></select>
+          </label>
+        </div>
+
+        <div class="section-divider">
+          <h3>Perguntas do quiz</h3>
+          <button id="add-step-btn" class="btn btn-ghost" type="button">
+            <i class="fa-solid fa-plus"></i>
+            Adicionar pergunta
+          </button>
+        </div>
+
+        <div id="steps-container" class="steps-list"></div>
+
+        <div class="editor-actions">
+          <span id="editor-status" class="editor-status">Pronto para criar um novo questionario.</span>
+          <div class="hero-actions hero-actions-compact">
+            <button id="delete-btn" class="btn btn-danger" type="button" disabled>
+              <i class="fa-solid fa-trash"></i>
+              Excluir
+            </button>
+            <button id="save-btn" class="btn btn-primary" type="button">
+              <i class="fa-solid fa-floppy-disk"></i>
+              Salvar fluxo
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="card selection-card">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Operacao</span>
+            <h2>Fluxo em foco</h2>
+          </div>
+        </div>
+
+        <div id="selection-summary" class="selection-summary"></div>
+        <div id="selection-health" class="selection-health"></div>
+      </aside>
+
+      <section class="card preview-card span-two">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Preview</span>
+            <h2>Resumo da qualificacao</h2>
+          </div>
+        </div>
+
+        <div id="preview-metrics" class="metrics-grid"></div>
+        <div id="question-preview" class="timeline-list"></div>
+      </section>
+
+      <section class="card campaign-card">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Fluxos salvos</span>
+            <h2>Questionarios</h2>
+          </div>
+        </div>
+
+        <div id="flow-list" class="campaign-list"></div>
+      </section>
+
+      <section class="card enrollment-card span-full">
+        <div class="card-head">
+          <div>
+            <span class="card-kicker">Sessoes recentes</span>
+            <h2>Leads qualificados</h2>
+          </div>
+        </div>
+
+        <div id="session-summary" class="enrollment-summary"></div>
+        <div id="session-list" class="enrollment-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.__QUALIFICATION_BOOTSTRAP__ = <%- JSON.stringify(qualificationBootstrap || {}) %>;
+    window.__QUALIFICATION_USER__ = <%- JSON.stringify({
+      id: user?.id,
+      name: user?.name,
+      plan: user?.plan,
+    }) %>;
+  </script>
+  <script src="/js/toast.js"></script>
+  <script src="/js/qualification.js"></script>
+</body>
+</html>

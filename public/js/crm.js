@@ -15,6 +15,9 @@ let currentPage = 1;
 let totalPages = 1;
 let isLoading = false;
 const PAGE_SIZE = 100;
+const PHONE_BR_PREFIX = getConfiguredDefaultDdi();
+const PHONE_BR_MIN_LENGTH = PHONE_BR_PREFIX.length + 10;
+const PHONE_BR_MAX_LENGTH = PHONE_BR_PREFIX.length + 11;
 
 // ------------------------------------------------------
 // SOCKET.IO (atualização em tempo real)
@@ -62,6 +65,140 @@ function escapeHtml(text) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+function getConfiguredDefaultDdi() {
+    const digits = String(document.body?.dataset?.defaultDdi || "55")
+        .replace(/\D/g, "")
+        .slice(0, 4);
+
+    return digits || "55";
+}
+
+function bindCurrencyMask(ids) {
+    ids.forEach((id) => {
+        const input = document.getElementById(id);
+        if (!input || input.dataset.currencyMaskBound === "1") return;
+
+        input.dataset.currencyMaskBound = "1";
+        input.addEventListener("input", () => applyCurrencyMask(input));
+        input.addEventListener("blur", () => applyCurrencyMask(input));
+    });
+}
+
+function applyCurrencyMask(input) {
+    const digits = String(input?.value || "").replace(/\D/g, "");
+    input.value = digits ? formatCurrencyMaskDigits(digits) : "";
+}
+
+function formatCurrencyMaskDigits(digits) {
+    const numericValue = Number(digits) / 100;
+    return numericValue.toLocaleString("pt-BR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    });
+}
+
+function parseCurrencyInput(value) {
+    const normalized = String(value || "")
+        .trim()
+        .replace(/\s+/g, "")
+        .replace(/[R$]/g, "")
+        .replace(/\./g, "")
+        .replace(",", ".")
+        .replace(/[^\d.-]/g, "");
+
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function bindPhoneMask(ids) {
+    ids.forEach((id) => {
+        const input = document.getElementById(id);
+        if (!input || input.dataset.phoneMaskBound === "1") return;
+
+        input.dataset.phoneMaskBound = "1";
+        input.addEventListener("focus", () => {
+            if (!String(input.value || "").trim()) {
+                input.value = PHONE_BR_PREFIX;
+            }
+            applyPhoneMask(input);
+        });
+        input.addEventListener("input", () => applyPhoneMask(input));
+        input.addEventListener("blur", () => applyPhoneMask(input));
+        applyPhoneMask(input);
+    });
+}
+
+function setPhoneInputValue(inputOrId, value = "") {
+    const input =
+        typeof inputOrId === "string"
+            ? document.getElementById(inputOrId)
+            : inputOrId;
+
+    if (!input) return;
+    input.value = value;
+    applyPhoneMask(input);
+}
+
+function applyPhoneMask(input) {
+    const digits = normalizeBrazilPhoneDigits(input?.value);
+    input.value = formatBrazilPhone(digits);
+}
+
+function normalizeBrazilPhoneDigits(value) {
+    const digits = String(value || "").replace(/\D/g, "");
+    if (!digits) return PHONE_BR_PREFIX;
+    if (PHONE_BR_PREFIX.startsWith(digits) && digits.length <= PHONE_BR_PREFIX.length) {
+        return PHONE_BR_PREFIX;
+    }
+
+    const raw = digits.startsWith(PHONE_BR_PREFIX) ? digits : `${PHONE_BR_PREFIX}${digits}`;
+    return raw.slice(0, PHONE_BR_MAX_LENGTH);
+}
+
+function formatBrazilPhone(digits) {
+    const normalized = normalizeBrazilPhoneDigits(digits);
+    const ddiLength = PHONE_BR_PREFIX.length;
+    const countryCode = normalized.slice(0, ddiLength);
+    const ddd = normalized.slice(ddiLength, ddiLength + 2);
+    const phone = normalized.slice(ddiLength + 2);
+
+    let formatted = countryCode;
+    if (ddd) {
+        formatted += ` (${ddd}`;
+        if (ddd.length === 2) formatted += ")";
+    }
+    if (phone) {
+        formatted += ` ${formatBrazilPhoneLocal(phone)}`;
+    }
+    return formatted;
+}
+
+function formatBrazilPhoneLocal(phone) {
+    if (phone.length <= 4) return phone;
+    if (phone.length <= 8) {
+        return `${phone.slice(0, 4)}-${phone.slice(4)}`;
+    }
+    return `${phone.slice(0, 5)}-${phone.slice(5, 9)}`;
+}
+
+function isValidBrazilPhone(value) {
+    const digits = normalizeBrazilPhoneDigits(value);
+    return digits.startsWith(PHONE_BR_PREFIX) && digits.length >= PHONE_BR_MIN_LENGTH;
+}
+
+function formatPhoneDisplay(value) {
+    const digits = String(value || "").replace(/\D/g, "");
+    if (!digits) return "—";
+    if (digits.length > PHONE_BR_MAX_LENGTH && !digits.startsWith(PHONE_BR_PREFIX)) {
+        return digits;
+    }
+    return formatBrazilPhone(digits);
+}
+
+function getPhoneDigits(value) {
+    return normalizeBrazilPhoneDigits(value);
 }
 
 // ------------------------------------------------------
@@ -136,6 +273,9 @@ const modalDelete = document.getElementById("modalDelete");
 const modalCancel = document.getElementById("modalCancel");
 const clientModal = document.getElementById("clientModal");
 const closeModalBtn = document.getElementById("closeClientModal");
+
+bindPhoneMask(["modalPhone"]);
+bindCurrencyMask(["modalValue"]);
 
 closeModalBtn?.addEventListener("click", closeClientModal);
 
@@ -417,7 +557,7 @@ function renderBoard() {
             const fup = c.follow_up_date ? Number(c.follow_up_date) : null;
             const fupLabel = fup ? new Date(fup).toLocaleDateString("pt-BR") : "";
             const safeName = escapeHtml(c.name || "Sem nome");
-            const safePhone = escapeHtml(c.phone || "");
+            const safePhone = escapeHtml(formatPhoneDisplay(c.phone || ""));
             const safeCityState = escapeHtml(c.citystate || "Cidade não informada");
             const safeZoneName = escapeHtml(zoneName);
             const safeFupLabel = escapeHtml(fupLabel);
@@ -462,7 +602,7 @@ function renderBoard() {
             .slice(0, 2).map(w => w[0].toUpperCase()).join("");
         const safeInitials = escapeHtml(initials);
         const safeName = escapeHtml(c.name || "Sem nome");
-        const safePhone = escapeHtml(c.phone || "—");
+        const safePhone = escapeHtml(formatPhoneDisplay(c.phone || ""));
         const safeCityState = escapeHtml(c.citystate || "");
         const safeChatPhone = encodeURIComponent(chatPhone);
         const safeAvatar = escapeHtml(c.avatar || "");
@@ -485,9 +625,9 @@ function renderBoard() {
             </div>
               <div class="card-info">
                 <div class="card-name">${safeName}</div>
-                <div class="card-phone">
+                <div class="card-phone" title="${safePhone}">
                   <i class="fa-solid fa-phone"></i>
-                  ${safePhone}
+                  <span class="card-phone-text">${safePhone}</span>
                 </div>
               </div>
               ${valueStr ? `<div class="card-value">${safeValueStr}</div>` : ""}
@@ -593,7 +733,7 @@ function selectClient(id) {
     if (!selectedClient) return;
 
     modalName.value = selectedClient.name;
-    modalPhone.value = selectedClient.phone;
+    setPhoneInputValue(modalPhone, selectedClient.phone || "");
     modalCity.value = selectedClient.citystate;
     modalStage.value = selectedClient.stage;
 
@@ -601,8 +741,9 @@ function selectClient(id) {
         if (selectedClient.deal_value != null && selectedClient.deal_value !== "") {
             const num = Number(selectedClient.deal_value);
             const safeNum = Number.isFinite(num) ? num : 0;
-            // input type="number" precisa de ponto decimal (não vírgula)
-            modalValue.value = safeNum.toFixed(2);
+            modalValue.value = formatCurrencyMaskDigits(
+                String(Math.round(safeNum * 100))
+            );
         } else {
             modalValue.value = "";
         }
@@ -644,7 +785,7 @@ document.getElementById("addClientBtn").addEventListener("click", () => {
     selectedClient = null;
 
     modalName.value = "";
-    modalPhone.value = "";
+    setPhoneInputValue(modalPhone, "");
     modalCity.value = "";
     modalStage.value = "Novo";
 
@@ -726,13 +867,8 @@ modalDelete?.addEventListener("click", async () => {
 function parseDealValue(rawInput) {
     const raw = String(rawInput ?? "").trim();
     if (!raw) return null;
-    // aceita formatos "1.234,56" ou "1234.56"
-    const normalized = raw
-        .replace(/\s+/g, "")
-        .replace(/\.(?=\d{3}(,|$))/g, "") // remove pontos de milhar
-        .replace(",", ".");
-    const n = Number(normalized);
-    return Number.isFinite(n) ? n : null;
+    const parsed = parseCurrencyInput(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 modalSave.addEventListener("click", async () => {
@@ -741,7 +877,7 @@ modalSave.addEventListener("click", async () => {
 
     const body = {
         name: modalName.value.trim(),
-        phone: modalPhone.value.trim(),
+        phone: getPhoneDigits(modalPhone.value),
         citystate: modalCity.value.trim(),
         stage: modalStage.value,
         tags: JSON.stringify(modalTags),
@@ -762,10 +898,15 @@ modalSave.addEventListener("click", async () => {
     if (!body.phone) {
         if (typeof showFieldError === "function") showFieldError(modalPhone, "Telefone obrigatório.");
         hasError = true;
+    } else if (!isValidBrazilPhone(body.phone)) {
+        if (typeof showFieldError === "function") {
+            showFieldError(modalPhone, `Informe um WhatsApp com DDI ${PHONE_BR_PREFIX} e DDD.`);
+        }
+        hasError = true;
     }
 
     if (hasError) {
-        showToast("Nome e telefone obrigatórios!", "error");
+        showToast("Revise os campos obrigatórios antes de salvar.", "error");
         if (typeof setButtonLoading === "function") setButtonLoading(modalSave, false);
         return;
     }

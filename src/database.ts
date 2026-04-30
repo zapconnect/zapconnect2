@@ -279,6 +279,22 @@ export async function initDB() {
     `,
 
     `
+    CREATE TABLE IF NOT EXISTS mercadopago_settings (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL UNIQUE,
+      access_token TEXT NOT NULL,
+      public_key VARCHAR(255),
+      webhook_secret VARCHAR(255),
+      test_mode TINYINT DEFAULT 0,
+      notify_whatsapp TINYINT DEFAULT 0,
+      connected_at BIGINT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
     CREATE TABLE IF NOT EXISTS sessions (
       id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL,
@@ -345,6 +361,101 @@ export async function initDB() {
       FOREIGN KEY (log_id) REFERENCES schedule_logs(id) ON DELETE CASCADE,
       FOREIGN KEY (schedule_id) REFERENCES schedules(id) ON DELETE CASCADE,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS drip_campaigns (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      trigger_stage VARCHAR(100) NOT NULL,
+      preferred_session VARCHAR(255) DEFAULT NULL,
+      active TINYINT DEFAULT 1,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS drip_steps (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      campaign_id INT NOT NULL,
+      step_order INT NOT NULL,
+      delay_ms BIGINT NOT NULL DEFAULT 0,
+      message TEXT,
+      file LONGTEXT,
+      filename VARCHAR(255) DEFAULT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (campaign_id) REFERENCES drip_campaigns(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS drip_enrollments (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      campaign_id INT NOT NULL,
+      user_id INT NOT NULL,
+      crm_id INT DEFAULT NULL,
+      contact_name VARCHAR(255) DEFAULT NULL,
+      contact_phone VARCHAR(30) NOT NULL,
+      current_step INT NOT NULL DEFAULT 0,
+      next_send_at BIGINT DEFAULT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      attempt_count INT NOT NULL DEFAULT 0,
+      last_attempt_at BIGINT DEFAULT NULL,
+      processing_started_at BIGINT DEFAULT NULL,
+      last_session_name VARCHAR(255) DEFAULT NULL,
+      last_error TEXT,
+      completed_at BIGINT DEFAULT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      UNIQUE KEY uniq_drip_campaign_crm (campaign_id, crm_id),
+      FOREIGN KEY (campaign_id) REFERENCES drip_campaigns(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (crm_id) REFERENCES crm(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS qualification_flows (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      trigger_keywords LONGTEXT,
+      steps LONGTEXT NOT NULL,
+      settings LONGTEXT,
+      active TINYINT DEFAULT 1,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS qualification_sessions (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      flow_id INT NOT NULL,
+      crm_id INT DEFAULT NULL,
+      session_name VARCHAR(255) DEFAULT NULL,
+      chat_id VARCHAR(255) NOT NULL,
+      contact_phone VARCHAR(30) NOT NULL,
+      contact_name VARCHAR(255) DEFAULT NULL,
+      current_step INT NOT NULL DEFAULT 0,
+      answers LONGTEXT,
+      status VARCHAR(20) NOT NULL DEFAULT 'active',
+      score INT DEFAULT NULL,
+      last_question_at BIGINT DEFAULT NULL,
+      last_answer_at BIGINT DEFAULT NULL,
+      started_at BIGINT NOT NULL,
+      completed_at BIGINT DEFAULT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (flow_id) REFERENCES qualification_flows(id) ON DELETE CASCADE,
+      FOREIGN KEY (crm_id) REFERENCES crm(id) ON DELETE SET NULL
     )
     `,
 
@@ -429,14 +540,61 @@ export async function initDB() {
       recorrente TINYINT DEFAULT 0,
       recorrencia_id INT,
       session_name VARCHAR(255),
+      whatsapp_ultimo_tipo VARCHAR(30),
+      whatsapp_ultimo_status VARCHAR(20),
+      whatsapp_ultimo_ack INT,
+      whatsapp_ultima_mensagem_id VARCHAR(255),
+      whatsapp_ultimo_erro TEXT,
+      whatsapp_ultimo_envio_em BIGINT,
+      whatsapp_ultimo_entregue_em BIGINT,
+      whatsapp_ultimo_lido_em BIGINT,
+      whatsapp_ultimo_status_em BIGINT,
+      mp_preference_id VARCHAR(255),
+      mp_payment_id VARCHAR(255),
+      mp_checkout_url TEXT,
+      mp_status VARCHAR(50),
+      mp_updated_at BIGINT,
       notificado_criacao TINYINT DEFAULT 0,
       notificado_vencimento TINYINT DEFAULT 0,
       notificado_atraso TINYINT DEFAULT 0,
+      notificado_confirmacao_pagamento TINYINT DEFAULT 0,
       pago_em BIGINT,
       created_at BIGINT NOT NULL,
       updated_at BIGINT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (cliente_id) REFERENCES cobranca_clientes(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS cobranca_recebimentos (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      cobranca_id INT NOT NULL,
+      user_id INT NOT NULL,
+      valor DECIMAL(10,2) NOT NULL,
+      recebido_em BIGINT NOT NULL,
+      observacao TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (cobranca_id) REFERENCES cobrancas(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS mp_webhook_logs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      cobranca_id INT,
+      payment_id VARCHAR(255),
+      event_type VARCHAR(50),
+      mp_status VARCHAR(50),
+      raw_payload LONGTEXT,
+      processed TINYINT DEFAULT 0,
+      error TEXT,
+      created_at BIGINT NOT NULL,
+      INDEX idx_mp_webhook_user (user_id),
+      INDEX idx_mp_webhook_payment (payment_id)
     )
     `,
 
@@ -527,6 +685,21 @@ export async function initDB() {
       event_id VARCHAR(255) UNIQUE NOT NULL,
       type VARCHAR(255) NOT NULL,
       created_at BIGINT NOT NULL
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS stripe_webhook_failures (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      event_id VARCHAR(255) NOT NULL,
+      event_type VARCHAR(100) NOT NULL,
+      reason VARCHAR(255) NOT NULL,
+      payload LONGTEXT NOT NULL,
+      resolved TINYINT DEFAULT 0,
+      resolved_at BIGINT DEFAULT NULL,
+      resolved_by VARCHAR(100) DEFAULT NULL,
+      created_at BIGINT NOT NULL,
+      UNIQUE KEY uniq_stripe_webhook_failure_event (event_id)
     )
     `,
 
@@ -636,6 +809,21 @@ export async function initDB() {
       history LONGBLOB NOT NULL,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uniq_chat_history (user_id, chat_id),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS analytics_reports (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      report_date DATE NOT NULL,
+      window_start BIGINT NOT NULL,
+      window_end BIGINT NOT NULL,
+      data LONGTEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uniq_analytics_report_user_date (user_id, report_date),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
@@ -802,6 +990,47 @@ export async function initDB() {
       updated_at BIGINT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS cobranca_regua_rules (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      slot INT NOT NULL DEFAULT 0,
+      nome VARCHAR(80) NOT NULL,
+      gatilho VARCHAR(30) NOT NULL,
+      dias_offset INT NOT NULL DEFAULT 0,
+      horario_envio VARCHAR(5) NOT NULL DEFAULT '09:00',
+      canal VARCHAR(20) NOT NULL DEFAULT 'WHATSAPP',
+      ativo TINYINT NOT NULL DEFAULT 1,
+      template_customizado TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      UNIQUE KEY uniq_cobranca_regua_slot (user_id, slot),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS cobranca_notifications_queue (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      cobranca_id INT NOT NULL,
+      user_id INT NOT NULL,
+      tipo VARCHAR(30) NOT NULL,
+      regua_rule_id INT NOT NULL DEFAULT 0,
+      tentativas INT NOT NULL DEFAULT 0,
+      max_tentativas INT NOT NULL DEFAULT 3,
+      agendado_para BIGINT NOT NULL,
+      processado_em BIGINT DEFAULT NULL,
+      processing_started_at BIGINT DEFAULT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending',
+      erro TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      UNIQUE KEY uniq_cobranca_notification (cobranca_id, tipo, regua_rule_id),
+      FOREIGN KEY (cobranca_id) REFERENCES cobrancas(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
     `
   ];
 
@@ -841,6 +1070,30 @@ export async function initDB() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS template_cobranca_atraso TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS template_cobranca_confirmacao TEXT`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS template_cobranca_cancelamento TEXT`,
+    `ALTER TABLE mercadopago_settings ADD COLUMN IF NOT EXISTS public_key VARCHAR(255) DEFAULT NULL`,
+    `ALTER TABLE mercadopago_settings ADD COLUMN IF NOT EXISTS webhook_secret VARCHAR(255) DEFAULT NULL`,
+    `ALTER TABLE mercadopago_settings ADD COLUMN IF NOT EXISTS test_mode TINYINT DEFAULT 0`,
+    `ALTER TABLE mercadopago_settings ADD COLUMN IF NOT EXISTS notify_whatsapp TINYINT DEFAULT 0`,
+    `ALTER TABLE mercadopago_settings ADD COLUMN IF NOT EXISTS connected_at BIGINT DEFAULT NULL`,
+    `ALTER TABLE mercadopago_settings ADD COLUMN IF NOT EXISTS created_at BIGINT DEFAULT 0`,
+    `ALTER TABLE mercadopago_settings ADD COLUMN IF NOT EXISTS updated_at BIGINT DEFAULT 0`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultimo_tipo VARCHAR(30) DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultimo_status VARCHAR(20) DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultimo_ack INT DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultima_mensagem_id VARCHAR(255) DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultimo_erro TEXT`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultimo_envio_em BIGINT DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultimo_entregue_em BIGINT DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultimo_lido_em BIGINT DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS whatsapp_ultimo_status_em BIGINT DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS mp_preference_id VARCHAR(255) DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS mp_payment_id VARCHAR(255) DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS mp_checkout_url TEXT`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS mp_status VARCHAR(50) DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS mp_updated_at BIGINT DEFAULT NULL`,
+    `ALTER TABLE cobrancas ADD COLUMN IF NOT EXISTS notificado_confirmacao_pagamento TINYINT DEFAULT 0`,
+    `ALTER TABLE cobranca_regua_rules ADD COLUMN IF NOT EXISTS slot INT NOT NULL DEFAULT 0`,
+    `ALTER TABLE cobranca_notifications_queue ADD COLUMN IF NOT EXISTS regua_rule_id INT NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_history_cleaned_at BIGINT DEFAULT NULL`,
     `ALTER TABLE kb_sources ADD COLUMN IF NOT EXISTS embedding_version INT DEFAULT 1`
   ];
@@ -853,6 +1106,30 @@ export async function initDB() {
     await pool.query(sql);
   }
 
+  try {
+    await pool.query(
+      `ALTER TABLE cobranca_notifications_queue DROP INDEX uniq_cobranca_notification`
+    );
+  } catch {
+    // índice antigo pode não existir em bases novas
+  }
+
+  try {
+    await pool.query(
+      `ALTER TABLE cobranca_notifications_queue ADD UNIQUE KEY uniq_cobranca_notification (cobranca_id, tipo, regua_rule_id)`
+    );
+  } catch {
+    // ignora se a chave já estiver no formato novo
+  }
+
+  try {
+    await pool.query(
+      `ALTER TABLE cobranca_regua_rules ADD UNIQUE KEY uniq_cobranca_regua_slot (user_id, slot)`
+    );
+  } catch {
+    // ignora se a chave da régua já existir
+  }
+
   await migrateChatHistoriesToSharedScope();
   await migrateChatHistoriesStorage();
 
@@ -860,12 +1137,30 @@ export async function initDB() {
     "CREATE INDEX IF NOT EXISTS idx_schedules_status_send_at ON schedules (status, send_at)",
     "CREATE INDEX IF NOT EXISTS idx_schedules_status_processing_started_at ON schedules (status, processing_started_at)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_user_status ON sessions (user_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_drip_campaigns_user_active_stage ON drip_campaigns (user_id, active, trigger_stage)",
+    "CREATE INDEX IF NOT EXISTS idx_drip_steps_campaign_order ON drip_steps (campaign_id, step_order)",
+    "CREATE INDEX IF NOT EXISTS idx_drip_enrollments_status_next_send ON drip_enrollments (status, next_send_at)",
+    "CREATE INDEX IF NOT EXISTS idx_drip_enrollments_processing_started ON drip_enrollments (status, processing_started_at)",
+    "CREATE INDEX IF NOT EXISTS idx_drip_enrollments_user_created ON drip_enrollments (user_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_drip_enrollments_campaign_status ON drip_enrollments (campaign_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_drip_enrollments_contact_phone ON drip_enrollments (contact_phone)",
+    "CREATE INDEX IF NOT EXISTS idx_qualification_flows_user_active ON qualification_flows (user_id, active)",
+    "CREATE INDEX IF NOT EXISTS idx_qualification_flows_updated ON qualification_flows (user_id, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_qualification_sessions_chat_status ON qualification_sessions (user_id, chat_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_qualification_sessions_flow_status ON qualification_sessions (flow_id, status)",
+    "CREATE INDEX IF NOT EXISTS idx_qualification_sessions_user_updated ON qualification_sessions (user_id, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_qualification_sessions_crm ON qualification_sessions (crm_id)",
     "CREATE INDEX IF NOT EXISTS idx_chat_histories_updated ON chat_histories (updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_chat_histories_user_updated ON chat_histories (user_id, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_analytics_reports_user_updated ON analytics_reports (user_id, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_analytics_reports_date ON analytics_reports (report_date)",
     "CREATE INDEX IF NOT EXISTS idx_crm_user_phone ON crm (user_id, phone)",
     "CREATE INDEX IF NOT EXISTS idx_cobrancas_user_status ON cobrancas (user_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_cobrancas_vencimento ON cobrancas (vencimento)",
     "CREATE INDEX IF NOT EXISTS idx_cobrancas_cliente ON cobrancas (user_id, cliente_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cobrancas_whatsapp_message ON cobrancas (user_id, whatsapp_ultima_mensagem_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cobranca_recebimentos_cobranca_data ON cobranca_recebimentos (cobranca_id, recebido_em)",
+    "CREATE INDEX IF NOT EXISTS idx_cobranca_recebimentos_user_data ON cobranca_recebimentos (user_id, recebido_em)",
     "CREATE INDEX IF NOT EXISTS idx_recorrencias_user ON cobrancas_recorrencias (user_id, ativa)",
     "CREATE INDEX IF NOT EXISTS idx_clientes_user ON cobranca_clientes (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_dispatch_suppressions_user_status_phone ON dispatch_suppressions (user_id, status, phone)",
@@ -875,11 +1170,17 @@ export async function initDB() {
     "CREATE INDEX IF NOT EXISTS idx_chat_notes_lookup ON chat_notes (user_id, session_name, chat_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_sources_user ON kb_sources (user_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_chunks_scope ON kb_chunks (user_id, session_scope)",
+    "CREATE INDEX IF NOT EXISTS idx_cobranca_regua_user_active ON cobranca_regua_rules (user_id, ativo)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users (email_normalized)",
     "CREATE INDEX IF NOT EXISTS idx_users_signup_device ON users (signup_device_id)",
+    "CREATE INDEX IF NOT EXISTS idx_users_subscription_status_id ON users (subscription_status, subscription_id)",
     "CREATE INDEX IF NOT EXISTS idx_device_fingerprints_blocked ON device_fingerprints (blocked)",
     "CREATE INDEX IF NOT EXISTS idx_webhook_delivery_failures_user_created ON webhook_delivery_failures (user_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_webhook_delivery_failures_status_created ON webhook_delivery_failures (status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_stripe_webhook_failures_resolved_created ON stripe_webhook_failures (resolved, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_stripe_webhook_failures_type_created ON stripe_webhook_failures (event_type, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_cobranca_queue_status_schedule ON cobranca_notifications_queue (status, agendado_para)",
+    "CREATE INDEX IF NOT EXISTS idx_cobranca_queue_user_status ON cobranca_notifications_queue (user_id, status)",
     "CREATE FULLTEXT INDEX idx_kb_chunks_content ON kb_chunks (content)",
   ];
 

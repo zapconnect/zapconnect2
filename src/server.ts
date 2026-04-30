@@ -18,7 +18,11 @@ import { sendResetPasswordEmail } from "./utils/sendResetPasswordEmail";
 import { sendEmail } from "./utils/sendEmail";
 
 import adminRoutes from "./routes/admin";
+import analyticsRoutes from "./routes/analytics";
 import cobrancasRoutes from "./routes/cobrancas";
+import dripRoutes from "./routes/drips";
+import mercadopagoRoutes from "./routes/mercadopago";
+import qualificationRoutes from "./routes/qualification";
 import { getChatAI, setChatAI } from "./services/chatAiService";
 import {
   type FallbackSettings,
@@ -44,6 +48,10 @@ import {
   listTrialTemplates,
   renderTrialEmailTemplate,
 } from "./services/trialTemplates";
+import {
+  syncDripEnrollmentsForCrmStage,
+  updateDripEnrollmentContactSnapshot,
+} from "./services/dripCampaignService";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
 import { validatePhone } from "./utils/phoneUtils";
@@ -62,9 +70,14 @@ import { withTimeout } from "./utils/withTimeout";
 import { runChatHistoryCleanup } from "./services/chatHistoryCleaner";
 import { getPlanConfig, listPlanConfigs } from "./services/planConfigs";
 import {
-  enviarNotificacaoWhatsApp,
+  getChargeCadenceMessageType,
+  getUserLocalTimeSnapshot,
+  listUserChargeCadenceRules,
+  saveUserChargeCadenceRules,
   verificarEAtualizarVencidos,
+  sendPendingWeeklyFinancialHealthReports,
 } from "./services/cobrancaService";
+import { queueChargeNotification } from "./workers/notificationWorker";
 import {
   DISPATCH_CONSECUTIVE_FAILURE_LIMIT,
   DISPATCH_ERROR_RATE_SAMPLE_SIZE,
@@ -93,6 +106,7 @@ import {
 const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 const MAX_CHAT_MESSAGES = Number(process.env.MAX_CHAT_MESSAGES || 500);
 const TRIAL_EMAIL_SWEEP_MS = 60 * 60 * 1000; // 1h
+const COBRANCAS_SWEEP_INTERVAL_MS = 15 * 60 * 1000; // 15 min
 const WPP_TIMEOUT_MS = Number(process.env.WPP_TIMEOUT_MS || 12_000);
 const GRACEFUL_TIMEOUT_MS = Number(process.env.GRACEFUL_TIMEOUT_MS || 10_000);
 const MAX_KB_FILE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -111,6 +125,15 @@ type ConnectedSessionRow = {
 type ScheduleNotificationUser = {
   name: string;
   email: string;
+};
+
+type ChargeCadenceSweepRuleRow = {
+  id: number;
+  user_id: number;
+  gatilho: "ANTES_VENCIMENTO" | "NO_VENCIMENTO" | "APOS_VENCIMENTO";
+  dias_offset: number;
+  horario_envio: string;
+  timezone_offset: number | null;
 };
 
 async function loadConnectedSessionsByUser(
@@ -1087,11 +1110,11 @@ app.use("/", emailVerifyRoutes);
 app.use(express.json({ limit: "15mb" }));
 app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 app.use("/webhook", webhookRoutes);
+app.use("/", mercadopagoRoutes);
 
 // ⚠️ OBRIGATÓRIO: antes das rotas normais
 app.use("/subscription", subscriptionRoutes);
 app.use("/admin", authMiddleware, adminRoutes);
-app.use("/", authMiddleware, cobrancasRoutes);
 
 // ===============================
 // 📊 STATS DO PAINEL
@@ -1919,9 +1942,12 @@ app.get("/user", authMiddleware, async (req, res) => {
     [user.id]
   );
 
+  const chargeCadenceRules = await listUserChargeCadenceRules(user.id);
+
   res.render("user", {
     user,
     sessions: sessions || [],
+    chargeCadenceRules: chargeCadenceRules || [],
     payments: payments || [],          // 🔥 SEMPRE define
     lastPaymentAt: lastPayment?.created_at || null,
     now: Date.now()
@@ -2178,6 +2204,48 @@ app.post("/user/message-templates", authMiddleware, async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Erro ao salvar templates de mensagem",
+    });
+  }
+});
+
+app.post("/user/charge-cadence", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user as User;
+    const rules = await saveUserChargeCadenceRules(
+      user.id,
+      Array.isArray(req.body?.rules) ? req.body.rules : []
+    );
+
+    await logAudit("user_charge_cadence_update", user.id, "user", user.id, {
+      totalRules: rules.length,
+      activeRules: rules.filter((rule) => rule.ativo).length,
+      rules: rules.map((rule) => ({
+        id: rule.id,
+        nome: rule.nome,
+        gatilho: rule.gatilho,
+        dias_offset: rule.dias_offset,
+        horario_envio: rule.horario_envio,
+        ativo: rule.ativo,
+        has_template_customizado: Boolean(rule.template_customizado),
+      })),
+    });
+
+    return res.json({ ok: true, rules });
+  } catch (err) {
+    console.error("Erro ao salvar régua de cobrança:", err);
+    const message =
+      err instanceof Error ? err.message : "Erro ao salvar régua de cobrança";
+    const lowerMessage = message.toLowerCase();
+    const status =
+      lowerMessage.includes("inválid") ||
+      lowerMessage.includes("informe") ||
+      lowerMessage.includes("máximo")
+        ? 400
+        : 500;
+
+    return res.status(status).json({
+      ok: false,
+      error: message,
     });
   }
 });
@@ -4050,11 +4118,41 @@ app.post("/api/crm/stage", authMiddleware, subscriptionGuard, async (req, res) =
     const user = (req as any).user;
     const { id, stage } = req.body;
     const db = getDB();
+    const crmId = Number(id || 0);
+    const nextStage = String(stage || "").trim() || "Novo";
+
+    const existing = await db.get<{
+      id: number;
+      name: string | null;
+      phone: string | null;
+      stage: string | null;
+    }>(
+      `SELECT id, name, phone, stage
+       FROM crm
+       WHERE id = ? AND user_id = ?
+       LIMIT 1`,
+      [crmId, user.id]
+    );
+
+    if (!existing?.id) {
+      return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+    }
 
     await db.run(
       `UPDATE crm SET stage = ? WHERE id = ? AND user_id = ?`,
-      [stage, id, user.id]
+      [nextStage, crmId, user.id]
     );
+
+    if (String(existing.stage || "").trim() !== nextStage) {
+      await syncDripEnrollmentsForCrmStage({
+        userId: Number(user.id),
+        userPlan: user.plan,
+        crmId,
+        contactName: existing.name,
+        contactPhone: existing.phone,
+        stage: nextStage,
+      });
+    }
 
     res.json({ ok: true });
   } catch (err) {
@@ -4157,7 +4255,19 @@ app.post("/api/crm/create", authMiddleware, subscriptionGuard, async (req, res) 
       ]
     );
 
-    const newId = (result as any)?.lastID;
+    const newId = Number((result as any)?.insertId || 0);
+
+    if (newId) {
+      await syncDripEnrollmentsForCrmStage({
+        userId: Number(user.id),
+        userPlan: user.plan,
+        crmId: newId,
+        contactName: name,
+        contactPhone: phoneRaw,
+        stage: stage || "Novo",
+      });
+    }
+
     io.to(`user:${user.id}`).emit("crm:changed", { type: "create", id: newId });
     res.json({ ok: true, id: newId });
   } catch (err) {
@@ -4201,30 +4311,69 @@ app.delete("/api/crm/delete/:id", authMiddleware, async (req, res) => {
 app.put("/api/crm/update", authMiddleware, async (req, res) => {
   try {
     const db = getDB();
+    const user = (req as any).user;
 
     const { id, name, phone, citystate, stage, tags, notes, deal_value, follow_up_date } = req.body;
     const phoneRaw = String(phone ?? "").trim();
+    const crmId = Number(id || 0);
+    const nextStage = String(stage || "").trim() || "Novo";
 
     if (!id) return res.json({ ok: false, error: "ID ausente" });
+
+    const existing = await db.get<{
+      id: number;
+      stage: string | null;
+      phone: string | null;
+      name: string | null;
+    }>(
+      `SELECT id, stage, phone, name
+       FROM crm
+       WHERE id = ? AND user_id = ?
+       LIMIT 1`,
+      [crmId, user.id]
+    );
+
+    if (!existing?.id) {
+      return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+    }
 
     await db.run(
       `UPDATE crm 
        SET name = ?, phone = ?, citystate = ?, stage = ?, tags = ?, notes = ?, deal_value = ?, follow_up_date = ?
-       WHERE id = ?`,
+       WHERE id = ? AND user_id = ?`,
     [
       name,
       phoneRaw,
       citystate || "",
-      stage || "Novo",
+      nextStage,
       tags || "[]",
       notes || "[]",
       Number(deal_value) || 0,
       follow_up_date ? Number(follow_up_date) : null,
-      id
+      crmId,
+      user.id
       ]
     );
 
-    io.to(`user:${(req as any).user.id}`).emit("crm:changed", { type: "update", id });
+    await updateDripEnrollmentContactSnapshot({
+      userId: Number(user.id),
+      crmId,
+      contactName: name,
+      contactPhone: phoneRaw,
+    });
+
+    if (String(existing.stage || "").trim() !== nextStage) {
+      await syncDripEnrollmentsForCrmStage({
+        userId: Number(user.id),
+        userPlan: user.plan,
+        crmId,
+        contactName: name,
+        contactPhone: phoneRaw,
+        stage: nextStage,
+      });
+    }
+
+    io.to(`user:${user.id}`).emit("crm:changed", { type: "update", id: crmId });
     res.json({ ok: true });
 
   } catch (err) {
@@ -4930,6 +5079,12 @@ app.post("/auth/login", loginLimiter, async (req, res) => {
   return res.json({ ok: true });
 });
 
+// Mantem as rotas publicas de autenticacao acessiveis antes de proteger /cobrancas.
+app.use("/", authMiddleware, analyticsRoutes);
+app.use("/", authMiddleware, dripRoutes);
+app.use("/", authMiddleware, qualificationRoutes);
+app.use("/", authMiddleware, cobrancasRoutes);
+
 // =======================================
 // 🚪 LOGOUT
 // =======================================
@@ -5366,6 +5521,118 @@ process.on("SIGINT", (signal) => gracefulShutdown(signal));
 // =======================================
 // 🚀 Iniciar servidor
 // =======================================
+async function enqueueChargeCadenceNotifications(db: ReturnType<typeof getDB>) {
+  const usersWithCharges = await db.all<{ user_id: number }>(
+    `
+    SELECT DISTINCT user_id
+    FROM cobrancas
+    WHERE status IN ('PENDENTE', 'VENCIDO')
+    `,
+    []
+  );
+
+  for (const row of usersWithCharges) {
+    await listUserChargeCadenceRules(Number(row.user_id));
+  }
+
+  const rules = await db.all<ChargeCadenceSweepRuleRow>(
+    `
+    SELECT
+      r.id,
+      r.user_id,
+      r.gatilho,
+      r.dias_offset,
+      r.horario_envio,
+      u.timezone_offset
+    FROM cobranca_regua_rules r
+    INNER JOIN users u
+      ON u.id = r.user_id
+    WHERE r.ativo = 1
+    ORDER BY r.user_id ASC, r.id ASC
+    `,
+    []
+  );
+
+  const clockByUser = new Map<
+    number,
+    ReturnType<typeof getUserLocalTimeSnapshot>
+  >();
+  let lembretes = 0;
+  let atrasos = 0;
+
+  for (const rule of rules) {
+    const userId = Number(rule.user_id);
+    let snapshot = clockByUser.get(userId);
+    if (!snapshot) {
+      snapshot = getUserLocalTimeSnapshot(rule.timezone_offset);
+      clockByUser.set(userId, snapshot);
+    }
+
+    const scheduleTime = String(rule.horario_envio || "00:00")
+      .trim()
+      .padStart(5, "0");
+    if (snapshot.time < scheduleTime) {
+      continue;
+    }
+
+    let charges: Array<{ id: number; user_id: number }> = [];
+    const diasOffset = Math.max(0, Math.floor(Number(rule.dias_offset || 0)));
+
+    if (rule.gatilho === "ANTES_VENCIMENTO") {
+      charges = await db.all(
+        `
+        SELECT id, user_id
+        FROM cobrancas
+        WHERE user_id = ?
+          AND status = 'PENDENTE'
+          AND DATEDIFF(vencimento, ?) = ?
+        `,
+        [userId, snapshot.date, diasOffset]
+      );
+    } else if (rule.gatilho === "NO_VENCIMENTO") {
+      charges = await db.all(
+        `
+        SELECT id, user_id
+        FROM cobrancas
+        WHERE user_id = ?
+          AND status = 'PENDENTE'
+          AND vencimento = ?
+        `,
+        [userId, snapshot.date]
+      );
+    } else {
+      charges = await db.all(
+        `
+        SELECT id, user_id
+        FROM cobrancas
+        WHERE user_id = ?
+          AND status = 'VENCIDO'
+          AND DATEDIFF(?, vencimento) = ?
+        `,
+        [userId, snapshot.date, diasOffset]
+      );
+    }
+
+    const tipo = getChargeCadenceMessageType(rule.gatilho);
+    for (const charge of charges) {
+      await queueChargeNotification({
+        cobrancaId: Number(charge.id),
+        userId: Number(charge.user_id),
+        tipo,
+        reguaRuleId: Number(rule.id),
+      });
+    }
+
+    if (tipo === "lembrete_vencimento") {
+      lembretes += charges.length;
+    } else {
+      atrasos += charges.length;
+    }
+  }
+
+  return { lembretes, atrasos };
+}
+
 async function runCobrancasSweep() {
   if (shuttingDown) return;
   let db;
@@ -5379,29 +5646,15 @@ async function runCobrancasSweep() {
   try {
     await verificarEAtualizarVencidos();
 
-    const vencendoBreve = await db.all(
-      `SELECT * FROM cobrancas
-       WHERE status = 'PENDENTE'
-         AND notificado_vencimento = 0
-         AND DATEDIFF(vencimento, CURDATE()) BETWEEN 0 AND 2`,
-      []
-    );
+    const queued = await enqueueChargeCadenceNotifications(db);
 
-    for (const c of vencendoBreve) {
-      await enviarNotificacaoWhatsApp(c.user_id, c, "lembrete_vencimento");
+    if (queued.lembretes || queued.atrasos) {
+      console.log(
+        `📌 Sweep de cobranças enfileirou ${queued.lembretes} lembrete(s) e ${queued.atrasos} alerta(s) de atraso`
+      );
     }
 
-    const atrasados = await db.all(
-      `SELECT * FROM cobrancas
-       WHERE status = 'VENCIDO'
-         AND notificado_atraso = 0
-         AND DATEDIFF(CURDATE(), vencimento) BETWEEN 1 AND 7`,
-      []
-    );
-
-    for (const c of atrasados) {
-      await enviarNotificacaoWhatsApp(c.user_id, c, "atraso");
-    }
+    await sendPendingWeeklyFinancialHealthReports();
   } catch (err) {
     console.error("Erro no sweep de cobranças:", err);
   }
@@ -5415,7 +5668,7 @@ export function startCobrancasSweepCron() {
   void runCobrancasSweep();
   cobrancasSweepInterval = setInterval(() => {
     void runCobrancasSweep();
-  }, 6 * 60 * 60 * 1000);
+  }, COBRANCAS_SWEEP_INTERVAL_MS);
 }
 
 // Limpeza diária de históricos de chat (randomiza start em até 1h para evitar pico)

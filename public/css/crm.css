@@ -270,8 +270,9 @@ body {
 /* ── Topo: avatar + nome + valor ── */
 .card-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
+  min-width: 0;
 }
 
 .card-avatar {
@@ -317,9 +318,21 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
 }
 
-.card-phone i { font-size: 10px; }
+.card-phone i {
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.card-phone-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+}
 
 .card-value {
   font-size: 11px;

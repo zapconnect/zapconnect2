@@ -47,6 +47,105 @@
 
     <hr>
 
+    <section class="section" id="mercadopago">
+      <div class="integration-card">
+        <div class="integration-card-head">
+          <div>
+            <h2><i class="fa-solid fa-wallet"></i> Integração Mercado Pago</h2>
+            <p class="muted section-copy">
+              Conecte sua conta para gerar links de checkout online nas cobranças
+              e receber confirmações automáticas do pagamento.
+            </p>
+          </div>
+
+          <span class="integration-status warning" id="mpStatusBadge">
+            <i class="fa-solid fa-circle-exclamation"></i>
+            Não configurado
+          </span>
+        </div>
+
+        <div class="integration-meta-grid">
+          <div class="integration-meta-pill" id="mpModeText">Produção</div>
+          <div class="integration-meta-pill soft" id="mpConnectionMeta">
+            Nenhuma credencial salva ainda
+          </div>
+        </div>
+
+        <form id="mercadoPagoForm" class="settings-form">
+          <div class="settings-grid mp-settings-grid">
+            <div class="settings-field mp-field-span">
+              <label for="mpAccessToken">Access Token</label>
+              <input
+                id="mpAccessToken"
+                name="access_token"
+                class="settings-input"
+                type="password"
+                autocomplete="off"
+                placeholder="APP_USR-... ou TEST-..."
+              />
+              <small class="muted" id="mpTokenHint">
+                O token fica criptografado com AES-256-GCM antes de ser salvo no banco.
+              </small>
+            </div>
+
+            <div class="settings-field">
+              <label for="mpPublicKey">Public Key</label>
+              <input
+                id="mpPublicKey"
+                name="public_key"
+                class="settings-input"
+                type="text"
+                autocomplete="off"
+                placeholder="APP_USR-..."
+              />
+            </div>
+
+            <div class="settings-field mp-field-span">
+              <label for="mpWebhookUrl">Webhook URL</label>
+              <div class="integration-copy-line">
+                <input
+                  id="mpWebhookUrl"
+                  class="settings-input"
+                  type="text"
+                  readonly
+                  placeholder="Salve as credenciais para gerar a URL"
+                />
+                <button type="button" class="btn small" id="btnCopyMpWebhook">
+                  <i class="fa-solid fa-copy"></i>
+                  Copiar
+                </button>
+              </div>
+              <small class="muted">
+                Use esta URL no painel do Mercado Pago para receber as notificações do checkout.
+              </small>
+            </div>
+          </div>
+
+          <label class="integration-toggle">
+            <input type="checkbox" id="mpNotifyWhatsapp" />
+            <span>Notificar cliente no WhatsApp quando o pagamento online for aprovado</span>
+          </label>
+
+          <div class="actions">
+            <button type="submit" class="btn btn-primary small" id="btnSaveMpSettings">
+              <i class="fa-solid fa-floppy-disk"></i>
+              Salvar credenciais
+            </button>
+            <button type="button" class="btn small" id="btnTestMpSettings">
+              <i class="fa-solid fa-plug-circle-check"></i>
+              Testar conexão
+            </button>
+            <button type="button" class="btn small warning" id="btnDisconnectMpSettings">
+              <i class="fa-solid fa-link-slash"></i>
+              Desconectar
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <hr>
+
     <section class="section">
       <h2><i class="fa-solid fa-sliders"></i> Preferências Operacionais</h2>
 
@@ -354,6 +453,146 @@
     <hr>
 
     <section class="section">
+      <h2><i class="fa-solid fa-wave-square"></i> Régua de Cobrança Automática</h2>
+      <p class="muted section-copy">
+        Configure quando o sistema deve lembrar, cobrar no vencimento e reforçar atrasos.
+        Neste MVP, as etapas usam WhatsApp e param automaticamente quando a cobrança deixa de estar pendente.
+      </p>
+
+      <form id="chargeCadenceForm" class="settings-form">
+        <div class="cadence-list">
+          <% (chargeCadenceRules || []).forEach((rule, index) => { %>
+            <article class="cadence-card" data-rule-id="<%= rule.id %>">
+              <div class="cadence-card-head">
+                <div>
+                  <span class="cadence-step">Etapa <%= index + 1 %></span>
+                  <strong class="cadence-card-title"><%= rule.nome %></strong>
+                </div>
+
+                <label class="cadence-toggle">
+                  <input
+                    type="checkbox"
+                    class="cadence-active"
+                    <%= rule.ativo ? "checked" : "" %>
+                  />
+                  <span>Ativa</span>
+                </label>
+              </div>
+
+              <div class="settings-grid cadence-grid">
+                <div class="settings-field">
+                  <label for="cadenceName<%= rule.id %>">Nome da etapa</label>
+                  <input
+                    id="cadenceName<%= rule.id %>"
+                    class="settings-input cadence-name"
+                    type="text"
+                    maxlength="80"
+                    value="<%= rule.nome %>"
+                    placeholder="Ex: Aviso 3 dias antes"
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label for="cadenceTrigger<%= rule.id %>">Disparo</label>
+                  <select
+                    id="cadenceTrigger<%= rule.id %>"
+                    class="settings-input settings-select cadence-trigger"
+                  >
+                    <option
+                      value="ANTES_VENCIMENTO"
+                      <%= rule.gatilho === "ANTES_VENCIMENTO" ? "selected" : "" %>
+                    >
+                      Antes do vencimento
+                    </option>
+                    <option
+                      value="NO_VENCIMENTO"
+                      <%= rule.gatilho === "NO_VENCIMENTO" ? "selected" : "" %>
+                    >
+                      No vencimento
+                    </option>
+                    <option
+                      value="APOS_VENCIMENTO"
+                      <%= rule.gatilho === "APOS_VENCIMENTO" ? "selected" : "" %>
+                    >
+                      Após o vencimento
+                    </option>
+                  </select>
+                </div>
+
+                <div class="settings-field">
+                  <label for="cadenceDays<%= rule.id %>" data-role="days-label">
+                    <%= rule.gatilho === "APOS_VENCIMENTO"
+                      ? "Dias após o vencimento"
+                      : rule.gatilho === "NO_VENCIMENTO"
+                        ? "Disparo no próprio dia"
+                        : "Dias antes do vencimento" %>
+                  </label>
+                  <input
+                    id="cadenceDays<%= rule.id %>"
+                    class="settings-input cadence-days"
+                    type="number"
+                    min="<%= rule.gatilho === 'NO_VENCIMENTO' ? 0 : 1 %>"
+                    step="1"
+                    value="<%= Number(rule.dias_offset || 0) %>"
+                    <%= rule.gatilho === "NO_VENCIMENTO" ? "disabled" : "" %>
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label for="cadenceTime<%= rule.id %>">Horário de envio</label>
+                  <input
+                    id="cadenceTime<%= rule.id %>"
+                    class="settings-input cadence-time"
+                    type="time"
+                    step="60"
+                    value="<%= rule.horario_envio || '09:00' %>"
+                  />
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label for="cadenceTemplate<%= rule.id %>">Mensagem opcional desta etapa</label>
+                <textarea
+                  id="cadenceTemplate<%= rule.id %>"
+                  class="settings-input settings-textarea cadence-template"
+                  placeholder="Se deixar vazio, o sistema usa o template padrão correspondente."
+                ><%= rule.template_customizado || '' %></textarea>
+                <small class="muted cadence-hint" data-role="template-hint">
+                  <%= rule.gatilho === "APOS_VENCIMENTO"
+                    ? "Quando este campo ficar vazio, a etapa usa o template padrão de cobrança em atraso."
+                    : "Quando este campo ficar vazio, a etapa usa o template padrão de lembrete de vencimento." %>
+                </small>
+              </div>
+            </article>
+          <% }) %>
+        </div>
+
+        <div class="template-help">
+          <strong>Como funciona</strong>
+          <div class="token-list">
+            <code>WhatsApp</code>
+            <code>antes do vencimento</code>
+            <code>no vencimento</code>
+            <code>após o vencimento</code>
+          </div>
+          <small class="muted">
+            Você pode ajustar o horário, ativar ou desativar cada etapa e usar um texto próprio por estágio.
+            Se a cobrança for paga ou cancelada, a etapa não é enviada.
+          </small>
+        </div>
+
+        <div class="actions">
+          <button type="submit" class="btn btn-primary small" id="btnSaveChargeCadence">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Salvar Régua
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <hr>
+
+    <section class="section">
       <h2><i class="fa-solid fa-box"></i> Plano</h2>
 
       <p>
@@ -477,8 +716,25 @@
     const btnSaveBillingDefaults = document.getElementById("btnSaveBillingDefaults");
     const messageTemplatesForm = document.getElementById("messageTemplatesForm");
     const btnSaveTemplates = document.getElementById("btnSaveTemplates");
+    const chargeCadenceForm = document.getElementById("chargeCadenceForm");
+    const btnSaveChargeCadence = document.getElementById("btnSaveChargeCadence");
+    const cadenceCards = Array.from(document.querySelectorAll(".cadence-card"));
     const timezoneSelect = document.getElementById("timezoneOffset");
     const currentTimezoneOffset = "<%= String(user.timezone_offset ?? -180) %>";
+    const mercadoPagoForm = document.getElementById("mercadoPagoForm");
+    const btnSaveMpSettings = document.getElementById("btnSaveMpSettings");
+    const btnTestMpSettings = document.getElementById("btnTestMpSettings");
+    const btnDisconnectMpSettings = document.getElementById("btnDisconnectMpSettings");
+    const btnCopyMpWebhook = document.getElementById("btnCopyMpWebhook");
+    const mpAccessTokenInput = document.getElementById("mpAccessToken");
+    const mpPublicKeyInput = document.getElementById("mpPublicKey");
+    const mpWebhookUrlInput = document.getElementById("mpWebhookUrl");
+    const mpNotifyWhatsappInput = document.getElementById("mpNotifyWhatsapp");
+    const mpStatusBadge = document.getElementById("mpStatusBadge");
+    const mpModeText = document.getElementById("mpModeText");
+    const mpConnectionMeta = document.getElementById("mpConnectionMeta");
+    const mpTokenHint = document.getElementById("mpTokenHint");
+    let currentMpSettings = null;
 
     if (timezoneSelect) {
       timezoneSelect.value = currentTimezoneOffset;
@@ -502,6 +758,167 @@
 
       return data;
     }
+
+    async function deleteJson(url) {
+      const response = await fetch(url, {
+        method: "DELETE",
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error || "Erro ao remover configuração");
+      }
+
+      return data;
+    }
+
+    function updateMercadoPagoUi(settings) {
+      currentMpSettings = settings || null;
+      const configured = Boolean(settings?.configured);
+      const testMode = Boolean(settings?.testMode);
+
+      if (mpStatusBadge) {
+        mpStatusBadge.className = `integration-status ${configured ? "connected" : "warning"}`;
+        mpStatusBadge.innerHTML = configured
+          ? `<i class="fa-solid fa-circle-check"></i> Conectado`
+          : `<i class="fa-solid fa-circle-exclamation"></i> Não configurado`;
+      }
+
+      if (mpModeText) {
+        mpModeText.textContent = testMode ? "Sandbox / Teste" : "Produção";
+      }
+
+      if (mpConnectionMeta) {
+        if (configured && settings?.connectedAt) {
+          mpConnectionMeta.textContent = `Conectado em ${new Date(Number(settings.connectedAt)).toLocaleString("pt-BR")}`;
+        } else if (configured) {
+          mpConnectionMeta.textContent = "Credenciais salvas com segurança";
+        } else {
+          mpConnectionMeta.textContent = "Nenhuma credencial salva ainda";
+        }
+      }
+
+      if (mpPublicKeyInput) {
+        mpPublicKeyInput.value = settings?.publicKey || "";
+      }
+
+      if (mpWebhookUrlInput) {
+        mpWebhookUrlInput.value = settings?.webhookUrl || "";
+      }
+
+      if (mpNotifyWhatsappInput) {
+        mpNotifyWhatsappInput.checked = Boolean(settings?.notifyWhatsapp);
+      }
+
+      if (mpAccessTokenInput) {
+        mpAccessTokenInput.value = "";
+        mpAccessTokenInput.placeholder = configured
+          ? "Digite um novo token apenas se quiser substituir o atual"
+          : "APP_USR-... ou TEST-...";
+      }
+
+      if (mpTokenHint) {
+        mpTokenHint.textContent = settings?.maskedAccessToken
+          ? `Token salvo com segurança: ${settings.maskedAccessToken}`
+          : "O token fica criptografado com AES-256-GCM antes de ser salvo no banco.";
+      }
+
+      if (btnDisconnectMpSettings) {
+        btnDisconnectMpSettings.disabled = !configured;
+      }
+    }
+
+    async function loadMercadoPagoSettings() {
+      try {
+        const response = await fetch("/api/mp/settings");
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Erro ao carregar integração do Mercado Pago");
+        }
+
+        updateMercadoPagoUi(data.settings || null);
+      } catch (error) {
+        console.error(error);
+        updateMercadoPagoUi(null);
+        showToast("error", error.message || "Erro ao carregar Mercado Pago");
+      }
+    }
+
+    async function copyMercadoPagoWebhookUrl() {
+      const url = String(mpWebhookUrlInput?.value || "").trim();
+      if (!url) {
+        showToast("warn", "Salve as credenciais para gerar a URL do webhook.");
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast("success", "Webhook copiado!");
+      } catch (error) {
+        console.error(error);
+        showToast("error", "Não foi possível copiar a URL do webhook.");
+      }
+    }
+
+    function getCadenceDaysLabel(trigger) {
+      if (trigger === "APOS_VENCIMENTO") return "Dias após o vencimento";
+      if (trigger === "NO_VENCIMENTO") return "Disparo no próprio dia";
+      return "Dias antes do vencimento";
+    }
+
+    function getCadenceTemplateHint(trigger) {
+      if (trigger === "APOS_VENCIMENTO") {
+        return "Quando este campo ficar vazio, a etapa usa o template padrão de cobrança em atraso.";
+      }
+      return "Quando este campo ficar vazio, a etapa usa o template padrão de lembrete de vencimento.";
+    }
+
+    function syncCadenceCard(card) {
+      const triggerInput = card.querySelector(".cadence-trigger");
+      const daysInput = card.querySelector(".cadence-days");
+      const nameInput = card.querySelector(".cadence-name");
+      const title = card.querySelector(".cadence-card-title");
+      const daysLabel = card.querySelector('[data-role="days-label"]');
+      const templateHint = card.querySelector('[data-role="template-hint"]');
+      const trigger = triggerInput?.value || "ANTES_VENCIMENTO";
+
+      if (title && nameInput) {
+        title.textContent = nameInput.value.trim() || "Etapa sem nome";
+      }
+
+      if (daysLabel) {
+        daysLabel.textContent = getCadenceDaysLabel(trigger);
+      }
+
+      if (templateHint) {
+        templateHint.textContent = getCadenceTemplateHint(trigger);
+      }
+
+      if (daysInput) {
+        if (trigger === "NO_VENCIMENTO") {
+          daysInput.value = "0";
+          daysInput.disabled = true;
+          daysInput.min = "0";
+        } else {
+          daysInput.disabled = false;
+          daysInput.min = "1";
+          if (!Number(daysInput.value) || Number(daysInput.value) < 1) {
+            daysInput.value = trigger === "ANTES_VENCIMENTO" ? "3" : "2";
+          }
+        }
+      }
+    }
+
+    cadenceCards.forEach((card) => {
+      const triggerInput = card.querySelector(".cadence-trigger");
+      const nameInput = card.querySelector(".cadence-name");
+
+      triggerInput?.addEventListener("change", () => syncCadenceCard(card));
+      nameInput?.addEventListener("input", () => syncCadenceCard(card));
+      syncCadenceCard(card);
+    });
+
+    loadMercadoPagoSettings();
 
     ddiForm?.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -591,6 +1008,109 @@
         showToast("error", error.message || "Erro ao salvar templates");
       } finally {
         setButtonLoading(btnSaveTemplates, false);
+      }
+    });
+
+    chargeCadenceForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setButtonLoading(btnSaveChargeCadence, true, "Salvando...");
+
+      try {
+        const rules = cadenceCards.map((card) => {
+          const trigger = card.querySelector(".cadence-trigger")?.value || "ANTES_VENCIMENTO";
+          const daysInput = card.querySelector(".cadence-days");
+
+          return {
+            id: Number(card.dataset.ruleId || 0) || undefined,
+            nome: card.querySelector(".cadence-name")?.value || "",
+            gatilho: trigger,
+            dias_offset: Number(daysInput?.value || 0),
+            horario_envio: card.querySelector(".cadence-time")?.value || "09:00",
+            canal: "WHATSAPP",
+            ativo: Boolean(card.querySelector(".cadence-active")?.checked),
+            template_customizado: card.querySelector(".cadence-template")?.value || "",
+          };
+        });
+
+        const data = await postJson("/user/charge-cadence", { rules });
+        (data.rules || []).forEach((rule, index) => {
+          const card = cadenceCards[index];
+          if (!card) return;
+          card.dataset.ruleId = String(rule.id || "");
+        });
+        showToast("success", "Régua de cobrança salva");
+      } catch (error) {
+        console.error(error);
+        showToast("error", error.message || "Erro ao salvar régua de cobrança");
+      } finally {
+        setButtonLoading(btnSaveChargeCadence, false);
+      }
+    });
+
+    btnCopyMpWebhook?.addEventListener("click", copyMercadoPagoWebhookUrl);
+
+    mercadoPagoForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      setButtonLoading(btnSaveMpSettings, true, "Salvando...");
+
+      try {
+        const accessToken = String(mpAccessTokenInput?.value || "").trim();
+        if (!accessToken && !currentMpSettings?.configured) {
+          throw new Error("Informe o Access Token para salvar a integração.");
+        }
+
+        const data = await postJson("/api/mp/settings", {
+          access_token: accessToken,
+          public_key: mpPublicKeyInput?.value || "",
+          notify_whatsapp: Boolean(mpNotifyWhatsappInput?.checked),
+        });
+
+        updateMercadoPagoUi(data.settings || null);
+        showToast("success", "Mercado Pago conectado com sucesso!");
+      } catch (error) {
+        console.error(error);
+        showToast("error", error.message || "Erro ao salvar Mercado Pago");
+      } finally {
+        setButtonLoading(btnSaveMpSettings, false);
+      }
+    });
+
+    btnTestMpSettings?.addEventListener("click", async () => {
+      setButtonLoading(btnTestMpSettings, true, "Testando...");
+
+      try {
+        const data = await postJson("/api/mp/settings/test", {
+          access_token: String(mpAccessTokenInput?.value || "").trim(),
+        });
+        showToast(
+          "success",
+          data.accountName
+            ? `Conexão validada: ${data.accountName}`
+            : "Conexão com Mercado Pago validada."
+        );
+      } catch (error) {
+        console.error(error);
+        showToast("error", error.message || "Falha ao testar Mercado Pago");
+      } finally {
+        setButtonLoading(btnTestMpSettings, false);
+      }
+    });
+
+    btnDisconnectMpSettings?.addEventListener("click", async () => {
+      if (!currentMpSettings?.configured) return;
+      if (!confirm("Desconectar o Mercado Pago desta conta?")) return;
+
+      setButtonLoading(btnDisconnectMpSettings, true, "Desconectando...");
+
+      try {
+        await deleteJson("/api/mp/settings");
+        updateMercadoPagoUi(null);
+        showToast("success", "Mercado Pago desconectado.");
+      } catch (error) {
+        console.error(error);
+        showToast("error", error.message || "Erro ao desconectar Mercado Pago");
+      } finally {
+        setButtonLoading(btnDisconnectMpSettings, false);
       }
     });
   </script>

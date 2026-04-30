@@ -1,0 +1,75 @@
+.mp-return-page {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    radial-gradient(circle at top, rgba(0, 184, 148, 0.16), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(0, 210, 255, 0.12), transparent 30%),
+    #07111f;
+}
+
+.mp-return-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.mp-return-card {
+  width: min(100%, 560px);
+  padding: 32px;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),
+    rgba(7, 17, 31, 0.92);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  text-align: center;
+}
+
+.mp-return-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mp-return-icon {
+  margin: 22px 0 18px;
+  font-size: 64px;
+}
+
+.state-success .mp-return-icon {
+  color: #22c55e;
+}
+
+.state-pending .mp-return-icon {
+  color: #f59e0b;
+}
+
+.state-failure .mp-return-icon {
+  color: #ef4444;
+}
+
+.mp-return-card h1 {
+  margin: 0 0 12px;
+  font-size: clamp(28px, 5vw, 38px);
+}
+
+.mp-return-card p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.mp-return-actions {
+  margin-top: 24px;
+  display: flex;
+  justify-content: center;
+}

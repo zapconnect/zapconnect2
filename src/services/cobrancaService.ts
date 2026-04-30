@@ -1,5 +1,15 @@
 import { getDB, type DBClient, withDBTransaction } from "../database";
-import { getClient } from "../wppManager";
+import { emitToUser } from "../lib/socketEmitter";
+import { logAudit } from "../utils/audit";
+import { ensureChat, getClient } from "../wppManager";
+import {
+  buildChargeWhatsappFailureSnapshot,
+  getChargeWhatsappDeliveryStatusFromAck,
+  normalizeChargeWhatsappAckValue,
+  normalizeChargeWhatsappMessageId,
+  parseChargeWhatsappDeliveryStatus,
+  type ChargeWhatsappDeliveryStatus,
+} from "./cobrancaWhatsappTracking";
 
 export type BillingType =
   | "PIX"
@@ -60,12 +70,67 @@ export type Cobranca = {
   recorrente: boolean;
   recorrencia_id?: number;
   session_name?: string;
+  whatsapp_ultimo_tipo?: ChargeMessageType;
+  whatsapp_ultimo_status?: ChargeWhatsappDeliveryStatus;
+  whatsapp_ultimo_ack?: number;
+  whatsapp_ultima_mensagem_id?: string;
+  whatsapp_ultimo_erro?: string;
+  whatsapp_ultimo_envio_em?: number;
+  whatsapp_ultimo_entregue_em?: number;
+  whatsapp_ultimo_lido_em?: number;
+  whatsapp_ultimo_status_em?: number;
+  mp_preference_id?: string;
+  mp_payment_id?: string;
+  mp_checkout_url?: string;
+  mp_status?: string;
+  mp_updated_at?: number;
   notificado_criacao: boolean;
   notificado_vencimento: boolean;
   notificado_atraso: boolean;
+  notificado_confirmacao_pagamento: boolean;
   pago_em?: number;
   created_at: number;
   updated_at: number;
+};
+
+export type CobrancaRecebimento = {
+  id: number;
+  cobranca_id: number;
+  user_id: number;
+  valor: number;
+  recebido_em: number;
+  observacao?: string;
+  created_at: number;
+  updated_at: number;
+};
+
+export type CobrancaRecebimentoResumo = {
+  total_recebido: number;
+  saldo_aberto: number;
+  quantidade: number;
+  historico_disponivel: boolean;
+};
+
+export type CobrancaDetalhada = {
+  cobranca: Cobranca;
+  recebimentos: CobrancaRecebimento[];
+  resumo: CobrancaRecebimentoResumo;
+};
+
+export type ClienteDashboardResumo = {
+  total_cobrancas: number;
+  total_recebido: number;
+  total_em_aberto: number;
+  total_vencido: number;
+  cobrancas_abertas: number;
+  recorrencias_ativas: number;
+};
+
+export type ClienteDashboard = {
+  cliente: CobrancaCliente;
+  resumo: ClienteDashboardResumo;
+  cobrancas: Cobranca[];
+  recorrencias: Recorrencia[];
 };
 
 export type Recorrencia = {
@@ -117,9 +182,54 @@ export type CobrancaSummary = {
   total_cancelado: number;
   valor_pendente: number;
   valor_pago_mes: number;
+  valor_pago_mes_anterior: number;
+  variacao_recebimento_percentual: number | null;
+  variacao_recebimento_valor: number;
+  variacao_recebimento_direcao: "up" | "down" | "flat" | "new";
   valor_vencido: number;
   total_clientes: number;
   total_recorrencias_ativas: number;
+  recebimentos_ultimos_6_meses: {
+    mes: string;
+    label: string;
+    valor: number;
+  }[];
+};
+
+export type FinancialHealthLevel = "green" | "yellow" | "red";
+
+export type FinancialHealthAgingBucket = {
+  faixa: "1-7 dias" | "8-30 dias" | "+30 dias";
+  qtd: number;
+  valor: number;
+};
+
+export type FinancialHealthAlert = {
+  cliente_id: number;
+  cliente_nome: string;
+  cliente_telefone: string;
+  total_vencido: number;
+  vencimento_mais_antigo: string;
+  dias_em_atraso: number;
+  total_cobrancas: number;
+};
+
+export type FinancialHealthData = {
+  mrr: number;
+  recorrencias_ativas: number;
+  churn: {
+    total: number;
+    valor: number;
+    mes: string;
+  };
+  aging: FinancialHealthAgingBucket[];
+  alertas: FinancialHealthAlert[];
+  valor_vencido_total: number;
+  inadimplencia_percentual: number;
+  total_clientes_inadimplentes: number;
+  total_cobrancas_vencidas: number;
+  health_level: FinancialHealthLevel;
+  health_label: string;
 };
 
 export type ChargeMessageType =
@@ -130,6 +240,39 @@ export type ChargeMessageType =
   | "cancelamento";
 
 export type ChargeMessageTemplates = Record<ChargeMessageType, string | null>;
+
+export type ChargeCadenceTrigger =
+  | "ANTES_VENCIMENTO"
+  | "NO_VENCIMENTO"
+  | "APOS_VENCIMENTO";
+
+export type ChargeCadenceChannel = "WHATSAPP";
+
+export type ChargeCadenceRule = {
+  id: number;
+  user_id: number;
+  slot: number;
+  nome: string;
+  gatilho: ChargeCadenceTrigger;
+  dias_offset: number;
+  horario_envio: string;
+  canal: ChargeCadenceChannel;
+  ativo: boolean;
+  template_customizado: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type ChargeCadenceRuleInput = {
+  id?: number;
+  nome?: string | null;
+  gatilho: ChargeCadenceTrigger;
+  dias_offset?: number;
+  horario_envio?: string;
+  canal?: ChargeCadenceChannel;
+  ativo?: boolean;
+  template_customizado?: string | null;
+};
 
 type ClienteRow = {
   id: number;
@@ -168,10 +311,36 @@ type CobrancaRow = {
   recorrente: number | boolean;
   recorrencia_id: number | null;
   session_name: string | null;
+  whatsapp_ultimo_tipo: string | null;
+  whatsapp_ultimo_status: string | null;
+  whatsapp_ultimo_ack: number | null;
+  whatsapp_ultima_mensagem_id: string | null;
+  whatsapp_ultimo_erro: string | null;
+  whatsapp_ultimo_envio_em: number | null;
+  whatsapp_ultimo_entregue_em: number | null;
+  whatsapp_ultimo_lido_em: number | null;
+  whatsapp_ultimo_status_em: number | null;
+  mp_preference_id: string | null;
+  mp_payment_id: string | null;
+  mp_checkout_url: string | null;
+  mp_status: string | null;
+  mp_updated_at: number | null;
   notificado_criacao: number | boolean;
   notificado_vencimento: number | boolean;
   notificado_atraso: number | boolean;
+  notificado_confirmacao_pagamento: number | boolean;
   pago_em: number | null;
+  created_at: number;
+  updated_at: number;
+};
+
+type CobrancaRecebimentoRow = {
+  id: number;
+  cobranca_id: number;
+  user_id: number;
+  valor: number | string;
+  recebido_em: number | string;
+  observacao: string | null;
   created_at: number;
   updated_at: number;
 };
@@ -232,6 +401,21 @@ type UserChargePreferencesRow = {
   template_cobranca_cancelamento: string | null;
 };
 
+type ChargeCadenceRuleRow = {
+  id: number;
+  user_id: number;
+  slot: number | string;
+  nome: string;
+  gatilho: ChargeCadenceTrigger;
+  dias_offset: number | string;
+  horario_envio: string;
+  canal: ChargeCadenceChannel | string;
+  ativo: number | boolean;
+  template_customizado: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
 type UserChargePreferences = {
   defaultSessionName?: string;
   templates: ChargeMessageTemplates;
@@ -253,6 +437,89 @@ const CYCLE_TYPES: CycleType[] = [
   "TRIMESTRAL",
   "SEMESTRAL",
   "ANUAL",
+];
+
+const CHARGE_CADENCE_TRIGGERS: ChargeCadenceTrigger[] = [
+  "ANTES_VENCIMENTO",
+  "NO_VENCIMENTO",
+  "APOS_VENCIMENTO",
+];
+
+const CHARGE_CADENCE_CHANNELS: ChargeCadenceChannel[] = ["WHATSAPP"];
+
+const LEGACY_DEFAULT_CHARGE_CADENCE_RULES: Omit<
+  ChargeCadenceRule,
+  "id" | "user_id" | "slot" | "created_at" | "updated_at"
+>[] = [
+  {
+    nome: "Aviso 3 dias antes",
+    gatilho: "ANTES_VENCIMENTO",
+    dias_offset: 3,
+    horario_envio: "09:00",
+    canal: "WHATSAPP",
+    ativo: true,
+    template_customizado: null,
+  },
+  {
+    nome: "No vencimento",
+    gatilho: "NO_VENCIMENTO",
+    dias_offset: 0,
+    horario_envio: "08:00",
+    canal: "WHATSAPP",
+    ativo: true,
+    template_customizado: null,
+  },
+  {
+    nome: "Atraso de 2 dias",
+    gatilho: "APOS_VENCIMENTO",
+    dias_offset: 2,
+    horario_envio: "10:00",
+    canal: "WHATSAPP",
+    ativo: true,
+    template_customizado: null,
+  },
+  {
+    nome: "Atraso de 7 dias",
+    gatilho: "APOS_VENCIMENTO",
+    dias_offset: 7,
+    horario_envio: "10:00",
+    canal: "WHATSAPP",
+    ativo: true,
+    template_customizado: null,
+  },
+];
+
+const DEFAULT_CHARGE_CADENCE_RULES: Omit<
+  ChargeCadenceRule,
+  "id" | "user_id" | "slot" | "created_at" | "updated_at"
+>[] = [
+  {
+    nome: "Aviso 2 dias antes",
+    gatilho: "ANTES_VENCIMENTO",
+    dias_offset: 2,
+    horario_envio: "09:00",
+    canal: "WHATSAPP",
+    ativo: true,
+    template_customizado: null,
+  },
+  {
+    nome: "No vencimento",
+    gatilho: "NO_VENCIMENTO",
+    dias_offset: 0,
+    horario_envio: "08:00",
+    canal: "WHATSAPP",
+    ativo: true,
+    template_customizado: null,
+  },
+  {
+    nome: "Atraso de 3 dias",
+    gatilho: "APOS_VENCIMENTO",
+    dias_offset: 3,
+    horario_envio: "10:00",
+    canal: "WHATSAPP",
+    ativo: true,
+    template_customizado: null,
+  },
 ];
 
 const DEFAULT_CHARGE_MESSAGE_TEMPLATES: Record<ChargeMessageType, string> = {
@@ -374,6 +641,21 @@ function nullableString(value: any) {
   return text ?? null;
 }
 
+function normalizeBoundedNullableText(value: unknown, maxLength = 0) {
+  const text = nullableString(value);
+  if (!text) return null;
+  return maxLength > 0 ? text.slice(0, maxLength) : text;
+}
+
+function normalizeBoundedRequiredText(
+  value: unknown,
+  fallback: string,
+  maxLength = 0
+) {
+  const text = cleanString(value) || fallback;
+  return maxLength > 0 ? text.slice(0, maxLength) : text;
+}
+
 function nowMs() {
   return Date.now();
 }
@@ -458,6 +740,115 @@ function formatTimestampBr(value?: number) {
   return new Date(value).toLocaleDateString("pt-BR");
 }
 
+function getShiftedDateByOffset(offsetMinutes?: number | null, baseDate = new Date()) {
+  return new Date(baseDate.getTime() + ensureNumber(offsetMinutes) * 60 * 1000);
+}
+
+function formatShiftedDateOnly(date: Date) {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatShiftedYearMonth(date: Date) {
+  return formatShiftedDateOnly(date).slice(0, 7);
+}
+
+function isUserLocalMonday(offsetMinutes?: number | null, baseDate = new Date()) {
+  return getShiftedDateByOffset(offsetMinutes, baseDate).getUTCDay() === 1;
+}
+
+function getUserLocalToday(offsetMinutes?: number | null, baseDate = new Date()) {
+  return formatShiftedDateOnly(getShiftedDateByOffset(offsetMinutes, baseDate));
+}
+
+function getUserLocalMonthKey(offsetMinutes?: number | null, baseDate = new Date()) {
+  return formatShiftedYearMonth(getShiftedDateByOffset(offsetMinutes, baseDate));
+}
+
+function getUserLocalWeekKey(offsetMinutes?: number | null, baseDate = new Date()) {
+  const shifted = getShiftedDateByOffset(offsetMinutes, baseDate);
+  const weekday = shifted.getUTCDay();
+  const mondayDelta = weekday === 0 ? -6 : 1 - weekday;
+  const monday = new Date(shifted.getTime() + mondayDelta * 24 * 60 * 60 * 1000);
+  return formatShiftedDateOnly(monday);
+}
+
+function getUserLocalMonthRange(
+  offsetMinutes?: number | null,
+  monthShift = 0,
+  baseDate = new Date()
+) {
+  const offsetMs = ensureNumber(offsetMinutes) * 60 * 1000;
+  const shiftedBase = getShiftedDateByOffset(offsetMinutes, baseDate);
+  const startMs =
+    Date.UTC(
+      shiftedBase.getUTCFullYear(),
+      shiftedBase.getUTCMonth() + monthShift,
+      1,
+      0,
+      0,
+      0,
+      0
+    ) - offsetMs;
+  const endMs =
+    Date.UTC(
+      shiftedBase.getUTCFullYear(),
+      shiftedBase.getUTCMonth() + monthShift + 1,
+      1,
+      0,
+      0,
+      0,
+      0
+    ) - offsetMs;
+  const shiftedStart = new Date(startMs + offsetMs);
+  const label = new Intl.DateTimeFormat("pt-BR", {
+    month: "short",
+    timeZone: "UTC",
+  })
+    .format(shiftedStart)
+    .replace(/\./g, "");
+
+  return {
+    key: formatShiftedYearMonth(shiftedStart),
+    label: label.charAt(0).toUpperCase() + label.slice(1),
+    startMs,
+    endMs,
+  };
+}
+
+export function getUserLocalTimeSnapshot(
+  offsetMinutes?: number | null,
+  baseDate = new Date()
+) {
+  const shifted = getShiftedDateByOffset(offsetMinutes, baseDate);
+  const hours = String(shifted.getUTCHours()).padStart(2, "0");
+  const minutes = String(shifted.getUTCMinutes()).padStart(2, "0");
+
+  return {
+    date: formatShiftedDateOnly(shifted),
+    time: `${hours}:${minutes}`,
+  };
+}
+
+function getFinancialHealthLevel(inadimplenciaPercentual: number): FinancialHealthLevel {
+  if (inadimplenciaPercentual > 15) return "red";
+  if (inadimplenciaPercentual >= 5) return "yellow";
+  return "green";
+}
+
+function getFinancialHealthLabel(level: FinancialHealthLevel) {
+  switch (level) {
+    case "red":
+      return "Crítico";
+    case "yellow":
+      return "Atenção";
+    default:
+      return "Saudável";
+  }
+}
+
 function firstName(name: string) {
   return String(name || "").trim().split(/\s+/)[0] || "cliente";
 }
@@ -524,6 +915,367 @@ async function loadUserChargePreferences(
   };
 }
 
+async function listUserChargeCadenceRulesFromDB(
+  db: DBClient,
+  userId: number
+): Promise<ChargeCadenceRule[]> {
+  const rows = await db.all<ChargeCadenceRuleRow>(
+    `
+    SELECT
+      id,
+      user_id,
+      slot,
+      nome,
+      gatilho,
+      dias_offset,
+      horario_envio,
+      canal,
+      ativo,
+      template_customizado,
+      created_at,
+      updated_at
+    FROM cobranca_regua_rules
+    WHERE user_id = ?
+    ORDER BY slot ASC, id ASC
+    `,
+    [userId]
+  );
+
+  return rows.map(mapChargeCadenceRule);
+}
+
+function matchesChargeCadencePreset(
+  rules: ChargeCadenceRule[],
+  preset: typeof DEFAULT_CHARGE_CADENCE_RULES
+) {
+  if (rules.length !== preset.length) {
+    return false;
+  }
+
+  return rules.every((rule, index) => {
+    const expected = preset[index];
+    return (
+      rule.slot === index + 1 &&
+      rule.nome === expected.nome &&
+      rule.gatilho === expected.gatilho &&
+      rule.dias_offset === expected.dias_offset &&
+      rule.horario_envio === expected.horario_envio &&
+      rule.canal === expected.canal &&
+      rule.ativo === expected.ativo &&
+      (rule.template_customizado || null) === expected.template_customizado
+    );
+  });
+}
+
+async function migrateLegacyChargeCadencePresetIfNeeded(
+  db: DBClient,
+  userId: number,
+  existing: ChargeCadenceRule[]
+) {
+  if (!matchesChargeCadencePreset(existing, LEGACY_DEFAULT_CHARGE_CADENCE_RULES)) {
+    return existing;
+  }
+
+  const now = nowMs();
+  for (const [index, rule] of DEFAULT_CHARGE_CADENCE_RULES.entries()) {
+    const current = existing[index];
+    if (!current) continue;
+
+    await db.run(
+      `
+      UPDATE cobranca_regua_rules
+      SET
+        slot = ?,
+        nome = ?,
+        gatilho = ?,
+        dias_offset = ?,
+        horario_envio = ?,
+        canal = ?,
+        ativo = ?,
+        template_customizado = ?,
+        updated_at = ?
+      WHERE user_id = ? AND id = ?
+      `,
+      [
+        index + 1,
+        rule.nome,
+        rule.gatilho,
+        rule.dias_offset,
+        rule.horario_envio,
+        rule.canal,
+        rule.ativo ? 1 : 0,
+        rule.template_customizado,
+        now,
+        userId,
+        current.id,
+      ]
+    );
+  }
+
+  if (existing.length > DEFAULT_CHARGE_CADENCE_RULES.length) {
+    const idsToDelete = existing
+      .slice(DEFAULT_CHARGE_CADENCE_RULES.length)
+      .map((rule) => rule.id);
+    const placeholders = idsToDelete.map(() => "?").join(", ");
+
+    await db.run(
+      `
+      DELETE FROM cobranca_regua_rules
+      WHERE user_id = ?
+        AND id IN (${placeholders})
+      `,
+      [userId, ...idsToDelete]
+    );
+  }
+
+  await db.run(
+    `
+    DELETE FROM cobranca_notifications_queue
+    WHERE user_id = ?
+      AND regua_rule_id > 0
+      AND status = 'pending'
+    `,
+    [userId]
+  );
+
+  return listUserChargeCadenceRulesFromDB(db, userId);
+}
+
+export async function ensureUserChargeCadenceRules(
+  userId: number
+): Promise<ChargeCadenceRule[]> {
+  const db = getDB();
+  const existing = await listUserChargeCadenceRulesFromDB(db, userId);
+  if (existing.length) {
+    return migrateLegacyChargeCadencePresetIfNeeded(db, userId, existing);
+  }
+
+  const now = nowMs();
+  for (const [index, rule] of DEFAULT_CHARGE_CADENCE_RULES.entries()) {
+    await db.run(
+      `
+      INSERT INTO cobranca_regua_rules (
+        user_id,
+        slot,
+        nome,
+        gatilho,
+        dias_offset,
+        horario_envio,
+        canal,
+        ativo,
+        template_customizado,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE updated_at = updated_at
+      `,
+      [
+        userId,
+        index + 1,
+        rule.nome,
+        rule.gatilho,
+        rule.dias_offset,
+        rule.horario_envio,
+        rule.canal,
+        rule.ativo ? 1 : 0,
+        rule.template_customizado,
+        now,
+        now,
+      ]
+    );
+  }
+
+  return listUserChargeCadenceRulesFromDB(db, userId);
+}
+
+export async function listUserChargeCadenceRules(
+  userId: number
+): Promise<ChargeCadenceRule[]> {
+  return ensureUserChargeCadenceRules(userId);
+}
+
+export async function buscarChargeCadenceRule(
+  userId: number,
+  ruleId: number
+): Promise<ChargeCadenceRule | null> {
+  if (!Number.isFinite(Number(ruleId)) || Number(ruleId) <= 0) {
+    return null;
+  }
+
+  const db = getDB();
+  const row = await db.get<ChargeCadenceRuleRow>(
+    `
+    SELECT
+      id,
+      user_id,
+      slot,
+      nome,
+      gatilho,
+      dias_offset,
+      horario_envio,
+      canal,
+      ativo,
+      template_customizado,
+      created_at,
+      updated_at
+    FROM cobranca_regua_rules
+    WHERE user_id = ? AND id = ?
+    LIMIT 1
+    `,
+    [userId, ruleId]
+  );
+
+  return row ? mapChargeCadenceRule(row) : null;
+}
+
+export async function saveUserChargeCadenceRules(
+  userId: number,
+  inputRules: ChargeCadenceRuleInput[]
+): Promise<ChargeCadenceRule[]> {
+  if (!Array.isArray(inputRules) || !inputRules.length) {
+    throw new Error("Informe ao menos uma etapa da régua.");
+  }
+
+  if (inputRules.length > 12) {
+    throw new Error("A régua suporta no máximo 12 etapas.");
+  }
+
+  const existing = await ensureUserChargeCadenceRules(userId);
+  const existingIds = new Set(existing.map((rule) => rule.id));
+
+  const normalizedRules = inputRules.map((rule, index) => {
+    const gatilho = assertChargeCadenceTrigger(rule?.gatilho);
+    const diasOffset = normalizeChargeCadenceDays(gatilho, rule?.dias_offset);
+    const fallbackName =
+      existing[index]?.nome || buildDefaultChargeCadenceName(gatilho, diasOffset);
+    const id = Number(rule?.id || 0);
+
+    if (id > 0 && !existingIds.has(id)) {
+      throw new Error("Etapa da régua inválida.");
+    }
+
+    return {
+      id: id > 0 ? id : null,
+      slot: index + 1,
+      nome: normalizeBoundedRequiredText(rule?.nome, fallbackName, 80),
+      gatilho,
+      dias_offset: diasOffset,
+      horario_envio: normalizeChargeCadenceTime(rule?.horario_envio || "09:00"),
+      canal: assertChargeCadenceChannel(rule?.canal || "WHATSAPP"),
+      ativo: Boolean(rule?.ativo),
+      template_customizado: normalizeBoundedNullableText(
+        rule?.template_customizado,
+        6000
+      ),
+    };
+  });
+
+  const savedIds = await withDBTransaction(async (db) => {
+    const persistedIds: number[] = [];
+
+    for (const rule of normalizedRules) {
+      if (rule.id) {
+        await db.run(
+          `
+          UPDATE cobranca_regua_rules
+          SET
+            nome = ?,
+            slot = ?,
+            gatilho = ?,
+            dias_offset = ?,
+            horario_envio = ?,
+            canal = ?,
+            ativo = ?,
+            template_customizado = ?,
+            updated_at = ?
+          WHERE user_id = ? AND id = ?
+          `,
+          [
+            rule.nome,
+            rule.slot,
+            rule.gatilho,
+            rule.dias_offset,
+            rule.horario_envio,
+            rule.canal,
+            rule.ativo ? 1 : 0,
+            rule.template_customizado,
+            nowMs(),
+            userId,
+            rule.id,
+          ]
+        );
+        persistedIds.push(rule.id);
+        continue;
+      }
+
+      const inserted = await db.run(
+        `
+        INSERT INTO cobranca_regua_rules (
+          user_id,
+          slot,
+          nome,
+          gatilho,
+          dias_offset,
+          horario_envio,
+          canal,
+          ativo,
+          template_customizado,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          userId,
+          rule.slot,
+          rule.nome,
+          rule.gatilho,
+          rule.dias_offset,
+          rule.horario_envio,
+          rule.canal,
+          rule.ativo ? 1 : 0,
+          rule.template_customizado,
+          nowMs(),
+          nowMs(),
+        ]
+      );
+      persistedIds.push(ensureNumber(inserted.insertId));
+    }
+
+    if (persistedIds.length) {
+      const placeholders = persistedIds.map(() => "?").join(", ");
+      await db.run(
+        `
+        DELETE FROM cobranca_regua_rules
+        WHERE user_id = ?
+          AND id NOT IN (${placeholders})
+        `,
+        [userId, ...persistedIds]
+      );
+    } else {
+      await db.run(`DELETE FROM cobranca_regua_rules WHERE user_id = ?`, [userId]);
+    }
+
+    await db.run(
+      `
+      DELETE FROM cobranca_notifications_queue
+      WHERE user_id = ?
+        AND regua_rule_id > 0
+        AND status = 'pending'
+      `,
+      [userId]
+    );
+
+    return persistedIds;
+  });
+
+  const savedRules = await listUserChargeCadenceRulesFromDB(getDB(), userId);
+  const savedById = new Map(savedRules.map((rule) => [rule.id, rule]));
+
+  return savedIds
+    .map((id) => savedById.get(id))
+    .filter((rule): rule is ChargeCadenceRule => Boolean(rule));
+}
+
 function assertBillingType(value: any): BillingType {
   if (!BILLING_TYPES.includes(value as BillingType)) {
     throw new Error("Forma de pagamento inválida.");
@@ -536,6 +1288,98 @@ function assertCycleType(value: any): CycleType {
     throw new Error("Ciclo de recorrência inválido.");
   }
   return value as CycleType;
+}
+
+function assertChargeCadenceTrigger(value: unknown): ChargeCadenceTrigger {
+  if (!CHARGE_CADENCE_TRIGGERS.includes(value as ChargeCadenceTrigger)) {
+    throw new Error("Gatilho da régua inválido.");
+  }
+  return value as ChargeCadenceTrigger;
+}
+
+function assertChargeCadenceChannel(value: unknown): ChargeCadenceChannel {
+  if (!CHARGE_CADENCE_CHANNELS.includes(value as ChargeCadenceChannel)) {
+    throw new Error("Canal da régua inválido.");
+  }
+  return value as ChargeCadenceChannel;
+}
+
+function normalizeChargeCadenceTime(value: unknown) {
+  const raw = String(value ?? "").trim();
+  const match = raw.match(/^(\d{2}):(\d{2})$/);
+  if (!match) {
+    throw new Error("Horário da régua inválido.");
+  }
+
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    throw new Error("Horário da régua inválido.");
+  }
+
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function normalizeChargeCadenceDays(
+  gatilho: ChargeCadenceTrigger,
+  value: unknown
+) {
+  const numeric = Math.floor(ensureNumber(value, 0));
+  if (gatilho === "NO_VENCIMENTO") {
+    return 0;
+  }
+
+  if (!Number.isFinite(numeric) || numeric < 1 || numeric > 3650) {
+    throw new Error("Dias da régua inválidos.");
+  }
+
+  return numeric;
+}
+
+function buildDefaultChargeCadenceName(
+  gatilho: ChargeCadenceTrigger,
+  diasOffset: number
+) {
+  if (gatilho === "ANTES_VENCIMENTO") {
+    return `Aviso ${diasOffset} dia(s) antes`;
+  }
+  if (gatilho === "NO_VENCIMENTO") {
+    return "No vencimento";
+  }
+  return `Atraso de ${diasOffset} dia(s)`;
+}
+
+function mapChargeCadenceRule(row: ChargeCadenceRuleRow): ChargeCadenceRule {
+  return {
+    id: ensureNumber(row.id),
+    user_id: ensureNumber(row.user_id),
+    slot: ensureNumber(row.slot),
+    nome: row.nome,
+    gatilho: assertChargeCadenceTrigger(row.gatilho),
+    dias_offset: ensureNumber(row.dias_offset),
+    horario_envio: normalizeChargeCadenceTime(row.horario_envio),
+    canal: assertChargeCadenceChannel(row.canal),
+    ativo: ensureBoolean(row.ativo),
+    template_customizado: normalizeBoundedNullableText(
+      row.template_customizado,
+      6000
+    ),
+    created_at: ensureNumber(row.created_at),
+    updated_at: ensureNumber(row.updated_at),
+  };
+}
+
+export function getChargeCadenceMessageType(
+  gatilho: ChargeCadenceTrigger
+): "lembrete_vencimento" | "atraso" {
+  return gatilho === "APOS_VENCIMENTO" ? "atraso" : "lembrete_vencimento";
 }
 
 function normalizePhone(phone: any) {
@@ -640,13 +1484,129 @@ function mapCobranca(row: CobrancaRow): Cobranca {
     recorrencia_id:
       row.recorrencia_id == null ? undefined : ensureNumber(row.recorrencia_id),
     session_name: row.session_name || undefined,
+    whatsapp_ultimo_tipo: (row.whatsapp_ultimo_tipo || undefined) as
+      | ChargeMessageType
+      | undefined,
+    whatsapp_ultimo_status:
+      parseChargeWhatsappDeliveryStatus(row.whatsapp_ultimo_status) || undefined,
+    whatsapp_ultimo_ack:
+      row.whatsapp_ultimo_ack == null
+        ? undefined
+        : ensureNumber(row.whatsapp_ultimo_ack),
+    whatsapp_ultima_mensagem_id: row.whatsapp_ultima_mensagem_id || undefined,
+    whatsapp_ultimo_erro: row.whatsapp_ultimo_erro || undefined,
+    whatsapp_ultimo_envio_em:
+      row.whatsapp_ultimo_envio_em == null
+        ? undefined
+        : ensureNumber(row.whatsapp_ultimo_envio_em),
+    whatsapp_ultimo_entregue_em:
+      row.whatsapp_ultimo_entregue_em == null
+        ? undefined
+        : ensureNumber(row.whatsapp_ultimo_entregue_em),
+    whatsapp_ultimo_lido_em:
+      row.whatsapp_ultimo_lido_em == null
+        ? undefined
+        : ensureNumber(row.whatsapp_ultimo_lido_em),
+    whatsapp_ultimo_status_em:
+      row.whatsapp_ultimo_status_em == null
+        ? undefined
+        : ensureNumber(row.whatsapp_ultimo_status_em),
+    mp_preference_id: row.mp_preference_id || undefined,
+    mp_payment_id: row.mp_payment_id || undefined,
+    mp_checkout_url: row.mp_checkout_url || undefined,
+    mp_status: row.mp_status || undefined,
+    mp_updated_at:
+      row.mp_updated_at == null ? undefined : ensureNumber(row.mp_updated_at),
     notificado_criacao: ensureBoolean(row.notificado_criacao),
     notificado_vencimento: ensureBoolean(row.notificado_vencimento),
     notificado_atraso: ensureBoolean(row.notificado_atraso),
+    notificado_confirmacao_pagamento: ensureBoolean(
+      row.notificado_confirmacao_pagamento
+    ),
     pago_em: row.pago_em == null ? undefined : ensureNumber(row.pago_em),
     created_at: ensureNumber(row.created_at),
     updated_at: ensureNumber(row.updated_at),
   };
+}
+
+function mapCobrancaRecebimento(
+  row: CobrancaRecebimentoRow
+): CobrancaRecebimento {
+  return {
+    id: ensureNumber(row.id),
+    cobranca_id: ensureNumber(row.cobranca_id),
+    user_id: ensureNumber(row.user_id),
+    valor: ensureMoney(row.valor),
+    recebido_em: ensureNumber(row.recebido_em),
+    observacao: row.observacao || undefined,
+    created_at: ensureNumber(row.created_at),
+    updated_at: ensureNumber(row.updated_at),
+  };
+}
+
+function isParentInstallmentCharge(
+  charge:
+    | Pick<Cobranca, "cobranca_pai_id" | "parcelas" | "parcela_atual">
+    | Pick<CobrancaRow, "cobranca_pai_id" | "parcelas" | "parcela_atual">
+) {
+  return (
+    charge.cobranca_pai_id == null &&
+    ensureNumber(charge.parcelas, 1) > 1 &&
+    ensureNumber(charge.parcela_atual, 0) <= 0
+  );
+}
+
+function resolveOpenChargeStatus(vencimento: string): ChargeStatus {
+  return vencimento < todayDateOnly() ? "VENCIDO" : "PENDENTE";
+}
+
+function buildChargeReceiptSummary(
+  charge: Cobranca,
+  receipts: CobrancaRecebimento[]
+): CobrancaRecebimentoResumo {
+  const hasReceipts = receipts.length > 0;
+  const totalRecebido = hasReceipts
+    ? ensureMoney(receipts.reduce((sum, item) => sum + ensureMoney(item.valor), 0))
+    : ensureMoney(charge.valor_pago);
+
+  return {
+    total_recebido: totalRecebido,
+    saldo_aberto: Math.max(0, ensureMoney(charge.valor - totalRecebido)),
+    quantidade: receipts.length,
+    historico_disponivel: hasReceipts || totalRecebido <= 0,
+  };
+}
+
+function getChargePaidAmount(
+  charge: Pick<Cobranca, "valor" | "valor_pago">
+) {
+  return Math.max(
+    0,
+    Math.min(ensureMoney(charge.valor_pago), ensureMoney(charge.valor))
+  );
+}
+
+function getChargeOpenAmount(
+  charge: Pick<Cobranca, "valor" | "valor_pago" | "status">
+) {
+  if (charge.status === "PAGO" || charge.status === "CANCELADO") {
+    return 0;
+  }
+
+  return Math.max(
+    0,
+    ensureMoney(ensureMoney(charge.valor) - getChargePaidAmount(charge))
+  );
+}
+
+function isChargeOverdue(
+  charge: Pick<Cobranca, "valor" | "valor_pago" | "status" | "vencimento">
+) {
+  return (
+    getChargeOpenAmount(charge) > 0 &&
+    charge.status !== "CANCELADO" &&
+    charge.vencimento < todayDateOnly()
+  );
 }
 
 function mapRecorrencia(row: RecorrenciaRow): Recorrencia {
@@ -714,6 +1674,93 @@ async function getCobrancaByIdForUpdate(
     `,
     [userId, cobrancaId]
   );
+}
+
+async function listChargeReceipts(
+  db: DBClient,
+  userId: number,
+  cobrancaId: number
+) {
+  const rows = await db.all<CobrancaRecebimentoRow>(
+    `
+    SELECT *
+    FROM cobranca_recebimentos
+    WHERE user_id = ? AND cobranca_id = ?
+    ORDER BY recebido_em DESC, id DESC
+    `,
+    [userId, cobrancaId]
+  );
+
+  return rows.map(mapCobrancaRecebimento);
+}
+
+async function getChargeReceiptsSummary(
+  db: DBClient,
+  cobrancaId: number
+) {
+  return db.get<{
+    total_recebido: number | string | null;
+    quantidade: number | null;
+    ultimo_recebimento: number | string | null;
+  }>(
+    `
+    SELECT
+      COALESCE(SUM(valor), 0) AS total_recebido,
+      COUNT(*) AS quantidade,
+      MAX(recebido_em) AS ultimo_recebimento
+    FROM cobranca_recebimentos
+    WHERE cobranca_id = ?
+    `,
+    [cobrancaId]
+  );
+}
+
+async function recalculateChargePaymentState(
+  db: DBClient,
+  currentRow: CobrancaRow
+) {
+  const current = mapCobranca(currentRow);
+  const totals = await getChargeReceiptsSummary(db, current.id);
+  const totalRecebido = ensureMoney(totals?.total_recebido);
+  const wasFullyPaid = current.status === "PAGO";
+
+  let nextStatus: ChargeStatus;
+  let pagoEm: number | null = null;
+
+  if (totalRecebido <= 0) {
+    nextStatus = resolveOpenChargeStatus(current.vencimento);
+  } else if (totalRecebido >= current.valor) {
+    nextStatus = "PAGO";
+    pagoEm = ensureNumber(totals?.ultimo_recebimento) || nowMs();
+  } else {
+    nextStatus = "PARCIAL";
+  }
+
+  await db.run(
+    `
+    UPDATE cobrancas
+    SET status = ?, valor_pago = ?, pago_em = ?, updated_at = ?
+    WHERE user_id = ? AND id = ?
+    `,
+    [
+      nextStatus,
+      totalRecebido > 0 ? totalRecebido : null,
+      pagoEm,
+      nowMs(),
+      current.user_id,
+      current.id,
+    ]
+  );
+
+  const updatedRow = await getCobrancaById(db, current.user_id, current.id);
+  if (!updatedRow) {
+    throw new Error("Não foi possível recarregar a cobrança após atualizar o recebimento.");
+  }
+
+  return {
+    cobranca: mapCobranca(updatedRow),
+    completedNow: !wasFullyPaid && nextStatus === "PAGO",
+  };
 }
 
 async function insertCharge(
@@ -806,13 +1853,21 @@ async function syncParentCharge(db: DBClient, parentId: number) {
     pagos: number;
     cancelados: number;
     valor_pago: number | string | null;
+    ultimo_pago_em: number | string | null;
   }>(
     `
     SELECT
       COUNT(*) AS total,
       SUM(CASE WHEN status = 'PAGO' THEN 1 ELSE 0 END) AS pagos,
       SUM(CASE WHEN status = 'CANCELADO' THEN 1 ELSE 0 END) AS cancelados,
-      SUM(CASE WHEN status = 'PAGO' THEN COALESCE(valor_pago, valor) ELSE 0 END) AS valor_pago
+      SUM(
+        CASE
+          WHEN status = 'PAGO' THEN COALESCE(valor_pago, valor)
+          WHEN status = 'PARCIAL' THEN COALESCE(valor_pago, 0)
+          ELSE 0
+        END
+      ) AS valor_pago,
+      MAX(CASE WHEN status = 'PAGO' THEN pago_em ELSE NULL END) AS ultimo_pago_em
     FROM cobrancas
     WHERE cobranca_pai_id = ?
     `,
@@ -826,7 +1881,7 @@ async function syncParentCharge(db: DBClient, parentId: number) {
 
   if (ensureNumber(summary.pagos) === ensureNumber(summary.total)) {
     status = "PAGO";
-    pagoEm = nowMs();
+    pagoEm = ensureNumber(summary.ultimo_pago_em) || nowMs();
   } else if (
     ensureNumber(summary.cancelados) === ensureNumber(summary.total)
   ) {
@@ -1139,6 +2194,23 @@ async function resolveNotificationClient(
   return null;
 }
 
+function getFriendlyChargeWhatsappError(error: unknown) {
+  const rawMessage =
+    error instanceof Error ? error.message : String(error || "");
+  const message = rawMessage.toLowerCase();
+
+  if (
+    message.includes("no lid for user") ||
+    message.includes("número inválido ou não registrado no whatsapp") ||
+    message.includes("numero inválido ou não registrado no whatsapp") ||
+    message.includes("not registered")
+  ) {
+    return "Número não encontrado no WhatsApp. Confira se ele está correto, com DDI e DDD, e se esse contato possui WhatsApp.";
+  }
+
+  return rawMessage || "Falha ao enviar mensagem via WhatsApp";
+}
+
 function buildChargeExtras(cobranca: Cobranca) {
   const lines: string[] = [];
 
@@ -1232,6 +2304,79 @@ export async function listarClientes(
   );
 
   return rows.map(mapCliente);
+}
+
+export async function buscarDashboardCliente(
+  userId: number,
+  clienteId: number
+): Promise<ClienteDashboard | null> {
+  const db = getDB();
+  const clienteRow = await getClienteById(db, userId, clienteId);
+  if (!clienteRow) return null;
+
+  const [chargeRows, recurrenceRows] = await Promise.all([
+    db.all<CobrancaRow>(
+      `
+      SELECT *
+      FROM cobrancas
+      WHERE user_id = ?
+        AND cliente_id = ?
+        AND NOT (
+          status = 'PARCIAL'
+          AND cobranca_pai_id IS NULL
+          AND COALESCE(parcela_atual, 0) = 0
+          AND COALESCE(parcelas, 1) > 1
+        )
+      ORDER BY vencimento DESC, id DESC
+      `,
+      [userId, clienteId]
+    ),
+    db.all<RecorrenciaRow>(
+      `
+      SELECT *
+      FROM cobrancas_recorrencias
+      WHERE user_id = ? AND cliente_id = ? AND ativa = 1
+      ORDER BY proxima_cobranca ASC, id DESC
+      `,
+      [userId, clienteId]
+    ),
+  ]);
+
+  const cobrancas = chargeRows.map(mapCobranca);
+  const recorrencias = recurrenceRows.map(mapRecorrencia);
+  const resumoBase: ClienteDashboardResumo = {
+    total_cobrancas: cobrancas.length,
+    total_recebido: 0,
+    total_em_aberto: 0,
+    total_vencido: 0,
+    cobrancas_abertas: 0,
+    recorrencias_ativas: recorrencias.length,
+  };
+
+  const resumo = cobrancas.reduce((acc, charge) => {
+    const paidAmount = getChargePaidAmount(charge);
+    const openAmount = getChargeOpenAmount(charge);
+
+    acc.total_recebido = ensureMoney(acc.total_recebido + paidAmount);
+    acc.total_em_aberto = ensureMoney(acc.total_em_aberto + openAmount);
+
+    if (openAmount > 0) {
+      acc.cobrancas_abertas += 1;
+    }
+
+    if (isChargeOverdue(charge)) {
+      acc.total_vencido = ensureMoney(acc.total_vencido + openAmount);
+    }
+
+    return acc;
+  }, resumoBase);
+
+  return {
+    cliente: mapCliente(clienteRow),
+    resumo,
+    cobrancas,
+    recorrencias,
+  };
 }
 
 export async function editarCliente(
@@ -1526,31 +2671,47 @@ export async function criarCobranca(
   });
 }
 
-export async function listarCobrancas(
-  userId: number,
-  filters: {
-    status?: ChargeStatus | "all";
-    search?: string;
-    from?: string;
-    to?: string;
-    cliente_id?: number;
-    recorrencia_id?: number;
-    page?: number;
-    pageSize?: number;
-  }
-): Promise<{ charges: Cobranca[]; total: number; pages: number }> {
-  const db = getDB();
+type ChargeListFilters = {
+  status?: ChargeStatus | "all";
+  search?: string;
+  from?: string;
+  to?: string;
+  cliente_id?: number;
+  recorrencia_id?: number;
+  page?: number;
+  pageSize?: number;
+};
+
+const CHARGE_LIST_ORDER_BY_SQL = `
+  CASE c.status
+    WHEN 'VENCIDO' THEN 1
+    WHEN 'PENDENTE' THEN 2
+    WHEN 'PARCIAL' THEN 3
+    WHEN 'PAGO' THEN 4
+    WHEN 'CANCELADO' THEN 5
+    ELSE 6
+  END ASC,
+  c.vencimento ASC,
+  c.id DESC
+`;
+
+function buildChargeListQuery(userId: number, filters: ChargeListFilters) {
   const params: any[] = [userId];
-  const countParams: any[] = [userId];
   const whereParts = [`c.user_id = ?`];
 
   const status = cleanString(filters.status);
   if (status && status !== "all") {
     whereParts.push(`c.status = ?`);
     params.push(status);
-    countParams.push(status);
   } else {
-    whereParts.push(`NOT (c.status = 'PARCIAL' AND c.cobranca_pai_id IS NULL)`);
+    whereParts.push(
+      `NOT (
+        c.status = 'PARCIAL'
+        AND c.cobranca_pai_id IS NULL
+        AND COALESCE(c.parcela_atual, 0) = 0
+        AND COALESCE(c.parcelas, 1) > 1
+      )`
+    );
   }
 
   const search = cleanString(filters.search);
@@ -1560,7 +2721,6 @@ export async function listarCobrancas(
       `(c.cliente_nome LIKE ? OR c.cliente_telefone LIKE ? OR c.descricao LIKE ? OR cc.cpf_cnpj LIKE ?)`
     );
     params.push(like, like, like, like);
-    countParams.push(like, like, like, like);
   }
 
   const from = cleanString(filters.from);
@@ -1568,7 +2728,6 @@ export async function listarCobrancas(
     parseDateOnly(from);
     whereParts.push(`c.vencimento >= ?`);
     params.push(from);
-    countParams.push(from);
   }
 
   const to = cleanString(filters.to);
@@ -1576,29 +2735,31 @@ export async function listarCobrancas(
     parseDateOnly(to);
     whereParts.push(`c.vencimento <= ?`);
     params.push(to);
-    countParams.push(to);
   }
 
   if (filters.cliente_id) {
     whereParts.push(`c.cliente_id = ?`);
     params.push(filters.cliente_id);
-    countParams.push(filters.cliente_id);
   }
 
   if (filters.recorrencia_id) {
     whereParts.push(`c.recorrencia_id = ?`);
     params.push(filters.recorrencia_id);
-    countParams.push(filters.recorrencia_id);
   }
 
-  const page = Math.max(1, Math.floor(ensureNumber(filters.page || 1, 1)));
-  const pageSize = Math.max(
-    1,
-    Math.min(100, Math.floor(ensureNumber(filters.pageSize || 20, 20)))
-  );
-  const offset = (page - 1) * pageSize;
+  return {
+    whereSql: whereParts.join(" AND "),
+    params,
+  };
+}
 
-  const whereSql = whereParts.join(" AND ");
+async function queryChargeListRows(
+  userId: number,
+  filters: ChargeListFilters,
+  pagination?: { page: number; pageSize: number }
+): Promise<{ rows: CobrancaRow[]; total: number }> {
+  const db = getDB();
+  const { whereSql, params } = buildChargeListQuery(userId, filters);
 
   const totalRow = await db.get<{ total: number }>(
     `
@@ -1607,32 +2768,47 @@ export async function listarCobrancas(
     LEFT JOIN cobranca_clientes cc ON cc.id = c.cliente_id
     WHERE ${whereSql}
     `,
-    countParams
+    params
   );
 
-  const rows = await db.all<CobrancaRow>(
-    `
+  const rowParams = [...params];
+  let listSql = `
     SELECT c.*
     FROM cobrancas c
     LEFT JOIN cobranca_clientes cc ON cc.id = c.cliente_id
     WHERE ${whereSql}
-    ORDER BY
-      CASE c.status
-        WHEN 'VENCIDO' THEN 1
-        WHEN 'PENDENTE' THEN 2
-        WHEN 'PARCIAL' THEN 3
-        WHEN 'PAGO' THEN 4
-        WHEN 'CANCELADO' THEN 5
-        ELSE 6
-      END ASC,
-      c.vencimento ASC,
-      c.id DESC
-    LIMIT ? OFFSET ?
-    `,
-    [...params, pageSize, offset]
-  );
+    ORDER BY ${CHARGE_LIST_ORDER_BY_SQL}
+  `;
 
-  const total = ensureNumber(totalRow?.total);
+  if (pagination) {
+    const offset = (pagination.page - 1) * pagination.pageSize;
+    listSql += `
+      LIMIT ? OFFSET ?
+    `;
+    rowParams.push(pagination.pageSize, offset);
+  }
+
+  const rows = await db.all<CobrancaRow>(listSql, rowParams);
+
+  return {
+    rows,
+    total: ensureNumber(totalRow?.total),
+  };
+}
+
+export async function listarCobrancas(
+  userId: number,
+  filters: ChargeListFilters
+): Promise<{ charges: Cobranca[]; total: number; pages: number }> {
+  const page = Math.max(1, Math.floor(ensureNumber(filters.page || 1, 1)));
+  const pageSize = Math.max(
+    1,
+    Math.min(100, Math.floor(ensureNumber(filters.pageSize || 20, 20)))
+  );
+  const { rows, total } = await queryChargeListRows(userId, filters, {
+    page,
+    pageSize,
+  });
   const pages = Math.max(1, Math.ceil(total / pageSize));
 
   return {
@@ -1640,6 +2816,14 @@ export async function listarCobrancas(
     total,
     pages,
   };
+}
+
+export async function listarCobrancasParaExportacao(
+  userId: number,
+  filters: Omit<ChargeListFilters, "page" | "pageSize">
+): Promise<Cobranca[]> {
+  const { rows } = await queryChargeListRows(userId, filters);
+  return rows.map(mapCobranca);
 }
 
 export async function buscarCobranca(
@@ -1651,11 +2835,30 @@ export async function buscarCobranca(
   return row ? mapCobranca(row) : null;
 }
 
+export async function buscarCobrancaDetalhada(
+  userId: number,
+  cobrancaId: number
+): Promise<CobrancaDetalhada | null> {
+  const db = getDB();
+  const row = await getCobrancaById(db, userId, cobrancaId);
+  if (!row) return null;
+
+  const cobranca = mapCobranca(row);
+  const recebimentos = await listChargeReceipts(db, userId, cobrancaId);
+
+  return {
+    cobranca,
+    recebimentos,
+    resumo: buildChargeReceiptSummary(cobranca, recebimentos),
+  };
+}
+
 export async function marcarComoPago(
   userId: number,
   cobrancaId: number,
   valorPago?: number,
-  pagoEm?: string
+  pagoEm?: string,
+  observacao?: string
 ): Promise<Cobranca> {
   return withDBTransaction(async (db) => {
     const currentRow = await getCobrancaByIdForUpdate(db, userId, cobrancaId);
@@ -1673,40 +2876,47 @@ export async function marcarComoPago(
       throw new Error("Cobrança cancelada não pode ser marcada como paga.");
     }
 
-    if (current.status === "PARCIAL" && !current.cobranca_pai_id) {
+    if (isParentInstallmentCharge(current)) {
       throw new Error("Marque as parcelas individualmente como pagas.");
     }
 
     const paidValue =
       valorPago != null && Number.isFinite(Number(valorPago))
         ? ensureMoney(valorPago)
-        : current.valor;
+        : ensureMoney(current.valor - ensureMoney(current.valor_pago));
 
     if (paidValue <= 0) {
       throw new Error("Valor pago inválido.");
     }
 
     const paidAt = pagoEm ? parseDateOnly(pagoEm).getTime() : nowMs();
+    const note = normalizeBoundedNullableText(observacao, 1000);
+    const timestamp = nowMs();
 
     await db.run(
       `
-      UPDATE cobrancas
-      SET status = 'PAGO', valor_pago = ?, pago_em = ?, updated_at = ?
-      WHERE user_id = ? AND id = ?
+      INSERT INTO cobranca_recebimentos (
+        cobranca_id,
+        user_id,
+        valor,
+        recebido_em,
+        observacao,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
-      [paidValue, paidAt, nowMs(), userId, cobrancaId]
+      [cobrancaId, userId, paidValue, paidAt, note, timestamp, timestamp]
     );
+
+    const recalculated = await recalculateChargePaymentState(db, currentRow);
 
     if (current.cobranca_pai_id) {
       await syncParentCharge(db, current.cobranca_pai_id);
     }
 
-    await createNextRecurringChargeIfNeeded(db, {
-      ...current,
-      valor_pago: paidValue,
-      pago_em: paidAt,
-      status: "PAGO",
-    });
+    if (recalculated.completedNow) {
+      await createNextRecurringChargeIfNeeded(db, recalculated.cobranca);
+    }
 
     const updated = await getCobrancaById(db, userId, cobrancaId);
     if (!updated) {
@@ -1739,7 +2949,7 @@ export async function cancelarCobranca(
 
     const timestamp = nowMs();
 
-    if (current.status === "PARCIAL" && !current.cobranca_pai_id) {
+    if (isParentInstallmentCharge(current)) {
       await db.run(
         `
         UPDATE cobrancas
@@ -1791,6 +3001,11 @@ export async function editarCobranca(
     data.descricao != null ? cleanString(data.descricao) : charge.descricao;
   const vencimento =
     data.vencimento != null ? cleanString(data.vencimento) : charge.vencimento;
+  const shouldResetMercadoPagoCheckout =
+    billingType !== charge.billing_type ||
+    valor !== ensureMoney(charge.valor) ||
+    descricao !== charge.descricao ||
+    vencimento !== charge.vencimento;
 
   if (!descricao) {
     throw new Error("Descrição da cobrança é obrigatória.");
@@ -1822,6 +3037,11 @@ export async function editarCobranca(
       desconto_percentual = ?,
       desconto_limite_dias = ?,
       session_name = ?,
+      mp_preference_id = ?,
+      mp_payment_id = ?,
+      mp_checkout_url = ?,
+      mp_status = ?,
+      mp_updated_at = ?,
       updated_at = ?
     WHERE user_id = ? AND id = ?
     `,
@@ -1854,6 +3074,11 @@ export async function editarCobranca(
       data.session_name !== undefined
         ? nullableString(data.session_name)
         : existing.session_name,
+      shouldResetMercadoPagoCheckout ? null : existing.mp_preference_id,
+      shouldResetMercadoPagoCheckout ? null : existing.mp_payment_id,
+      shouldResetMercadoPagoCheckout ? null : existing.mp_checkout_url,
+      shouldResetMercadoPagoCheckout ? null : existing.mp_status,
+      shouldResetMercadoPagoCheckout ? null : existing.mp_updated_at,
       nowMs(),
       userId,
       cobrancaId,
@@ -1902,13 +3127,120 @@ export async function verificarEAtualizarVencidos(): Promise<void> {
   );
 }
 
+async function getReceivedRevenueTrend(
+  db: DBClient,
+  userId: number,
+  offsetMinutes?: number | null,
+  months = 6
+) {
+  const safeMonths = Math.max(2, Math.min(12, Math.floor(ensureNumber(months, 6))));
+  const ranges = Array.from({ length: safeMonths }, (_, index) =>
+    getUserLocalMonthRange(offsetMinutes, index - (safeMonths - 1))
+  );
+  const rangeStart = ranges[0]?.startMs ?? nowMs();
+  const rangeEnd = ranges[ranges.length - 1]?.endMs ?? nowMs();
+  const offsetMs = ensureNumber(offsetMinutes) * 60 * 1000;
+
+  const rows = await db.all<{
+    mes: string;
+    valor: number | string | null;
+  }>(
+    `
+    SELECT
+      DATE_FORMAT(FROM_UNIXTIME((base_receipts.paid_at + ?) / 1000), '%Y-%m') AS mes,
+      COALESCE(SUM(base_receipts.valor), 0) AS valor
+    FROM (
+      SELECT
+        cr.recebido_em AS paid_at,
+        cr.valor AS valor
+      FROM cobranca_recebimentos cr
+      WHERE cr.user_id = ?
+        AND cr.recebido_em >= ?
+        AND cr.recebido_em < ?
+
+      UNION ALL
+
+      SELECT
+        c.pago_em AS paid_at,
+        COALESCE(c.valor_pago, c.valor) AS valor
+      FROM cobrancas c
+      WHERE c.user_id = ?
+        AND c.status = 'PAGO'
+        AND c.pago_em IS NOT NULL
+        AND c.pago_em >= ?
+        AND c.pago_em < ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM cobranca_recebimentos cr2
+          WHERE cr2.cobranca_id = c.id
+        )
+    ) AS base_receipts
+    GROUP BY mes
+    ORDER BY mes ASC
+    `,
+    [offsetMs, userId, rangeStart, rangeEnd, userId, rangeStart, rangeEnd]
+  );
+
+  const valueByMonth = new Map(
+    (rows || []).map((row) => [String(row.mes || ""), ensureMoney(row.valor)])
+  );
+  const points = ranges.map((range) => ({
+    mes: range.key,
+    label: range.label,
+    valor: ensureMoney(valueByMonth.get(range.key)),
+  }));
+
+  const currentValue = ensureMoney(points[points.length - 1]?.valor);
+  const previousValue = ensureMoney(points[points.length - 2]?.valor);
+  const deltaValue = ensureMoney(currentValue - previousValue);
+
+  if (previousValue > 0) {
+    const deltaPercent = Math.round((deltaValue / previousValue) * 1000) / 10;
+    return {
+      currentValue,
+      previousValue,
+      deltaValue,
+      deltaPercent,
+      direction:
+        Math.abs(deltaValue) < 0.005
+          ? ("flat" as const)
+          : deltaValue > 0
+            ? ("up" as const)
+            : ("down" as const),
+      points,
+    };
+  }
+
+  return {
+    currentValue,
+    previousValue,
+    deltaValue,
+    deltaPercent: currentValue > 0 ? null : 0,
+    direction:
+      currentValue > 0
+        ? ("new" as const)
+        : ("flat" as const),
+    points,
+  };
+}
+
 export async function getSummary(userId: number): Promise<CobrancaSummary> {
   const db = getDB();
-  const monthStart = new Date();
-  monthStart.setDate(1);
-  monthStart.setHours(0, 0, 0, 0);
-  const nextMonthStart = new Date(monthStart);
-  nextMonthStart.setMonth(nextMonthStart.getMonth() + 1);
+  const userRow = await db.get<{ timezone_offset: number | null }>(
+    `
+    SELECT timezone_offset
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [userId]
+  );
+  const revenueTrend = await getReceivedRevenueTrend(
+    db,
+    userId,
+    userRow?.timezone_offset,
+    6
+  );
 
   const row = await db.get<{
     total_pendente: number;
@@ -1916,7 +3248,6 @@ export async function getSummary(userId: number): Promise<CobrancaSummary> {
     total_vencido: number;
     total_cancelado: number;
     valor_pendente: number | string | null;
-    valor_pago_mes: number | string | null;
     valor_vencido: number | string | null;
     total_clientes: number;
     total_recorrencias_ativas: number;
@@ -1928,15 +3259,6 @@ export async function getSummary(userId: number): Promise<CobrancaSummary> {
       SUM(CASE WHEN c.status = 'VENCIDO' THEN 1 ELSE 0 END) AS total_vencido,
       SUM(CASE WHEN c.status = 'CANCELADO' THEN 1 ELSE 0 END) AS total_cancelado,
       SUM(CASE WHEN c.status = 'PENDENTE' THEN c.valor ELSE 0 END) AS valor_pendente,
-      SUM(
-        CASE
-          WHEN c.status = 'PAGO'
-           AND c.pago_em >= ?
-           AND c.pago_em < ?
-          THEN COALESCE(c.valor_pago, c.valor)
-          ELSE 0
-        END
-      ) AS valor_pago_mes,
       SUM(CASE WHEN c.status = 'VENCIDO' THEN c.valor ELSE 0 END) AS valor_vencido,
       (
         SELECT COUNT(*)
@@ -1951,11 +3273,14 @@ export async function getSummary(userId: number): Promise<CobrancaSummary> {
     FROM (SELECT ? AS user_id) base
     LEFT JOIN cobrancas c
       ON c.user_id = base.user_id
-     AND NOT (c.status = 'PARCIAL' AND c.cobranca_pai_id IS NULL)
+     AND NOT (
+       c.status = 'PARCIAL'
+       AND c.cobranca_pai_id IS NULL
+       AND COALESCE(c.parcela_atual, 0) = 0
+       AND COALESCE(c.parcelas, 1) > 1
+     )
     `,
     [
-      monthStart.getTime(),
-      nextMonthStart.getTime(),
       userId,
       userId,
       userId,
@@ -1968,11 +3293,375 @@ export async function getSummary(userId: number): Promise<CobrancaSummary> {
     total_vencido: ensureNumber(row?.total_vencido),
     total_cancelado: ensureNumber(row?.total_cancelado),
     valor_pendente: ensureMoney(row?.valor_pendente),
-    valor_pago_mes: ensureMoney(row?.valor_pago_mes),
+    valor_pago_mes: revenueTrend.currentValue,
+    valor_pago_mes_anterior: revenueTrend.previousValue,
+    variacao_recebimento_percentual: revenueTrend.deltaPercent,
+    variacao_recebimento_valor: revenueTrend.deltaValue,
+    variacao_recebimento_direcao: revenueTrend.direction,
     valor_vencido: ensureMoney(row?.valor_vencido),
     total_clientes: ensureNumber(row?.total_clientes),
     total_recorrencias_ativas: ensureNumber(row?.total_recorrencias_ativas),
+    recebimentos_ultimos_6_meses: revenueTrend.points,
   };
+}
+
+export async function getFinancialHealth(
+  userId: number
+): Promise<FinancialHealthData> {
+  const db = getDB();
+  const userRow = await db.get<{ timezone_offset: number | null }>(
+    `
+    SELECT timezone_offset
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [userId]
+  );
+  const mesAtual = getUserLocalMonthKey(userRow?.timezone_offset);
+  const todayLocal = getUserLocalToday(userRow?.timezone_offset);
+
+  const [mrrRow, churnRow, agingRows, alertRows, overdueRow] = await Promise.all([
+    db.get<{
+      recorrencias_ativas: number;
+      mrr: number | string | null;
+    }>(
+      `
+      SELECT
+        COUNT(*) AS recorrencias_ativas,
+        COALESCE(SUM(valor), 0) AS mrr
+      FROM cobrancas_recorrencias
+      WHERE user_id = ? AND ativa = 1
+      `,
+      [userId]
+    ),
+    db.get<{
+      total: number;
+      valor: number | string | null;
+    }>(
+      `
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(valor), 0) AS valor
+      FROM cobrancas
+      WHERE user_id = ?
+        AND status = 'CANCELADO'
+        AND DATE_FORMAT(FROM_UNIXTIME(updated_at / 1000), '%Y-%m') = ?
+      `,
+      [userId, mesAtual]
+    ),
+    db.all<{
+      faixa: "1-7 dias" | "8-30 dias" | "+30 dias" | null;
+      qtd: number;
+      valor: number | string | null;
+    }>(
+      `
+      SELECT
+        CASE
+          WHEN DATEDIFF(?, vencimento) BETWEEN 1 AND 7 THEN '1-7 dias'
+          WHEN DATEDIFF(?, vencimento) BETWEEN 8 AND 30 THEN '8-30 dias'
+          WHEN DATEDIFF(?, vencimento) > 30 THEN '+30 dias'
+          ELSE NULL
+        END AS faixa,
+        COUNT(*) AS qtd,
+        COALESCE(SUM(valor), 0) AS valor
+      FROM cobrancas
+      WHERE user_id = ? AND status = 'VENCIDO'
+      GROUP BY faixa
+      HAVING faixa IS NOT NULL
+      ORDER BY
+        CASE faixa
+          WHEN '1-7 dias' THEN 1
+          WHEN '8-30 dias' THEN 2
+          WHEN '+30 dias' THEN 3
+          ELSE 4
+        END
+      `,
+      [todayLocal, todayLocal, todayLocal, userId]
+    ),
+    db.all<{
+      cliente_id: number;
+      cliente_nome: string;
+      cliente_telefone: string;
+      total_vencido: number | string | null;
+      vencimento_mais_antigo: string;
+      total_cobrancas: number;
+    }>(
+      `
+      SELECT
+        cliente_id,
+        cliente_nome,
+        cliente_telefone,
+        COALESCE(SUM(valor), 0) AS total_vencido,
+        MIN(vencimento) AS vencimento_mais_antigo,
+        COUNT(*) AS total_cobrancas
+      FROM cobrancas
+      WHERE user_id = ? AND status = 'VENCIDO'
+      GROUP BY cliente_id, cliente_nome, cliente_telefone
+      HAVING total_vencido > 500
+      ORDER BY total_vencido DESC, vencimento_mais_antigo ASC
+      LIMIT 5
+      `,
+      [userId]
+    ),
+    db.get<{
+      valor_vencido_total: number | string | null;
+      total_clientes_inadimplentes: number;
+      total_cobrancas_vencidas: number;
+    }>(
+      `
+      SELECT
+        COALESCE(SUM(valor), 0) AS valor_vencido_total,
+        COUNT(DISTINCT cliente_id) AS total_clientes_inadimplentes,
+        COUNT(*) AS total_cobrancas_vencidas
+      FROM cobrancas
+      WHERE user_id = ? AND status = 'VENCIDO'
+      `,
+      [userId]
+    ),
+  ]);
+
+  const mrr = ensureMoney(mrrRow?.mrr);
+  const valorVencidoTotal = ensureMoney(overdueRow?.valor_vencido_total);
+  const inadimplenciaPercentual =
+    mrr > 0
+      ? Math.round((valorVencidoTotal / mrr) * 1000) / 10
+      : valorVencidoTotal > 0
+        ? 100
+        : 0;
+  const healthLevel = getFinancialHealthLevel(inadimplenciaPercentual);
+
+  return {
+    mrr,
+    recorrencias_ativas: ensureNumber(mrrRow?.recorrencias_ativas),
+    churn: {
+      total: ensureNumber(churnRow?.total),
+      valor: ensureMoney(churnRow?.valor),
+      mes: mesAtual,
+    },
+    aging: (agingRows || [])
+      .filter((row) => Boolean(row.faixa))
+      .map((row) => ({
+        faixa: row.faixa as FinancialHealthAgingBucket["faixa"],
+        qtd: ensureNumber(row.qtd),
+        valor: ensureMoney(row.valor),
+      })),
+    alertas: (alertRows || []).map((row) => ({
+      cliente_id: ensureNumber(row.cliente_id),
+      cliente_nome: row.cliente_nome,
+      cliente_telefone: row.cliente_telefone,
+      total_vencido: ensureMoney(row.total_vencido),
+      vencimento_mais_antigo: row.vencimento_mais_antigo,
+      dias_em_atraso: Math.max(1, diffDays(row.vencimento_mais_antigo, todayLocal)),
+      total_cobrancas: ensureNumber(row.total_cobrancas),
+    })),
+    valor_vencido_total: valorVencidoTotal,
+    inadimplencia_percentual: inadimplenciaPercentual,
+    total_clientes_inadimplentes: ensureNumber(
+      overdueRow?.total_clientes_inadimplentes
+    ),
+    total_cobrancas_vencidas: ensureNumber(overdueRow?.total_cobrancas_vencidas),
+    health_level: healthLevel,
+    health_label: getFinancialHealthLabel(healthLevel),
+  };
+}
+
+export function buildFinancialHealthReport(
+  operatorName: string,
+  health: FinancialHealthData
+) {
+  const statusEmoji =
+    health.health_level === "green"
+      ? "🟢"
+      : health.health_level === "yellow"
+        ? "🟡"
+        : "🔴";
+
+  const agingLines = health.aging.length
+    ? health.aging.map(
+        (bucket) =>
+          `• ${bucket.faixa}: ${bucket.qtd} cobrança(s) | ${formatCurrency(bucket.valor)}`
+      )
+    : ["• Sem cobranças vencidas nesta semana"];
+
+  const alertLines = health.alertas.length
+    ? health.alertas.map(
+        (alerta, index) =>
+          `${index + 1}. ${alerta.cliente_nome} — ${formatCurrency(
+            alerta.total_vencido
+          )} (${alerta.dias_em_atraso} dia(s) de atraso)`
+      )
+    : ["• Nenhum cliente crítico acima do limite configurado"];
+
+  return [
+    "📊 *Saúde Financeira da Semana*",
+    "",
+    `Olá, ${firstName(operatorName || "operador")}!`,
+    `${statusEmoji} *Status geral:* ${health.health_label}`,
+    `📈 *MRR ativo:* ${formatCurrency(health.mrr)}`,
+    `⚠️ *Inadimplência:* ${formatCurrency(health.valor_vencido_total)} (${health.inadimplencia_percentual.toFixed(1)}% do MRR)`,
+    `🔁 *Recorrências ativas:* ${health.recorrencias_ativas}`,
+    `📉 *Churn do mês:* ${health.churn.total} cancelamento(s) | ${formatCurrency(health.churn.valor)}`,
+    `👥 *Clientes inadimplentes:* ${health.total_clientes_inadimplentes}`,
+    "",
+    "*Aging do atraso*",
+    ...agingLines,
+    "",
+    "*Alertas prioritários*",
+    ...alertLines,
+    "",
+    "Abra o dashboard de cobranças para agir rápido nos casos críticos.",
+  ].join("\n");
+}
+
+function extractHostDevicePhone(hostDevice: any) {
+  const candidates = [
+    hostDevice?.phone,
+    hostDevice?.id?.user,
+    hostDevice?.id?._serialized,
+    hostDevice?.wid?.user,
+    hostDevice?.wid?._serialized,
+    hostDevice?.me?.user,
+    hostDevice?.me?._serialized,
+    hostDevice?.lid?.user,
+    hostDevice?.lid?._serialized,
+  ];
+
+  for (const candidate of candidates) {
+    const digits = onlyDigits(candidate);
+    if (digits.length >= 10 && digits.length <= 15) {
+      return digits;
+    }
+  }
+
+  return null;
+}
+
+async function resolveOperatorOwnChatId(client: any) {
+  if (typeof client?.getHostDevice !== "function") {
+    return null;
+  }
+
+  try {
+    const hostDevice = await Promise.resolve(client.getHostDevice());
+    const phone = extractHostDevicePhone(hostDevice);
+    if (!phone) {
+      return null;
+    }
+
+    return await ensureChat(client, phone);
+  } catch {
+    return null;
+  }
+}
+
+export async function sendPendingWeeklyFinancialHealthReports(): Promise<void> {
+  const db = getDB();
+  const users = await db.all<{
+    id: number;
+    name: string | null;
+    timezone_offset: number | null;
+  }>(
+    `
+    SELECT DISTINCT
+      u.id,
+      u.name,
+      u.timezone_offset
+    FROM users u
+    INNER JOIN sessions s
+      ON s.user_id = u.id
+     AND s.status = 'connected'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cobrancas c
+      WHERE c.user_id = u.id
+      LIMIT 1
+    )
+       OR EXISTS (
+      SELECT 1
+      FROM cobrancas_recorrencias cr
+      WHERE cr.user_id = u.id
+      LIMIT 1
+    )
+    ORDER BY u.id ASC
+    `,
+    []
+  );
+
+  for (const user of users) {
+    if (!isUserLocalMonday(user.timezone_offset)) {
+      continue;
+    }
+
+    const weekKey = getUserLocalWeekKey(user.timezone_offset);
+    const existing = await db.get<{ id: number }>(
+      `
+      SELECT id
+      FROM audit_logs
+      WHERE user_id = ?
+        AND action = 'financial_health_weekly_report_sent'
+        AND entity_type = 'cobrancas'
+        AND entity_id = ?
+      LIMIT 1
+      `,
+      [user.id, weekKey]
+    );
+
+    if (existing) {
+      continue;
+    }
+
+    try {
+      const resolved = await resolveNotificationClient(user.id);
+      if (!resolved) {
+        continue;
+      }
+
+      const chatId = await resolveOperatorOwnChatId(resolved.client);
+      if (!chatId) {
+        continue;
+      }
+
+      const health = await getFinancialHealth(user.id);
+      const report = buildFinancialHealthReport(user.name || "Operador", health);
+
+      await resolved.client.sendText(chatId, report);
+      await db.run(
+        `
+        INSERT INTO audit_logs (user_id, action, entity_type, entity_id, meta, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        [
+          user.id,
+          "financial_health_weekly_report_sent",
+          "cobrancas",
+          weekKey,
+          JSON.stringify({
+            health_level: health.health_level,
+            inadimplencia_percentual: health.inadimplencia_percentual,
+            session_name: resolved.sessionName,
+          }),
+          nowMs(),
+        ]
+      );
+      await logAudit(
+        "financial_health_weekly_report_ack",
+        user.id,
+        "cobrancas",
+        weekKey,
+        {
+          session_name: resolved.sessionName,
+          mrr: health.mrr,
+          valor_vencido_total: health.valor_vencido_total,
+        }
+      );
+    } catch (error) {
+      console.warn(
+        `Falha ao enviar relatório semanal de saúde financeira para o usuário ${user.id}:`,
+        error
+      );
+    }
+  }
 }
 
 export async function listarRecorrencias(
@@ -2104,7 +3793,7 @@ export function buildMensagemCobranca(
     descricao: cobranca.descricao,
     observacoes: cobranca.observacoes || "",
     chave_pix: cobranca.chave_pix || "",
-    link_pagamento: cobranca.link_pagamento || "",
+    link_pagamento: cobranca.mp_checkout_url || cobranca.link_pagamento || "",
     quando_vence: quandoVence,
     dias_atraso: diasAtraso,
     encargos: encargos.join(" | "),
@@ -2206,58 +3895,204 @@ export function buildMensagemCobranca(
 export async function enviarNotificacaoWhatsApp(
   userId: number,
   cobranca: Cobranca,
-  tipo: ChargeMessageType
+  tipo: ChargeMessageType,
+  options: {
+    templateOverride?: string | null;
+    updateNotificationFlags?: boolean;
+  } = {}
 ): Promise<{ ok: boolean; error?: string }> {
+  const charge = mapCobranca(cobranca as unknown as CobrancaRow);
+  const db = getDB();
+  let resolvedSessionName = charge.session_name || null;
+
   try {
-    const charge = mapCobranca(cobranca as unknown as CobrancaRow);
     const userPreferences = await loadUserChargePreferences(userId);
     const resolved = await resolveNotificationClient(userId, charge.session_name);
+    resolvedSessionName = resolved?.sessionName || resolvedSessionName;
+    if (!resolved) {
+      const failure = buildChargeWhatsappFailureSnapshot({
+        tipo,
+        sessionName: resolvedSessionName,
+        error: "Nenhuma sessão WPP conectada",
+      });
+
+      await db.run(
+        `
+        UPDATE cobrancas
+        SET
+          session_name = ?,
+          whatsapp_ultimo_tipo = ?,
+          whatsapp_ultimo_status = ?,
+          whatsapp_ultimo_ack = ?,
+          whatsapp_ultima_mensagem_id = NULL,
+          whatsapp_ultimo_erro = ?,
+          whatsapp_ultimo_envio_em = NULL,
+          whatsapp_ultimo_entregue_em = NULL,
+          whatsapp_ultimo_lido_em = NULL,
+          whatsapp_ultimo_status_em = ?,
+          updated_at = ?
+        WHERE id = ?
+        `,
+        [
+          failure.sessionName,
+          failure.tipo,
+          failure.status,
+          failure.ack,
+          failure.error,
+          failure.statusAt,
+          failure.statusAt,
+          charge.id,
+        ]
+      );
+
+      emitToUser(userId, "cobranca:atualizada", {
+        id: charge.id,
+        whatsapp_ultimo_status: "FAILED",
+        whatsapp_ultimo_tipo: tipo,
+      });
+    }
     if (!resolved) {
       return { ok: false, error: "Nenhuma sessão WPP conectada" };
     }
 
     const phone = normalizePhone(charge.cliente_telefone);
-    const chatId = `${phone}@c.us`;
+    const chatId = await ensureChat(resolved.client, phone);
     const message = buildMensagemCobranca(
       charge,
       tipo,
-      userPreferences.templates
+      {
+        ...userPreferences.templates,
+        ...(options.templateOverride
+          ? { [tipo]: options.templateOverride }
+          : {}),
+      }
     );
 
-    await resolved.client.sendText(chatId, message);
+    const sentMessage = await resolved.client.sendText(chatId, message);
+    const trackedAt = nowMs();
+    const ackValue = normalizeChargeWhatsappAckValue((sentMessage as any)?.ack) ?? 1;
+    const messageId = normalizeChargeWhatsappMessageId((sentMessage as any)?.id);
+    const deliveryStatus = getChargeWhatsappDeliveryStatusFromAck(ackValue);
+    const deliveredAt = ackValue >= 2 ? trackedAt : null;
+    const readAt = ackValue >= 3 ? trackedAt : null;
 
-    const db = getDB();
-    const updates: string[] = ["session_name = ?", "updated_at = ?"];
-    const params: any[] = [resolved.sessionName, nowMs()];
+    const updates: string[] = [
+      "session_name = ?",
+      "whatsapp_ultimo_tipo = ?",
+      "whatsapp_ultimo_status = ?",
+      "whatsapp_ultimo_ack = ?",
+      "whatsapp_ultima_mensagem_id = ?",
+      "whatsapp_ultimo_erro = NULL",
+      "whatsapp_ultimo_envio_em = ?",
+      "whatsapp_ultimo_entregue_em = ?",
+      "whatsapp_ultimo_lido_em = ?",
+      "whatsapp_ultimo_status_em = ?",
+      "updated_at = ?",
+    ];
+    const params: any[] = [
+      resolved.sessionName,
+      tipo,
+      deliveryStatus,
+      ackValue,
+      messageId,
+      trackedAt,
+      deliveredAt,
+      readAt,
+      trackedAt,
+      trackedAt,
+    ];
 
-    if (tipo === "criacao") {
-      updates.push("notificado_criacao = 1");
-    } else if (tipo === "lembrete_vencimento") {
-      updates.push("notificado_vencimento = 1");
-    } else if (tipo === "atraso") {
-      updates.push("notificado_atraso = 1");
+    if (options.updateNotificationFlags !== false) {
+      if (tipo === "criacao") {
+        updates.push("notificado_criacao = 1");
+      } else if (tipo === "lembrete_vencimento") {
+        updates.push("notificado_vencimento = 1");
+      } else if (tipo === "atraso") {
+        updates.push("notificado_atraso = 1");
+      } else if (tipo === "confirmacao_pagamento") {
+        updates.push("notificado_confirmacao_pagamento = 1");
+      }
     }
 
     params.push(charge.id);
 
-    await db.run(
-      `
-      UPDATE cobrancas
-      SET ${updates.join(", ")}
-      WHERE id = ?
-      `,
-      params
-    );
+    try {
+      await db.run(
+        `
+        UPDATE cobrancas
+        SET ${updates.join(", ")}
+        WHERE id = ?
+        `,
+        params
+      );
+    } catch (trackingError) {
+      console.error(
+        "Erro ao registrar status de envio da cobrança no WhatsApp:",
+        trackingError
+      );
+    }
+
+    emitToUser(userId, "cobranca:atualizada", {
+      id: charge.id,
+      whatsapp_ultimo_status: deliveryStatus,
+      whatsapp_ultimo_tipo: tipo,
+    });
 
     return { ok: true };
   } catch (error) {
+    const friendlyError = getFriendlyChargeWhatsappError(error);
+
+    try {
+      const failure = buildChargeWhatsappFailureSnapshot({
+        tipo,
+        sessionName: resolvedSessionName,
+        error: friendlyError,
+      });
+
+      await db.run(
+        `
+        UPDATE cobrancas
+        SET
+          session_name = ?,
+          whatsapp_ultimo_tipo = ?,
+          whatsapp_ultimo_status = ?,
+          whatsapp_ultimo_ack = ?,
+          whatsapp_ultima_mensagem_id = NULL,
+          whatsapp_ultimo_erro = ?,
+          whatsapp_ultimo_envio_em = NULL,
+          whatsapp_ultimo_entregue_em = NULL,
+          whatsapp_ultimo_lido_em = NULL,
+          whatsapp_ultimo_status_em = ?,
+          updated_at = ?
+        WHERE id = ?
+        `,
+        [
+          failure.sessionName,
+          failure.tipo,
+          failure.status,
+          failure.ack,
+          failure.error,
+          failure.statusAt,
+          failure.statusAt,
+          charge.id,
+        ]
+      );
+    } catch (trackingError) {
+      console.error(
+        "Erro ao registrar falha de envio da cobrança no WhatsApp:",
+        trackingError
+      );
+    }
+
+    emitToUser(userId, "cobranca:atualizada", {
+      id: charge.id,
+      whatsapp_ultimo_status: "FAILED",
+      whatsapp_ultimo_tipo: tipo,
+    });
     console.error("Erro ao enviar notificação de cobrança via WhatsApp:", error);
     return {
       ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Falha ao enviar mensagem via WhatsApp",
+      error: friendlyError,
     };
   }
 }
