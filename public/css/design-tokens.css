@@ -6,6 +6,7 @@
 :root {
   /* Tipografia */
   --font-base: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: var(--font-base);
   --font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   /* Base / superfÃ­cies */
   --bg: #0D1222;

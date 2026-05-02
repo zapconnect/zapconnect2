@@ -35,7 +35,7 @@ body {
 
 body {
   padding: 30px 18px 52px;
-  font-family: "Manrope", var(--font-base);
+  font-family: var(--font-display);
 }
 
 a {
@@ -53,6 +53,27 @@ textarea {
   position: relative;
   max-width: 1440px;
   margin: 0 auto;
+}
+
+.page-toolbar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.page-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.page-toolbar-back {
+  margin-bottom: 0;
 }
 
 .page-glow {
@@ -188,7 +209,7 @@ textarea {
 .hero h1 {
   margin: 0 0 14px;
   max-width: 10ch;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: clamp(2.4rem, 4vw, 4.1rem);
   line-height: 0.98;
   letter-spacing: -0.05em;
@@ -232,7 +253,7 @@ textarea {
 .hero-highlight strong {
   display: block;
   margin: 10px 0 6px;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.26rem;
   color: var(--text-primary);
 }
@@ -266,7 +287,7 @@ textarea {
 }
 
 .plan-chip strong {
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.24rem;
   color: var(--text-primary);
 }
@@ -386,7 +407,7 @@ textarea {
 .selection-grid strong,
 .selection-health strong,
 .usage-meta-card strong {
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   color: var(--text-primary);
 }
 
@@ -659,6 +680,10 @@ textarea {
   grid-auto-flow: dense;
 }
 
+.content-grid-priority {
+  align-items: start;
+}
+
 .card {
   min-width: 0;
   padding: 24px;
@@ -668,6 +693,12 @@ textarea {
     rgba(18, 25, 45, 0.96),
     rgba(10, 15, 28, 0.94)
   );
+}
+
+.editor-card,
+.selection-card {
+  display: grid;
+  gap: 16px;
 }
 
 .selection-card,
@@ -694,7 +725,7 @@ textarea {
 
 .card-head h2 {
   margin: 7px 0 0;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.48rem;
   letter-spacing: -0.03em;
   color: var(--text-primary);
@@ -712,6 +743,131 @@ textarea {
   color: var(--drip-blue);
   font-size: 0.82rem;
   font-weight: 800;
+}
+
+.compact-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.compact-header-copy {
+  min-width: 0;
+}
+
+.compact-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.compact-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(1.9rem, 3.1vw, 2.7rem);
+  line-height: 0.98;
+  letter-spacing: -0.05em;
+  color: var(--text-primary);
+}
+
+.compact-subtitle {
+  margin: 10px 0 0;
+  color: rgba(232, 234, 240, 0.82);
+  line-height: 1.7;
+}
+
+.compact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.editor-badge-pill {
+  min-height: 34px;
+}
+
+.compact-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.compact-meta-usage {
+  grid-column: 1 / -1;
+}
+
+.compact-meta-card {
+  padding: 18px;
+  border-radius: 24px;
+  background: rgba(12, 18, 33, 0.54);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  display: grid;
+  gap: 8px;
+}
+
+.compact-meta-card span,
+.compact-meta-top span,
+.compact-usage-inline span {
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.compact-meta-card strong,
+.compact-meta-top strong,
+.compact-usage-inline strong {
+  font-family: var(--font-display);
+  color: var(--text-primary);
+}
+
+.compact-meta-card strong {
+  font-size: 1.12rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.compact-meta-card small {
+  color: rgba(204, 208, 243, 0.82);
+  line-height: 1.55;
+}
+
+.compact-meta-top,
+.compact-usage-inline {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.compact-usage-inline {
+  margin-top: 6px;
+}
+
+.usage-track-compact {
+  margin-top: 4px;
+}
+
+.usage-meta-compact {
+  margin-top: 2px;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+}
+
+.usage-meta-compact .usage-meta-card {
+  min-width: 0;
+}
+
+.usage-meta-compact .usage-meta-card span {
+  line-height: 1.45;
+}
+
+.usage-meta-compact .usage-meta-card strong {
+  font-size: 1.02rem;
+  overflow-wrap: anywhere;
 }
 
 .editor-note {
@@ -769,7 +925,7 @@ textarea {
 .selection-grid strong,
 .selection-health strong,
 .enrollment-summary-card strong {
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   color: var(--text-primary);
 }
 
@@ -946,6 +1102,21 @@ textarea {
   margin: 24px 0 14px;
 }
 
+.section-divider-compact {
+  margin: 0 0 16px;
+}
+
+.section-divider-compact p {
+  margin-top: 8px;
+}
+
+.editor-config-block {
+  padding: 20px;
+  border-radius: 24px;
+  background: rgba(9, 14, 26, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
 .section-divider h3 {
   margin: 0;
   color: var(--text-primary);
@@ -970,7 +1141,23 @@ textarea {
 }
 
 .step-card {
-  padding: 18px;
+  position: relative;
+  padding: 20px 20px 20px 84px;
+  overflow: visible;
+}
+
+.steps-list .step-card:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 42px;
+  top: 74px;
+  bottom: -18px;
+  width: 2px;
+  background: linear-gradient(
+    180deg,
+    rgba(82, 182, 255, 0.3),
+    rgba(255, 255, 255, 0.06)
+  );
 }
 
 .step-card-top,
@@ -986,11 +1173,15 @@ textarea {
 
 .step-card-top {
   margin-bottom: 16px;
+  align-items: flex-start;
 }
 
 .step-order {
-  width: 42px;
-  height: 42px;
+  position: absolute;
+  left: 20px;
+  top: 20px;
+  width: 44px;
+  height: 44px;
   border-radius: 16px;
   display: inline-flex;
   align-items: center;
@@ -998,8 +1189,10 @@ textarea {
   flex-shrink: 0;
   background: rgba(82, 182, 255, 0.14);
   color: var(--drip-blue);
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-weight: 700;
+  border: 1px solid rgba(82, 182, 255, 0.28);
+  box-shadow: 0 0 0 5px rgba(82, 182, 255, 0.08);
 }
 
 .step-header-copy {
@@ -1041,6 +1234,16 @@ textarea {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 14px;
+}
+
+.step-preview {
+  margin: -4px 0 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(232, 234, 240, 0.86);
+  line-height: 1.65;
 }
 
 .inline-chip {
@@ -1212,11 +1415,17 @@ textarea {
   display: block;
   margin-bottom: 8px;
   font-size: 1.55rem;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
 }
 
 .metrics-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-bottom: 18px;
+}
+
+.metric-card {
+  min-width: 0;
 }
 
 .timeline-item {
@@ -1261,6 +1470,39 @@ textarea {
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 12px;
+}
+
+.drip-step-new {
+  min-height: 58px;
+  border-radius: 22px;
+  border: 1px dashed rgba(244, 199, 93, 0.36);
+  background: linear-gradient(
+    135deg,
+    rgba(244, 199, 93, 0.12),
+    rgba(82, 182, 255, 0.08)
+  );
+  color: #f8d87c;
+  font: inherit;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.drip-step-new:hover {
+  transform: translateY(-1px);
+  border-color: rgba(244, 199, 93, 0.54);
+  background: linear-gradient(
+    135deg,
+    rgba(244, 199, 93, 0.18),
+    rgba(82, 182, 255, 0.1)
+  );
 }
 
 .enrollment-summary {
@@ -1359,6 +1601,15 @@ textarea {
   line-height: 1.65;
 }
 
+.stats-grid-inline {
+  margin-bottom: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stats-grid-inline .stat-value {
+  font-size: clamp(1.8rem, 2.4vw, 2.6rem);
+}
+
 .hidden {
   display: none !important;
 }
@@ -1391,6 +1642,7 @@ textarea {
 }
 
 @media (max-width: 980px) {
+  .compact-meta-grid,
   .hero-highlights,
   .stats-grid,
   .editor-overview,
@@ -1421,6 +1673,17 @@ textarea {
     padding: 18px 12px 34px;
   }
 
+  .page-toolbar,
+  .page-toolbar-actions,
+  .compact-header,
+  .compact-actions,
+  .compact-title-row,
+  .compact-meta-top,
+  .compact-usage-inline {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .hero-copy,
   .hero-panel,
   .card,
@@ -1437,6 +1700,7 @@ textarea {
   .hero-highlights,
   .stats-grid,
   .content-grid,
+  .compact-meta-grid,
   .editor-overview,
   .metrics-grid,
   .campaign-stats,
@@ -1456,6 +1720,7 @@ textarea {
   .upgrade-banner,
   .editor-actions,
   .section-divider,
+  .step-card-top,
   .step-footer,
   .usage-head,
   .campaign-top,
@@ -1468,6 +1733,19 @@ textarea {
 
   .step-delay-wrap {
     grid-template-columns: 1fr;
+  }
+
+  .step-card {
+    padding-left: 20px;
+  }
+
+  .steps-list .step-card:not(:last-child)::after,
+  .step-order {
+    position: static;
+  }
+
+  .step-order {
+    box-shadow: none;
   }
 
   .campaign-list {

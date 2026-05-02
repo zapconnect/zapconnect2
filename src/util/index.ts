@@ -108,11 +108,18 @@ export async function sendMessagesWithDelay({
   client,
   targetNumber,
   sessionName,
+  onSent,
 }: {
   messages: string[];
   client: Whatsapp;
   targetNumber: string;
   sessionName?: string;
+  onSent?: (payload: {
+    chatId: string;
+    body: string;
+    timestamp: number;
+    sentMessage: unknown;
+  }) => Promise<void> | void;
 }): Promise<void> {
   const chatId = targetNumber.toString();
   const sessionThrottleKey = resolveSessionThrottleKey(client, sessionName);
@@ -150,22 +157,18 @@ export async function sendMessagesWithDelay({
     );
 
     try {
-      await client.sendText(chatId, trimmedMessage);
+      const sentMessage = await client.sendText(chatId, trimmedMessage);
+      const timestamp = Date.now();
       recordSessionSend(sessionThrottleKey);
       console.log("Mensagem enviada:", trimmedMessage);
 
-      try {
-        const { io } = await import("../server");
-        io.emit("newMessage", {
+      if (onSent) {
+        await onSent({
           chatId,
           body: trimmedMessage,
-          timestamp: Date.now(),
-          fromBot: true,
-          _isFromMe: true,
-          name: "Bot",
+          timestamp,
+          sentMessage,
         });
-      } catch (err) {
-        console.error("Falha ao emitir para painel:", err);
       }
     } catch (erro) {
       console.error("Erro ao enviar mensagem:", erro);

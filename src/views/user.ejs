@@ -5,18 +5,15 @@
   <title>Minha Conta • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-  <link
-    rel="stylesheet"
-    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
-    crossorigin="anonymous"
-    referrerpolicy="no-referrer"
-  />
-  <link rel="icon" href="/img/favinco.png" />
+  <%- include("partials/app-head-core") %>
   <link rel="stylesheet" href="/css/index.css">
   <link rel="stylesheet" href="/css/user.css">
+  <link rel="stylesheet" href="/css/app-shell.css">
+  <script src="/js/app-shell.js" defer></script>
 </head>
 
-<body>
+<body class="has-app-sidebar">
+  <%- include("partials/app-sidebar", { activePage: "user" }) %>
   <header class="topbar">
     <div class="brand">
       <i class="fa-solid fa-user"></i>
@@ -28,679 +25,861 @@
     </a>
   </header>
 
-  <main class="card user-card">
-    <section class="section">
-      <h2><i class="fa-solid fa-id-card"></i> Dados do Usuário</h2>
+  <%
+    const safeSessions = sessions || [];
+    const onlineSessions = safeSessions.filter((session) => session.status === "connected").length;
+    const offlineSessions = Math.max(safeSessions.length - onlineSessions, 0);
+    const whatsappStatusClass = !safeSessions.length
+      ? "off"
+      : onlineSessions === safeSessions.length
+        ? "ok"
+        : onlineSessions > 0
+          ? "warn"
+          : "off";
+    const whatsappStatusLabel = !safeSessions.length
+      ? "Nenhuma sessão"
+      : onlineSessions === safeSessions.length
+        ? "Todas online"
+        : onlineSessions > 0
+          ? "Parcial"
+          : "Offline";
+    const currentPlanLabel = planConfig?.displayName || String(user.plan || "free").toUpperCase();
+    const currentPlanFeatures = Array.isArray(planConfig?.featureList) ? planConfig.featureList : [];
+    const iaLimitSSR = planConfig?.maxIaMessages ?? 0;
+    const iaUsedSSR = Number(user.ia_messages_used || 0);
+    const iaPercentSSR = iaLimitSSR === "unlimited"
+      ? 100
+      : Math.max(0, Math.min(100, Math.round((iaUsedSSR / Math.max(Number(iaLimitSSR || 0), 1)) * 100)));
+  %>
 
-      <div class="info-grid">
-        <div>
-          <span>Nome</span>
-          <strong><%= user.name %></strong>
+  <main class="user-layout">
+    <section class="card user-card account-shell">
+      <div class="account-hero">
+        <div class="account-hero-copy">
+          <p class="hero-kicker">Conta</p>
+          <h2>Perfil, integrações e saúde do workspace</h2>
+          <p class="hero-text">
+            Organize tudo em um só lugar: dados do usuário, integrações externas,
+            plano atual e configurações avançadas de cobrança.
+          </p>
         </div>
 
-        <div>
-          <span>Email</span>
-          <strong><%= user.email %></strong>
+        <div class="hero-highlight-grid">
+          <article class="hero-highlight">
+            <span class="hero-highlight-label">Plano atual</span>
+            <strong><%= currentPlanLabel %></strong>
+            <small><%= user.subscription_status || "sem status" %></small>
+          </article>
+
+          <article class="hero-highlight">
+            <span class="hero-highlight-label">Sessões WhatsApp</span>
+            <strong><%= onlineSessions %>/<%= safeSessions.length %></strong>
+            <small><%= whatsappStatusLabel %></small>
+          </article>
+
+          <article class="hero-highlight">
+            <span class="hero-highlight-label">Mensagens IA</span>
+            <strong>
+              <%= iaUsedSSR %><%= iaLimitSSR === "unlimited" ? "" : `/${iaLimitSSR}` %>
+            </strong>
+            <small><%= iaLimitSSR === "unlimited" ? "Ilimitado" : `${iaPercentSSR}% do ciclo` %></small>
+          </article>
         </div>
       </div>
-    </section>
 
-    <hr>
+      <div class="account-tabs">
+        <button class="atab active" data-tab="perfil" type="button">Perfil</button>
+        <button class="atab" data-tab="integracoes" type="button">Integrações</button>
+        <button class="atab" data-tab="plano" type="button">Plano</button>
+        <button class="atab" data-tab="seguranca" type="button">Segurança</button>
+      </div>
 
-    <section class="section" id="mercadopago">
-      <div class="integration-card">
-        <div class="integration-card-head">
-          <div>
-            <h2><i class="fa-solid fa-wallet"></i> Integração Mercado Pago</h2>
-            <p class="muted section-copy">
-              Conecte sua conta para gerar links de checkout online nas cobranças
-              e receber confirmações automáticas do pagamento.
-            </p>
-          </div>
-
-          <span class="integration-status warning" id="mpStatusBadge">
-            <i class="fa-solid fa-circle-exclamation"></i>
-            Não configurado
-          </span>
-        </div>
-
-        <div class="integration-meta-grid">
-          <div class="integration-meta-pill" id="mpModeText">Produção</div>
-          <div class="integration-meta-pill soft" id="mpConnectionMeta">
-            Nenhuma credencial salva ainda
-          </div>
-        </div>
-
-        <form id="mercadoPagoForm" class="settings-form">
-          <div class="settings-grid mp-settings-grid">
-            <div class="settings-field mp-field-span">
-              <label for="mpAccessToken">Access Token</label>
-              <input
-                id="mpAccessToken"
-                name="access_token"
-                class="settings-input"
-                type="password"
-                autocomplete="off"
-                placeholder="APP_USR-... ou TEST-..."
-              />
-              <small class="muted" id="mpTokenHint">
-                O token fica criptografado com AES-256-GCM antes de ser salvo no banco.
-              </small>
+      <div class="tab-panels">
+        <div id="tab-perfil" class="tab-panel active">
+          <section class="section section-surface">
+            <div class="section-topline">
+              <div>
+                <h2><i class="fa-solid fa-id-card"></i> Dados do Usuário</h2>
+                <p class="muted section-copy">
+                  Informações básicas da conta e identidade do workspace.
+                </p>
+              </div>
+              <span class="badge-plan"><%= currentPlanLabel %></span>
             </div>
 
-            <div class="settings-field">
-              <label for="mpPublicKey">Public Key</label>
-              <input
-                id="mpPublicKey"
-                name="public_key"
-                class="settings-input"
-                type="text"
-                autocomplete="off"
-                placeholder="APP_USR-..."
-              />
-            </div>
+            <div class="info-grid">
+              <div>
+                <span>Nome</span>
+                <strong><%= user.name %></strong>
+              </div>
 
-            <div class="settings-field mp-field-span">
-              <label for="mpWebhookUrl">Webhook URL</label>
-              <div class="integration-copy-line">
-                <input
-                  id="mpWebhookUrl"
-                  class="settings-input"
-                  type="text"
-                  readonly
-                  placeholder="Salve as credenciais para gerar a URL"
-                />
-                <button type="button" class="btn small" id="btnCopyMpWebhook">
-                  <i class="fa-solid fa-copy"></i>
-                  Copiar
+              <div>
+                <span>Email</span>
+                <strong><%= user.email %></strong>
+              </div>
+            </div>
+          </section>
+
+          <section class="section section-surface">
+            <h2><i class="fa-solid fa-sliders"></i> Preferências Operacionais</h2>
+
+            <form id="accountGeneralForm" class="settings-form">
+              <div class="settings-grid">
+                <div class="settings-field">
+                  <label for="timezoneOffset">Fuso horário padrão</label>
+                  <select
+                    id="timezoneOffset"
+                    name="timezone_offset"
+                    class="settings-input settings-select"
+                  >
+                    <option value="-180">(UTC-03:00) Brasília</option>
+                    <option value="-240">(UTC-04:00) Manaus</option>
+                    <option value="-120">(UTC-02:00) Fernando de Noronha</option>
+                    <option value="0">(UTC+00:00) Londres</option>
+                    <option value="60">(UTC+01:00) Lisboa</option>
+                    <option value="-300">(UTC-05:00) NY / EST</option>
+                  </select>
+                  <small class="muted">
+                    Esse fuso é usado por padrão nos agendamentos e em telas que trabalham com data e hora.
+                  </small>
+                </div>
+
+                <div class="settings-field">
+                  <label for="defaultSessionName">Sessão WhatsApp padrão</label>
+                  <select
+                    id="defaultSessionName"
+                    name="default_session_name"
+                    class="settings-input settings-select"
+                  >
+                    <option value="">Automática (primeira sessão conectada)</option>
+                    <% safeSessions.forEach((session) => { %>
+                      <option
+                        value="<%= session.session_name %>"
+                        <%= user.default_session_name === session.session_name ? "selected" : "" %>
+                      >
+                        <%= session.session_name %> (<%= session.status %>)
+                      </option>
+                    <% }) %>
+                  </select>
+                  <small class="muted">
+                    Se nenhum módulo enviar uma sessão manualmente, o sistema tentará usar essa sessão primeiro.
+                  </small>
+                </div>
+              </div>
+
+              <div class="actions">
+                <button type="submit" class="btn btn-primary small" id="btnSaveGeneral">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  Salvar Preferências
                 </button>
               </div>
-              <small class="muted">
-                Use esta URL no painel do Mercado Pago para receber as notificações do checkout.
-              </small>
-            </div>
-          </div>
+            </form>
+          </section>
 
-          <label class="integration-toggle">
-            <input type="checkbox" id="mpNotifyWhatsapp" />
-            <span>Notificar cliente no WhatsApp quando o pagamento online for aprovado</span>
-          </label>
+          <section class="section section-surface">
+            <h2><i class="fa-solid fa-globe"></i> Preferências de Número</h2>
 
-          <div class="actions">
-            <button type="submit" class="btn btn-primary small" id="btnSaveMpSettings">
-              <i class="fa-solid fa-floppy-disk"></i>
-              Salvar credenciais
-            </button>
-            <button type="button" class="btn small" id="btnTestMpSettings">
-              <i class="fa-solid fa-plug-circle-check"></i>
-              Testar conexão
-            </button>
-            <button type="button" class="btn small warning" id="btnDisconnectMpSettings">
-              <i class="fa-solid fa-link-slash"></i>
-              Desconectar
-            </button>
-          </div>
-        </form>
-      </div>
-    </section>
-
-    <hr>
-
-    <section class="section">
-      <h2><i class="fa-solid fa-sliders"></i> Preferências Operacionais</h2>
-
-      <form id="accountGeneralForm" class="settings-form">
-        <div class="settings-grid">
-          <div class="settings-field">
-            <label for="timezoneOffset">Fuso horário padrão</label>
-            <select
-              id="timezoneOffset"
-              name="timezone_offset"
-              class="settings-input settings-select"
-            >
-              <option value="-180">(UTC-03:00) Brasília</option>
-              <option value="-240">(UTC-04:00) Manaus</option>
-              <option value="-120">(UTC-02:00) Fernando de Noronha</option>
-              <option value="0">(UTC+00:00) Londres</option>
-              <option value="60">(UTC+01:00) Lisboa</option>
-              <option value="-300">(UTC-05:00) NY / EST</option>
-            </select>
-            <small class="muted">
-              Esse fuso é usado por padrão nos agendamentos e em telas que trabalham com data e hora.
-            </small>
-          </div>
-
-          <div class="settings-field">
-            <label for="defaultSessionName">Sessão WhatsApp padrão</label>
-            <select
-              id="defaultSessionName"
-              name="default_session_name"
-              class="settings-input settings-select"
-            >
-              <option value="">Automática (primeira sessão conectada)</option>
-              <% (sessions || []).forEach((session) => { %>
-                <option
-                  value="<%= session.session_name %>"
-                  <%= user.default_session_name === session.session_name ? "selected" : "" %>
-                >
-                  <%= session.session_name %> (<%= session.status %>)
-                </option>
-              <% }) %>
-            </select>
-            <small class="muted">
-              Se nenhum módulo enviar uma sessão manualmente, o sistema tentará usar essa sessão primeiro.
-            </small>
-          </div>
-        </div>
-
-        <div class="actions">
-          <button type="submit" class="btn btn-primary small" id="btnSaveGeneral">
-            <i class="fa-solid fa-floppy-disk"></i>
-            Salvar Preferências
-          </button>
-        </div>
-      </form>
-    </section>
-
-    <hr>
-
-    <section class="section">
-      <h2><i class="fa-solid fa-globe"></i> Preferências de Número</h2>
-
-      <form id="defaultDdiForm" class="settings-form">
-        <div class="settings-field">
-          <label for="defaultDdi">DDI padrão</label>
-          <input
-            id="defaultDdi"
-            name="default_ddi"
-            class="settings-input"
-            type="text"
-            inputmode="numeric"
-            maxlength="4"
-            value="<%= user.default_ddi || '55' %>"
-            placeholder="55"
-          />
-          <small class="muted">
-            Esse DDI é usado como prefixo automático nas máscaras de telefone de Cobranças, Disparo e Agendamentos.
-          </small>
-        </div>
-
-        <div class="actions">
-          <button type="submit" class="btn btn-primary small" id="btnSaveDdi">
-            <i class="fa-solid fa-floppy-disk"></i>
-            Salvar DDI
-          </button>
-        </div>
-      </form>
-    </section>
-
-    <hr>
-
-    <section class="section">
-      <h2><i class="fa-solid fa-file-invoice-dollar"></i> Dados Padrão de Cobrança</h2>
-
-      <form id="billingDefaultsForm" class="settings-form">
-        <div class="settings-grid">
-          <div class="settings-field">
-            <label for="billingDefaultType">Forma de pagamento padrão</label>
-            <select
-              id="billingDefaultType"
-              name="billing_default_type"
-              class="settings-input settings-select"
-            >
-              <option value="PIX" <%= (user.billing_default_type || "PIX") === "PIX" ? "selected" : "" %>>PIX</option>
-              <option value="BOLETO" <%= user.billing_default_type === "BOLETO" ? "selected" : "" %>>Boleto / Depósito</option>
-              <option value="CARTAO" <%= user.billing_default_type === "CARTAO" ? "selected" : "" %>>Cartão</option>
-              <option value="TRANSFERENCIA" <%= user.billing_default_type === "TRANSFERENCIA" ? "selected" : "" %>>Transferência</option>
-              <option value="DINHEIRO" <%= user.billing_default_type === "DINHEIRO" ? "selected" : "" %>>Dinheiro</option>
-              <option value="OUTRO" <%= user.billing_default_type === "OUTRO" ? "selected" : "" %>>Outro</option>
-            </select>
-          </div>
-
-          <div class="settings-field">
-            <label for="billingDefaultDescription">Descrição padrão</label>
-            <input
-              id="billingDefaultDescription"
-              name="billing_default_description"
-              class="settings-input"
-              type="text"
-              maxlength="255"
-              value="<%= user.billing_default_description || '' %>"
-              placeholder="Ex: Mensalidade, serviço, consultoria..."
-            />
-          </div>
-
-          <div class="settings-field">
-            <label for="billingDefaultPixKey">Chave PIX padrão</label>
-            <input
-              id="billingDefaultPixKey"
-              name="billing_default_pix_key"
-              class="settings-input"
-              type="text"
-              maxlength="255"
-              value="<%= user.billing_default_pix_key || '' %>"
-              placeholder="CPF, telefone, e-mail ou chave aleatória"
-            />
-          </div>
-
-          <div class="settings-field">
-            <label for="billingDefaultLink">Link de pagamento padrão</label>
-            <input
-              id="billingDefaultLink"
-              name="billing_default_link_pagamento"
-              class="settings-input"
-              type="text"
-              value="<%= user.billing_default_link_pagamento || '' %>"
-              placeholder="https://..."
-            />
-          </div>
-
-          <div class="settings-field">
-            <label for="billingDefaultMulta">Multa padrão (%)</label>
-            <input
-              id="billingDefaultMulta"
-              name="billing_default_multa"
-              class="settings-input"
-              type="number"
-              min="0"
-              max="100"
-              step="0.01"
-              value="<%= Number(user.billing_default_multa || 0) %>"
-            />
-          </div>
-
-          <div class="settings-field">
-            <label for="billingDefaultJuros">Juros padrão ao mês (%)</label>
-            <input
-              id="billingDefaultJuros"
-              name="billing_default_juros"
-              class="settings-input"
-              type="number"
-              min="0"
-              max="100"
-              step="0.01"
-              value="<%= Number(user.billing_default_juros || 0) %>"
-            />
-          </div>
-
-          <div class="settings-field">
-            <label for="billingDefaultDesconto">Desconto padrão (%)</label>
-            <input
-              id="billingDefaultDesconto"
-              name="billing_default_desconto"
-              class="settings-input"
-              type="number"
-              min="0"
-              max="100"
-              step="0.01"
-              value="<%= Number(user.billing_default_desconto || 0) %>"
-            />
-          </div>
-
-          <div class="settings-field">
-            <label for="billingDefaultDescontoDias">Desconto válido até X dias antes</label>
-            <input
-              id="billingDefaultDescontoDias"
-              name="billing_default_desconto_dias"
-              class="settings-input"
-              type="number"
-              min="0"
-              step="1"
-              value="<%= Number(user.billing_default_desconto_dias || 0) %>"
-            />
-          </div>
-        </div>
-
-        <div class="actions">
-          <button type="submit" class="btn btn-primary small" id="btnSaveBillingDefaults">
-            <i class="fa-solid fa-floppy-disk"></i>
-            Salvar Defaults de Cobrança
-          </button>
-        </div>
-      </form>
-    </section>
-
-    <hr>
-
-    <section class="section">
-      <h2><i class="fa-solid fa-comment-dots"></i> Templates Padrão de Mensagem</h2>
-
-      <form id="messageTemplatesForm" class="settings-form">
-        <div class="template-grid">
-          <div class="settings-field">
-            <label for="templateCriacao">Cobrança criada</label>
-            <textarea
-              id="templateCriacao"
-              name="template_cobranca_criacao"
-              class="settings-input settings-textarea"
-              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
-            ><%= user.template_cobranca_criacao || '' %></textarea>
-          </div>
-
-          <div class="settings-field">
-            <label for="templateLembrete">Lembrete de vencimento</label>
-            <textarea
-              id="templateLembrete"
-              name="template_cobranca_lembrete"
-              class="settings-input settings-textarea"
-              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
-            ><%= user.template_cobranca_lembrete || '' %></textarea>
-          </div>
-
-          <div class="settings-field">
-            <label for="templateAtraso">Cobrança em atraso</label>
-            <textarea
-              id="templateAtraso"
-              name="template_cobranca_atraso"
-              class="settings-input settings-textarea"
-              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
-            ><%= user.template_cobranca_atraso || '' %></textarea>
-          </div>
-
-          <div class="settings-field">
-            <label for="templateConfirmacao">Confirmação de pagamento</label>
-            <textarea
-              id="templateConfirmacao"
-              name="template_cobranca_confirmacao"
-              class="settings-input settings-textarea"
-              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
-            ><%= user.template_cobranca_confirmacao || '' %></textarea>
-          </div>
-
-          <div class="settings-field">
-            <label for="templateCancelamento">Cancelamento</label>
-            <textarea
-              id="templateCancelamento"
-              name="template_cobranca_cancelamento"
-              class="settings-input settings-textarea"
-              placeholder="Se deixar vazio, o sistema usa o template padrão interno."
-            ><%= user.template_cobranca_cancelamento || '' %></textarea>
-          </div>
-        </div>
-
-        <div class="template-help">
-          <strong>Placeholders disponíveis:</strong>
-          <div class="token-list">
-            <code>{{nome}}</code>
-            <code>{{primeiro_nome}}</code>
-            <code>{{valor}}</code>
-            <code>{{valor_pago}}</code>
-            <code>{{vencimento}}</code>
-            <code>{{data_pagamento}}</code>
-            <code>{{forma_pagamento}}</code>
-            <code>{{descricao}}</code>
-            <code>{{chave_pix}}</code>
-            <code>{{link_pagamento}}</code>
-            <code>{{quando_vence}}</code>
-            <code>{{dias_atraso}}</code>
-            <code>{{encargos}}</code>
-            <code>{{extras}}</code>
-          </div>
-          <small class="muted">
-            Para blocos opcionais, use este formato: <code>{{#chave_pix}}...{{chave_pix}}...{{/chave_pix}}</code>.
-          </small>
-        </div>
-
-        <div class="actions">
-          <button type="submit" class="btn btn-primary small" id="btnSaveTemplates">
-            <i class="fa-solid fa-floppy-disk"></i>
-            Salvar Templates
-          </button>
-        </div>
-      </form>
-    </section>
-
-    <hr>
-
-    <section class="section">
-      <h2><i class="fa-solid fa-wave-square"></i> Régua de Cobrança Automática</h2>
-      <p class="muted section-copy">
-        Configure quando o sistema deve lembrar, cobrar no vencimento e reforçar atrasos.
-        Neste MVP, as etapas usam WhatsApp e param automaticamente quando a cobrança deixa de estar pendente.
-      </p>
-
-      <form id="chargeCadenceForm" class="settings-form">
-        <div class="cadence-list">
-          <% (chargeCadenceRules || []).forEach((rule, index) => { %>
-            <article class="cadence-card" data-rule-id="<%= rule.id %>">
-              <div class="cadence-card-head">
-                <div>
-                  <span class="cadence-step">Etapa <%= index + 1 %></span>
-                  <strong class="cadence-card-title"><%= rule.nome %></strong>
-                </div>
-
-                <label class="cadence-toggle">
-                  <input
-                    type="checkbox"
-                    class="cadence-active"
-                    <%= rule.ativo ? "checked" : "" %>
-                  />
-                  <span>Ativa</span>
-                </label>
+            <form id="defaultDdiForm" class="settings-form">
+              <div class="settings-field">
+                <label for="defaultDdi">DDI padrão</label>
+                <input
+                  id="defaultDdi"
+                  name="default_ddi"
+                  class="settings-input"
+                  type="text"
+                  inputmode="numeric"
+                  maxlength="4"
+                  value="<%= user.default_ddi || '55' %>"
+                  placeholder="55"
+                />
+                <small class="muted">
+                  Esse DDI é usado como prefixo automático nas máscaras de telefone de Cobranças, Disparo e Agendamentos.
+                </small>
               </div>
 
-              <div class="settings-grid cadence-grid">
-                <div class="settings-field">
-                  <label for="cadenceName<%= rule.id %>">Nome da etapa</label>
-                  <input
-                    id="cadenceName<%= rule.id %>"
-                    class="settings-input cadence-name"
-                    type="text"
-                    maxlength="80"
-                    value="<%= rule.nome %>"
-                    placeholder="Ex: Aviso 3 dias antes"
-                  />
+              <div class="actions">
+                <button type="submit" class="btn btn-primary small" id="btnSaveDdi">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  Salvar DDI
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+
+        <div id="tab-integracoes" class="tab-panel">
+          <section class="section section-surface">
+            <div class="section-topline">
+              <div>
+                <h2><i class="fa-solid fa-plug-circle-bolt"></i> Status das Integrações</h2>
+                <p class="muted section-copy">
+                  Verifique em segundos o estado dos serviços externos e entre direto na configuração necessária.
+                </p>
+              </div>
+            </div>
+
+            <div class="integration-status-board">
+              <article class="integration-row">
+                <div class="int-left">
+                  <div class="int-icon int-icon-mp">MP</div>
+                  <div>
+                    <div class="int-name">Mercado Pago</div>
+                    <div class="int-desc" id="mpSummaryMeta">
+                      <%= mpStatus ? "Checkout online e notificações automáticas ativos." : "Cobranças online ainda não configuradas." %>
+                    </div>
+                  </div>
+                </div>
+                <div class="integration-actions">
+                  <span id="mpSummaryBadge" class="summary-badge <%= mpStatus ? "badge-ok" : "badge-off" %>">
+                    <%= mpStatus ? "Conectado" : "Não configurado" %>
+                  </span>
+                  <button type="button" class="btn small" id="btnOpenMpConfig">
+                    <%= mpStatus ? "Editar" : "Configurar" %>
+                  </button>
+                </div>
+              </article>
+
+              <article class="integration-row">
+                <div class="int-left">
+                  <div class="int-icon int-icon-wa">WA</div>
+                  <div>
+                    <div class="int-name">WhatsApp Sessions</div>
+                    <div class="int-desc">
+                      <%= safeSessions.length %> sessão(ões) cadastrada(s) • <%= onlineSessions %> online • <%= offlineSessions %> offline
+                    </div>
+                  </div>
+                </div>
+                <div class="integration-actions">
+                  <span class="summary-badge <%= whatsappStatusClass === 'ok' ? 'badge-ok' : whatsappStatusClass === 'warn' ? 'badge-warn' : 'badge-off' %>">
+                    <%= whatsappStatusLabel %>
+                  </span>
+                  <a href="/painel" class="btn small">Ver sessões</a>
+                </div>
+              </article>
+
+              <article class="integration-row">
+                <div class="int-left">
+                  <div class="int-icon int-icon-ai">AI</div>
+                  <div>
+                    <div class="int-name">Gemini API</div>
+                    <div class="int-desc">Ativa via chave gerenciada pelo sistema.</div>
+                  </div>
+                </div>
+                <div class="integration-actions">
+                  <span class="summary-badge badge-ok">Ativo via sistema</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="section section-surface" id="mercadopago">
+            <div class="integration-card">
+              <div class="integration-card-head">
+                <div>
+                  <h2><i class="fa-solid fa-wallet"></i> Integração Mercado Pago</h2>
+                  <p class="muted section-copy">
+                    Conecte sua conta para gerar links de checkout online nas cobranças
+                    e receber confirmações automáticas do pagamento.
+                  </p>
                 </div>
 
+                <span class="integration-status warning" id="mpStatusBadge">
+                  <i class="fa-solid fa-circle-exclamation"></i>
+                  Não configurado
+                </span>
+              </div>
+
+              <div class="integration-meta-grid">
+                <div class="integration-meta-pill" id="mpModeText">Produção</div>
+                <div class="integration-meta-pill soft" id="mpConnectionMeta">
+                  Nenhuma credencial salva ainda
+                </div>
+              </div>
+
+              <form id="mercadoPagoForm" class="settings-form">
+                <div class="settings-grid mp-settings-grid">
+                  <div class="settings-field mp-field-span">
+                    <label for="mpAccessToken">Access Token</label>
+                    <input
+                      id="mpAccessToken"
+                      name="access_token"
+                      class="settings-input"
+                      type="password"
+                      autocomplete="off"
+                      placeholder="APP_USR-... ou TEST-..."
+                    />
+                    <small class="muted" id="mpTokenHint">
+                      O token fica criptografado com AES-256-GCM antes de ser salvo no banco.
+                    </small>
+                  </div>
+
+                  <div class="settings-field">
+                    <label for="mpPublicKey">Public Key</label>
+                    <input
+                      id="mpPublicKey"
+                      name="public_key"
+                      class="settings-input"
+                      type="text"
+                      autocomplete="off"
+                      placeholder="APP_USR-..."
+                    />
+                  </div>
+
+                  <div class="settings-field mp-field-span">
+                    <label for="mpWebhookUrl">Webhook URL</label>
+                    <div class="integration-copy-line">
+                      <input
+                        id="mpWebhookUrl"
+                        class="settings-input"
+                        type="text"
+                        readonly
+                        placeholder="Salve as credenciais para gerar a URL"
+                      />
+                      <button type="button" class="btn small" id="btnCopyMpWebhook">
+                        <i class="fa-solid fa-copy"></i>
+                        Copiar
+                      </button>
+                    </div>
+                    <small class="muted">
+                      Use esta URL no painel do Mercado Pago para receber as notificações do checkout.
+                    </small>
+                  </div>
+                </div>
+
+                <label class="integration-toggle">
+                  <input type="checkbox" id="mpNotifyWhatsapp" />
+                  <span>Notificar cliente no WhatsApp quando o pagamento online for aprovado</span>
+                </label>
+
+                <div class="actions">
+                  <button type="submit" class="btn btn-primary small" id="btnSaveMpSettings">
+                    <i class="fa-solid fa-floppy-disk"></i>
+                    Salvar credenciais
+                  </button>
+                  <button type="button" class="btn small" id="btnTestMpSettings">
+                    <i class="fa-solid fa-plug-circle-check"></i>
+                    Testar conexão
+                  </button>
+                  <button type="button" class="btn small warning" id="btnDisconnectMpSettings">
+                    <i class="fa-solid fa-link-slash"></i>
+                    Desconectar
+                  </button>
+                </div>
+              </form>
+            </div>
+          </section>
+        </div>
+
+        <div id="tab-plano" class="tab-panel">
+          <section class="section section-surface plan-usage-card" id="planUsageCard">
+            <div class="section-topline">
+              <div>
+                <h2><i class="fa-solid fa-chart-line"></i> Consumo do Plano</h2>
+                <p class="muted section-copy">
+                  Acompanhe o uso mensal de IA e entenda rapidamente a folga do seu ciclo atual.
+                </p>
+              </div>
+              <span class="summary-badge badge-ok" id="planUsageLabel">
+                <%= iaLimitSSR === "unlimited" ? "Ilimitado" : `${Math.max(Number(iaLimitSSR || 0) - iaUsedSSR, 0)} restantes` %>
+              </span>
+            </div>
+
+            <div class="usage-value" id="planUsageValue">
+              <%= iaUsedSSR %><%= iaLimitSSR === "unlimited" ? "" : ` / ${iaLimitSSR}` %>
+            </div>
+            <p class="usage-meta" id="planUsageMeta">
+              <%= iaLimitSSR === "unlimited" ? "Uso atual no ciclo mensal • IA ilimitada neste plano." : `${iaPercentSSR}% do limite mensal de IA utilizado.` %>
+            </p>
+            <div class="usage-meter">
+              <div
+                class="usage-fill <%= iaLimitSSR === 'unlimited' ? 'is-unlimited' : '' %>"
+                id="planUsageFill"
+                style="width:<%= iaLimitSSR === 'unlimited' ? 100 : Math.max(iaPercentSSR, iaUsedSSR > 0 ? 8 : 0) %>%"
+              ></div>
+            </div>
+          </section>
+
+          <section class="section section-surface">
+            <h2><i class="fa-solid fa-box"></i> Plano</h2>
+
+            <p>
+              <b>Plano atual:</b>
+              <span class="badge-plan"><%= currentPlanLabel %></span>
+            </p>
+
+            <% if (currentPlanFeatures.length) { %>
+              <div class="feature-pills">
+                <% currentPlanFeatures.forEach((feature) => { %>
+                  <span class="feature-pill"><%= feature %></span>
+                <% }) %>
+              </div>
+            <% } %>
+
+            <% const statusMap = {
+              active: "Ativa",
+              trial: "Período de teste",
+              cancelled: "Cancelada",
+              past_due: "Pagamento pendente"
+            }; %>
+
+            <p class="status <%= user.subscription_status %>">
+              <i class="fa-solid fa-circle"></i>
+              <%= statusMap[user.subscription_status] || user.subscription_status %>
+            </p>
+
+            <% if (user.subscription_status === "active" && lastPaymentAt) {
+              const nextBilling = lastPaymentAt + 30 * 24 * 60 * 60 * 1000;
+              const daysLeft = Math.ceil((nextBilling - now) / (1000 * 60 * 60 * 24));
+            %>
+              <p class="muted">
+                <i class="fa-solid fa-rotate"></i>
+                Próxima cobrança:
+                <b><%= new Date(nextBilling).toLocaleDateString("pt-BR") %></b>
+              </p>
+
+              <% if (daysLeft <= 3) { %>
+                <p class="warning">
+                  <i class="fa-solid fa-triangle-exclamation"></i>
+                  Cobrança em <b><%= daysLeft %> dias</b>
+                </p>
+              <% } %>
+            <% } %>
+
+            <% if (user.subscription_status === "trial" && user.plan_expires_at) {
+              const daysLeft = Math.ceil((user.plan_expires_at - now) / (1000 * 60 * 60 * 24));
+            %>
+              <p class="active">
+                <i class="fa-solid fa-gift"></i>
+                Avaliação ativa até
+                <b><%= new Date(user.plan_expires_at).toLocaleDateString("pt-BR") %></b>
+              </p>
+
+              <% if (daysLeft <= 2) { %>
+                <p class="warning">
+                  <i class="fa-solid fa-hourglass-half"></i>
+                  Teste expira em <b><%= daysLeft %> dias</b>
+                </p>
+              <% } %>
+            <% } %>
+
+            <% if (user.subscription_status === "past_due") { %>
+              <p class="expired">
+                <i class="fa-solid fa-circle-xmark"></i>
+                Pagamento pendente. Atualize para evitar bloqueio.
+              </p>
+
+              <a href="/checkout" class="btn warning">
+                <i class="fa-solid fa-arrows-rotate"></i>
+                Atualizar pagamento
+              </a>
+            <% } %>
+
+            <div class="actions">
+              <a href="/checkout" class="btn btn-primary">
+                <i class="fa-solid fa-credit-card"></i>
+                Fazer upgrade
+              </a>
+            </div>
+          </section>
+
+          <section class="section section-surface">
+            <h2><i class="fa-solid fa-receipt"></i> Histórico de Pagamentos</h2>
+
+            <% if (!payments || payments.length === 0) { %>
+              <p class="muted">Nenhum pagamento encontrado.</p>
+            <% } else { %>
+              <div class="table-wrapper">
+                <table class="table">
+                  <thead>
+                    <tr>
+                      <th>Data</th>
+                      <th>Valor</th>
+                      <th>Método</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <% payments.forEach((p) => { %>
+                      <tr>
+                        <td><%= new Date(p.created_at).toLocaleDateString("pt-BR") %></td>
+                        <td>R$ <%= p.amount.toFixed(2) %></td>
+                        <td><%= p.payment_method %></td>
+                        <td class="status <%= p.status === 'approved' ? 'active' : 'expired' %>">
+                          <i class="fa-solid fa-circle"></i>
+                          <%= p.status %>
+                        </td>
+                      </tr>
+                    <% }) %>
+                  </tbody>
+                </table>
+              </div>
+            <% } %>
+          </section>
+        </div>
+
+        <div id="tab-seguranca" class="tab-panel">
+          <section class="section section-surface">
+            <div class="section-topline">
+              <div>
+                <h2><i class="fa-solid fa-shield-halved"></i> Configurações Avançadas</h2>
+                <p class="muted section-copy">
+                  Centralize padrões financeiros, templates e a régua automática que impactam diretamente a operação.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="section section-surface">
+            <h2><i class="fa-solid fa-file-invoice-dollar"></i> Dados Padrão de Cobrança</h2>
+
+            <form id="billingDefaultsForm" class="settings-form">
+              <div class="settings-grid">
                 <div class="settings-field">
-                  <label for="cadenceTrigger<%= rule.id %>">Disparo</label>
+                  <label for="billingDefaultType">Forma de pagamento padrão</label>
                   <select
-                    id="cadenceTrigger<%= rule.id %>"
-                    class="settings-input settings-select cadence-trigger"
+                    id="billingDefaultType"
+                    name="billing_default_type"
+                    class="settings-input settings-select"
                   >
-                    <option
-                      value="ANTES_VENCIMENTO"
-                      <%= rule.gatilho === "ANTES_VENCIMENTO" ? "selected" : "" %>
-                    >
-                      Antes do vencimento
-                    </option>
-                    <option
-                      value="NO_VENCIMENTO"
-                      <%= rule.gatilho === "NO_VENCIMENTO" ? "selected" : "" %>
-                    >
-                      No vencimento
-                    </option>
-                    <option
-                      value="APOS_VENCIMENTO"
-                      <%= rule.gatilho === "APOS_VENCIMENTO" ? "selected" : "" %>
-                    >
-                      Após o vencimento
-                    </option>
+                    <option value="PIX" <%= (user.billing_default_type || "PIX") === "PIX" ? "selected" : "" %>>PIX</option>
+                    <option value="BOLETO" <%= user.billing_default_type === "BOLETO" ? "selected" : "" %>>Boleto / Depósito</option>
+                    <option value="CARTAO" <%= user.billing_default_type === "CARTAO" ? "selected" : "" %>>Cartão</option>
+                    <option value="TRANSFERENCIA" <%= user.billing_default_type === "TRANSFERENCIA" ? "selected" : "" %>>Transferência</option>
+                    <option value="DINHEIRO" <%= user.billing_default_type === "DINHEIRO" ? "selected" : "" %>>Dinheiro</option>
+                    <option value="OUTRO" <%= user.billing_default_type === "OUTRO" ? "selected" : "" %>>Outro</option>
                   </select>
                 </div>
 
                 <div class="settings-field">
-                  <label for="cadenceDays<%= rule.id %>" data-role="days-label">
-                    <%= rule.gatilho === "APOS_VENCIMENTO"
-                      ? "Dias após o vencimento"
-                      : rule.gatilho === "NO_VENCIMENTO"
-                        ? "Disparo no próprio dia"
-                        : "Dias antes do vencimento" %>
-                  </label>
+                  <label for="billingDefaultDescription">Descrição padrão</label>
                   <input
-                    id="cadenceDays<%= rule.id %>"
-                    class="settings-input cadence-days"
-                    type="number"
-                    min="<%= rule.gatilho === 'NO_VENCIMENTO' ? 0 : 1 %>"
-                    step="1"
-                    value="<%= Number(rule.dias_offset || 0) %>"
-                    <%= rule.gatilho === "NO_VENCIMENTO" ? "disabled" : "" %>
+                    id="billingDefaultDescription"
+                    name="billing_default_description"
+                    class="settings-input"
+                    type="text"
+                    maxlength="255"
+                    value="<%= user.billing_default_description || '' %>"
+                    placeholder="Ex: Mensalidade, serviço, consultoria..."
                   />
                 </div>
 
                 <div class="settings-field">
-                  <label for="cadenceTime<%= rule.id %>">Horário de envio</label>
+                  <label for="billingDefaultPixKey">Chave PIX padrão</label>
                   <input
-                    id="cadenceTime<%= rule.id %>"
-                    class="settings-input cadence-time"
-                    type="time"
-                    step="60"
-                    value="<%= rule.horario_envio || '09:00' %>"
+                    id="billingDefaultPixKey"
+                    name="billing_default_pix_key"
+                    class="settings-input"
+                    type="text"
+                    maxlength="255"
+                    value="<%= user.billing_default_pix_key || '' %>"
+                    placeholder="CPF, telefone, e-mail ou chave aleatória"
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label for="billingDefaultLink">Link de pagamento padrão</label>
+                  <input
+                    id="billingDefaultLink"
+                    name="billing_default_link_pagamento"
+                    class="settings-input"
+                    type="text"
+                    value="<%= user.billing_default_link_pagamento || '' %>"
+                    placeholder="https://..."
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label for="billingDefaultMulta">Multa padrão (%)</label>
+                  <input
+                    id="billingDefaultMulta"
+                    name="billing_default_multa"
+                    class="settings-input"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value="<%= Number(user.billing_default_multa || 0) %>"
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label for="billingDefaultJuros">Juros padrão ao mês (%)</label>
+                  <input
+                    id="billingDefaultJuros"
+                    name="billing_default_juros"
+                    class="settings-input"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value="<%= Number(user.billing_default_juros || 0) %>"
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label for="billingDefaultDesconto">Desconto padrão (%)</label>
+                  <input
+                    id="billingDefaultDesconto"
+                    name="billing_default_desconto"
+                    class="settings-input"
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value="<%= Number(user.billing_default_desconto || 0) %>"
+                  />
+                </div>
+
+                <div class="settings-field">
+                  <label for="billingDefaultDescontoDias">Desconto válido até X dias antes</label>
+                  <input
+                    id="billingDefaultDescontoDias"
+                    name="billing_default_desconto_dias"
+                    class="settings-input"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value="<%= Number(user.billing_default_desconto_dias || 0) %>"
                   />
                 </div>
               </div>
 
-              <div class="settings-field">
-                <label for="cadenceTemplate<%= rule.id %>">Mensagem opcional desta etapa</label>
-                <textarea
-                  id="cadenceTemplate<%= rule.id %>"
-                  class="settings-input settings-textarea cadence-template"
-                  placeholder="Se deixar vazio, o sistema usa o template padrão correspondente."
-                ><%= rule.template_customizado || '' %></textarea>
-                <small class="muted cadence-hint" data-role="template-hint">
-                  <%= rule.gatilho === "APOS_VENCIMENTO"
-                    ? "Quando este campo ficar vazio, a etapa usa o template padrão de cobrança em atraso."
-                    : "Quando este campo ficar vazio, a etapa usa o template padrão de lembrete de vencimento." %>
+              <div class="actions">
+                <button type="submit" class="btn btn-primary small" id="btnSaveBillingDefaults">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  Salvar Defaults de Cobrança
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section class="section section-surface">
+            <h2><i class="fa-solid fa-comment-dots"></i> Templates Padrão de Mensagem</h2>
+
+            <form id="messageTemplatesForm" class="settings-form">
+              <div class="template-grid">
+                <div class="settings-field">
+                  <label for="templateCriacao">Cobrança criada</label>
+                  <textarea
+                    id="templateCriacao"
+                    name="template_cobranca_criacao"
+                    class="settings-input settings-textarea"
+                    placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+                  ><%= user.template_cobranca_criacao || '' %></textarea>
+                </div>
+
+                <div class="settings-field">
+                  <label for="templateLembrete">Lembrete de vencimento</label>
+                  <textarea
+                    id="templateLembrete"
+                    name="template_cobranca_lembrete"
+                    class="settings-input settings-textarea"
+                    placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+                  ><%= user.template_cobranca_lembrete || '' %></textarea>
+                </div>
+
+                <div class="settings-field">
+                  <label for="templateAtraso">Cobrança em atraso</label>
+                  <textarea
+                    id="templateAtraso"
+                    name="template_cobranca_atraso"
+                    class="settings-input settings-textarea"
+                    placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+                  ><%= user.template_cobranca_atraso || '' %></textarea>
+                </div>
+
+                <div class="settings-field">
+                  <label for="templateConfirmacao">Confirmação de pagamento</label>
+                  <textarea
+                    id="templateConfirmacao"
+                    name="template_cobranca_confirmacao"
+                    class="settings-input settings-textarea"
+                    placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+                  ><%= user.template_cobranca_confirmacao || '' %></textarea>
+                </div>
+
+                <div class="settings-field">
+                  <label for="templateCancelamento">Cancelamento</label>
+                  <textarea
+                    id="templateCancelamento"
+                    name="template_cobranca_cancelamento"
+                    class="settings-input settings-textarea"
+                    placeholder="Se deixar vazio, o sistema usa o template padrão interno."
+                  ><%= user.template_cobranca_cancelamento || '' %></textarea>
+                </div>
+              </div>
+
+              <div class="template-help">
+                <strong>Placeholders disponíveis:</strong>
+                <div class="token-list">
+                  <code>{{nome}}</code>
+                  <code>{{primeiro_nome}}</code>
+                  <code>{{valor}}</code>
+                  <code>{{valor_pago}}</code>
+                  <code>{{vencimento}}</code>
+                  <code>{{data_pagamento}}</code>
+                  <code>{{forma_pagamento}}</code>
+                  <code>{{descricao}}</code>
+                  <code>{{chave_pix}}</code>
+                  <code>{{link_pagamento}}</code>
+                  <code>{{quando_vence}}</code>
+                  <code>{{dias_atraso}}</code>
+                  <code>{{encargos}}</code>
+                  <code>{{extras}}</code>
+                </div>
+                <small class="muted">
+                  Para blocos opcionais, use este formato: <code>{{#chave_pix}}...{{chave_pix}}...{{/chave_pix}}</code>.
                 </small>
               </div>
-            </article>
-          <% }) %>
+
+              <div class="actions">
+                <button type="submit" class="btn btn-primary small" id="btnSaveTemplates">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  Salvar Templates
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section class="section section-surface">
+            <h2><i class="fa-solid fa-wave-square"></i> Régua de Cobrança Automática</h2>
+            <p class="muted section-copy">
+              Configure quando o sistema deve lembrar, cobrar no vencimento e reforçar atrasos.
+              Neste MVP, as etapas usam WhatsApp e param automaticamente quando a cobrança deixa de estar pendente.
+            </p>
+
+            <form id="chargeCadenceForm" class="settings-form">
+              <div class="cadence-list">
+                <% (chargeCadenceRules || []).forEach((rule, index) => { %>
+                  <article class="cadence-card" data-rule-id="<%= rule.id %>">
+                    <div class="cadence-card-head">
+                      <div>
+                        <span class="cadence-step">Etapa <%= index + 1 %></span>
+                        <strong class="cadence-card-title"><%= rule.nome %></strong>
+                      </div>
+
+                      <label class="cadence-toggle">
+                        <input
+                          type="checkbox"
+                          class="cadence-active"
+                          <%= rule.ativo ? "checked" : "" %>
+                        />
+                        <span>Ativa</span>
+                      </label>
+                    </div>
+
+                    <div class="settings-grid cadence-grid">
+                      <div class="settings-field">
+                        <label for="cadenceName<%= rule.id %>">Nome da etapa</label>
+                        <input
+                          id="cadenceName<%= rule.id %>"
+                          class="settings-input cadence-name"
+                          type="text"
+                          maxlength="80"
+                          value="<%= rule.nome %>"
+                          placeholder="Ex: Aviso 3 dias antes"
+                        />
+                      </div>
+
+                      <div class="settings-field">
+                        <label for="cadenceTrigger<%= rule.id %>">Disparo</label>
+                        <select
+                          id="cadenceTrigger<%= rule.id %>"
+                          class="settings-input settings-select cadence-trigger"
+                        >
+                          <option
+                            value="ANTES_VENCIMENTO"
+                            <%= rule.gatilho === "ANTES_VENCIMENTO" ? "selected" : "" %>
+                          >
+                            Antes do vencimento
+                          </option>
+                          <option
+                            value="NO_VENCIMENTO"
+                            <%= rule.gatilho === "NO_VENCIMENTO" ? "selected" : "" %>
+                          >
+                            No vencimento
+                          </option>
+                          <option
+                            value="APOS_VENCIMENTO"
+                            <%= rule.gatilho === "APOS_VENCIMENTO" ? "selected" : "" %>
+                          >
+                            Após o vencimento
+                          </option>
+                        </select>
+                      </div>
+
+                      <div class="settings-field">
+                        <label for="cadenceDays<%= rule.id %>" data-role="days-label">
+                          <%= rule.gatilho === "APOS_VENCIMENTO"
+                            ? "Dias após o vencimento"
+                            : rule.gatilho === "NO_VENCIMENTO"
+                              ? "Disparo no próprio dia"
+                              : "Dias antes do vencimento" %>
+                        </label>
+                        <input
+                          id="cadenceDays<%= rule.id %>"
+                          class="settings-input cadence-days"
+                          type="number"
+                          min="<%= rule.gatilho === 'NO_VENCIMENTO' ? 0 : 1 %>"
+                          step="1"
+                          value="<%= Number(rule.dias_offset || 0) %>"
+                          <%= rule.gatilho === "NO_VENCIMENTO" ? "disabled" : "" %>
+                        />
+                      </div>
+
+                      <div class="settings-field">
+                        <label for="cadenceTime<%= rule.id %>">Horário de envio</label>
+                        <input
+                          id="cadenceTime<%= rule.id %>"
+                          class="settings-input cadence-time"
+                          type="time"
+                          step="60"
+                          value="<%= rule.horario_envio || '09:00' %>"
+                        />
+                      </div>
+                    </div>
+
+                    <div class="settings-field">
+                      <label for="cadenceTemplate<%= rule.id %>">Mensagem opcional desta etapa</label>
+                      <textarea
+                        id="cadenceTemplate<%= rule.id %>"
+                        class="settings-input settings-textarea cadence-template"
+                        placeholder="Se deixar vazio, o sistema usa o template padrão correspondente."
+                      ><%= rule.template_customizado || '' %></textarea>
+                      <small class="muted cadence-hint" data-role="template-hint">
+                        <%= rule.gatilho === "APOS_VENCIMENTO"
+                          ? "Quando este campo ficar vazio, a etapa usa o template padrão de cobrança em atraso."
+                          : "Quando este campo ficar vazio, a etapa usa o template padrão de lembrete de vencimento." %>
+                      </small>
+                    </div>
+                  </article>
+                <% }) %>
+              </div>
+
+              <div class="template-help">
+                <strong>Como funciona</strong>
+                <div class="token-list">
+                  <code>WhatsApp</code>
+                  <code>antes do vencimento</code>
+                  <code>no vencimento</code>
+                  <code>após o vencimento</code>
+                </div>
+                <small class="muted">
+                  Você pode ajustar o horário, ativar ou desativar cada etapa e usar um texto próprio por estágio.
+                  Se a cobrança for paga ou cancelada, a etapa não é enviada.
+                </small>
+              </div>
+
+              <div class="actions">
+                <button type="submit" class="btn btn-primary small" id="btnSaveChargeCadence">
+                  <i class="fa-solid fa-floppy-disk"></i>
+                  Salvar Régua
+                </button>
+              </div>
+            </form>
+          </section>
         </div>
-
-        <div class="template-help">
-          <strong>Como funciona</strong>
-          <div class="token-list">
-            <code>WhatsApp</code>
-            <code>antes do vencimento</code>
-            <code>no vencimento</code>
-            <code>após o vencimento</code>
-          </div>
-          <small class="muted">
-            Você pode ajustar o horário, ativar ou desativar cada etapa e usar um texto próprio por estágio.
-            Se a cobrança for paga ou cancelada, a etapa não é enviada.
-          </small>
-        </div>
-
-        <div class="actions">
-          <button type="submit" class="btn btn-primary small" id="btnSaveChargeCadence">
-            <i class="fa-solid fa-floppy-disk"></i>
-            Salvar Régua
-          </button>
-        </div>
-      </form>
-    </section>
-
-    <hr>
-
-    <section class="section">
-      <h2><i class="fa-solid fa-box"></i> Plano</h2>
-
-      <p>
-        <b>Plano atual:</b>
-        <span class="badge-plan"><%= user.plan.toUpperCase() %></span>
-      </p>
-
-      <% const statusMap = {
-        active: "Ativa",
-        trial: "Período de teste",
-        cancelled: "Cancelada",
-        past_due: "Pagamento pendente"
-      }; %>
-
-      <p class="status <%= user.subscription_status %>">
-        <i class="fa-solid fa-circle"></i>
-        <%= statusMap[user.subscription_status] || user.subscription_status %>
-      </p>
-
-      <% if (user.subscription_status === "active" && lastPaymentAt) {
-        const nextBilling = lastPaymentAt + 30 * 24 * 60 * 60 * 1000;
-        const daysLeft = Math.ceil((nextBilling - now) / (1000 * 60 * 60 * 24));
-      %>
-        <p class="muted">
-          <i class="fa-solid fa-rotate"></i>
-          Próxima cobrança:
-          <b><%= new Date(nextBilling).toLocaleDateString("pt-BR") %></b>
-        </p>
-
-        <% if (daysLeft <= 3) { %>
-          <p class="warning">
-            <i class="fa-solid fa-triangle-exclamation"></i>
-            Cobrança em <b><%= daysLeft %> dias</b>
-          </p>
-        <% } %>
-      <% } %>
-
-      <% if (user.subscription_status === "trial" && user.plan_expires_at) {
-        const daysLeft = Math.ceil((user.plan_expires_at - now) / (1000 * 60 * 60 * 24));
-      %>
-        <p class="active">
-          <i class="fa-solid fa-gift"></i>
-          Avaliação ativa até
-          <b><%= new Date(user.plan_expires_at).toLocaleDateString("pt-BR") %></b>
-        </p>
-
-        <% if (daysLeft <= 2) { %>
-          <p class="warning">
-            <i class="fa-solid fa-hourglass-half"></i>
-            Teste expira em <b><%= daysLeft %> dias</b>
-          </p>
-        <% } %>
-      <% } %>
-
-      <% if (user.subscription_status === "past_due") { %>
-        <p class="expired">
-          <i class="fa-solid fa-circle-xmark"></i>
-          Pagamento pendente. Atualize para evitar bloqueio.
-        </p>
-
-        <a href="/checkout" class="btn warning">
-          <i class="fa-solid fa-arrows-rotate"></i>
-          Atualizar pagamento
-        </a>
-      <% } %>
-
-      <div class="actions">
-        <a href="/checkout" class="btn btn-primary">
-          <i class="fa-solid fa-credit-card"></i>
-          Alterar / Assinar Plano
-        </a>
       </div>
-    </section>
-
-    <hr>
-
-    <section class="section">
-      <h2><i class="fa-solid fa-receipt"></i> Histórico de Pagamentos</h2>
-
-      <% if (!payments || payments.length === 0) { %>
-        <p class="muted">Nenhum pagamento encontrado.</p>
-      <% } else { %>
-        <div class="table-wrapper">
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Data</th>
-                <th>Valor</th>
-                <th>Método</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              <% payments.forEach((p) => { %>
-                <tr>
-                  <td><%= new Date(p.created_at).toLocaleDateString("pt-BR") %></td>
-                  <td>R$ <%= p.amount.toFixed(2) %></td>
-                  <td><%= p.payment_method %></td>
-                  <td class="status <%= p.status === 'approved' ? 'active' : 'expired' %>">
-                    <i class="fa-solid fa-circle"></i>
-                    <%= p.status %>
-                  </td>
-                </tr>
-              <% }) %>
-            </tbody>
-          </table>
-        </div>
-      <% } %>
     </section>
   </main>
 
@@ -726,6 +905,7 @@
     const btnTestMpSettings = document.getElementById("btnTestMpSettings");
     const btnDisconnectMpSettings = document.getElementById("btnDisconnectMpSettings");
     const btnCopyMpWebhook = document.getElementById("btnCopyMpWebhook");
+    const btnOpenMpConfig = document.getElementById("btnOpenMpConfig");
     const mpAccessTokenInput = document.getElementById("mpAccessToken");
     const mpPublicKeyInput = document.getElementById("mpPublicKey");
     const mpWebhookUrlInput = document.getElementById("mpWebhookUrl");
@@ -734,11 +914,77 @@
     const mpModeText = document.getElementById("mpModeText");
     const mpConnectionMeta = document.getElementById("mpConnectionMeta");
     const mpTokenHint = document.getElementById("mpTokenHint");
+    const mpSummaryBadge = document.getElementById("mpSummaryBadge");
+    const mpSummaryMeta = document.getElementById("mpSummaryMeta");
+    const tabButtons = Array.from(document.querySelectorAll(".atab"));
+    const tabPanels = Array.from(document.querySelectorAll(".tab-panel"));
+    const planUsageCard = document.getElementById("planUsageCard");
+    const planUsageLabel = document.getElementById("planUsageLabel");
+    const planUsageValue = document.getElementById("planUsageValue");
+    const planUsageMeta = document.getElementById("planUsageMeta");
+    const planUsageFill = document.getElementById("planUsageFill");
+    const planStatsBootstrap = {
+      iaMessagesUsed: <%= iaUsedSSR %>,
+      iaMessagesLimit: <%- JSON.stringify(iaLimitSSR) %>,
+      percent: <%= iaPercentSSR %>,
+    };
     let currentMpSettings = null;
 
     if (timezoneSelect) {
       timezoneSelect.value = currentTimezoneOffset;
     }
+
+    function activateTab(tabName, options = {}) {
+      const { replaceHash = false } = options;
+      tabButtons.forEach((button) => {
+        button.classList.toggle("active", button.dataset.tab === tabName);
+      });
+
+      tabPanels.forEach((panel) => {
+        panel.classList.toggle("active", panel.id === `tab-${tabName}`);
+      });
+
+      if (replaceHash) {
+        history.replaceState(null, "", `#tab-${tabName}`);
+      }
+    }
+
+    function resolveTabFromHash() {
+      const hash = String(window.location.hash || "").toLowerCase();
+      if (!hash) return "perfil";
+      if (hash === "#mercadopago") return "integracoes";
+      if (hash.startsWith("#tab-")) return hash.replace("#tab-", "");
+      return "perfil";
+    }
+
+    function syncTabFromHash() {
+      const nextTab = resolveTabFromHash();
+      activateTab(nextTab, { replaceHash: false });
+
+      if (String(window.location.hash || "").toLowerCase() === "#mercadopago") {
+        document.getElementById("mercadopago")?.scrollIntoView({ block: "start" });
+      }
+    }
+
+    tabButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        activateTab(button.dataset.tab, { replaceHash: true });
+      });
+    });
+
+    btnOpenMpConfig?.addEventListener("click", () => {
+      activateTab("integracoes", { replaceHash: false });
+      history.replaceState(null, "", "#mercadopago");
+      requestAnimationFrame(() => {
+        document.getElementById("mercadopago")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+    });
+
+    window.addEventListener("hashchange", syncTabFromHash);
+    syncTabFromHash();
 
     ddiInput?.addEventListener("input", () => {
       ddiInput.value = String(ddiInput.value || "").replace(/\D/g, "").slice(0, 4);
@@ -772,6 +1018,67 @@
       return data;
     }
 
+    function isUnlimitedPlan(limit) {
+      return limit === "unlimited" || limit === null;
+    }
+
+    function renderPlanStats(stats = planStatsBootstrap) {
+      const used = Number(stats.iaMessagesUsed || 0);
+      const limit = stats.iaMessagesLimit;
+      const unlimited = isUnlimitedPlan(limit);
+      const percent = unlimited
+        ? 100
+        : Math.max(
+            0,
+            Math.min(
+              100,
+              Number.isFinite(Number(stats.percent))
+                ? Number(stats.percent)
+                : Math.round((used / Math.max(Number(limit || 0), 1)) * 100)
+            )
+          );
+
+      if (planUsageValue) {
+        planUsageValue.textContent = unlimited ? String(used) : `${used} / ${limit}`;
+      }
+
+      if (planUsageMeta) {
+        planUsageMeta.textContent = unlimited
+          ? "Uso atual no ciclo mensal • IA ilimitada neste plano."
+          : `${percent}% do limite mensal de IA utilizado.`;
+      }
+
+      if (planUsageLabel) {
+        planUsageLabel.textContent = unlimited
+          ? "Ilimitado"
+          : `${Math.max(Number(limit || 0) - used, 0)} restantes`;
+      }
+
+      if (planUsageFill) {
+        const width = unlimited ? 100 : Math.max(percent, used > 0 ? 8 : 0);
+        planUsageFill.style.width = `${width}%`;
+        planUsageFill.classList.toggle("is-unlimited", unlimited);
+      }
+
+      planUsageCard?.classList.toggle("is-unlimited", unlimited);
+    }
+
+    async function loadUserStats() {
+      renderPlanStats(planStatsBootstrap);
+
+      try {
+        const response = await fetch("/api/user/stats");
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Erro ao carregar estatísticas do plano");
+        }
+
+        renderPlanStats(data);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
     function updateMercadoPagoUi(settings) {
       currentMpSettings = settings || null;
       const configured = Boolean(settings?.configured);
@@ -782,6 +1089,25 @@
         mpStatusBadge.innerHTML = configured
           ? `<i class="fa-solid fa-circle-check"></i> Conectado`
           : `<i class="fa-solid fa-circle-exclamation"></i> Não configurado`;
+      }
+
+      if (mpSummaryBadge) {
+        mpSummaryBadge.className = `summary-badge ${configured ? "badge-ok" : "badge-off"}`;
+        mpSummaryBadge.textContent = configured ? "Conectado" : "Não configurado";
+      }
+
+      if (mpSummaryMeta) {
+        if (configured && settings?.connectedAt) {
+          mpSummaryMeta.textContent = `Conectado em ${new Date(Number(settings.connectedAt)).toLocaleString("pt-BR")}`;
+        } else if (configured) {
+          mpSummaryMeta.textContent = "Checkout online e notificações automáticas ativos.";
+        } else {
+          mpSummaryMeta.textContent = "Cobranças online ainda não configuradas.";
+        }
+      }
+
+      if (btnOpenMpConfig) {
+        btnOpenMpConfig.textContent = configured ? "Editar" : "Configurar";
       }
 
       if (mpModeText) {
@@ -919,6 +1245,7 @@
     });
 
     loadMercadoPagoSettings();
+    loadUserStats();
 
     ddiForm?.addEventListener("submit", async (event) => {
       event.preventDefault();

@@ -8,6 +8,7 @@ export interface User {
 
   prompt: string;
   ia_enabled: number; // 0 ou 1 (boolean no banco)
+  onboarding_step?: number | null;
 
   token: string;
   token_expires_at?: number | null;

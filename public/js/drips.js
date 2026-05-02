@@ -44,6 +44,8 @@
     editorBadge: document.getElementById("editor-badge"),
     editorStatus: document.getElementById("editor-status"),
     editorOverview: document.getElementById("editor-overview"),
+    editorConfigBtn: document.getElementById("editor-config-btn"),
+    editorConfigAnchor: document.getElementById("editor-config-anchor"),
     campaignName: document.getElementById("campaign-name"),
     triggerStage: document.getElementById("trigger-stage"),
     preferredSession: document.getElementById("preferred-session"),
@@ -52,6 +54,7 @@
     campaignActiveCopy: document.getElementById("campaign-active-copy"),
     campaignActiveShell: document.getElementById("campaign-active-shell"),
     addStepBtn: document.getElementById("add-step-btn"),
+    timelineAddStepBtn: document.getElementById("timeline-add-step"),
     stepsContainer: document.getElementById("steps-container"),
     saveBtn: document.getElementById("save-btn"),
     deleteBtn: document.getElementById("delete-btn"),
@@ -349,6 +352,34 @@
     return "Sequencia sem preview disponivel.";
   }
 
+  function getStepTitle(step, index) {
+    const rawMessage = String(step.message || "").trim().replace(/\s+/g, " ");
+    const lead =
+      rawMessage ||
+      (step.filename ? `Arquivo ${String(step.filename || "").trim()}` : `Passo ${index + 1}`);
+    const clipped = lead.length > 30 ? `${lead.slice(0, 30).trim()}...` : lead;
+    return `${formatDelayBadge(step.delayMs)} - ${clipped}`;
+  }
+
+  function getStepDelayCopy(step, index) {
+    return index === 0
+      ? "Enviado assim que o lead entra na campanha."
+      : `Dispara ${formatRelativeDelay(step.delayMs)} do passo anterior.`;
+  }
+
+  function getStepPreview(step) {
+    const message = String(step.message || "").trim().replace(/\s+/g, " ");
+    if (message) {
+      return message.length > 180 ? `${message.slice(0, 180).trim()}...` : message;
+    }
+
+    if (step.filename) {
+      return `Sem texto adicional. O passo envia o arquivo ${String(step.filename || "arquivo")}.`;
+    }
+
+    return "Sem conteudo definido para este passo.";
+  }
+
   function getSessionModeLabel(sessionName) {
     return sessionName ? String(sessionName) : "Automatica";
   }
@@ -601,10 +632,28 @@
   function renderEditorHeader() {
     const current = state.editor || createBlankCampaign();
     const isActive = current.active !== false;
+    const selected = getSelectedCampaign();
+    const stats = selected?.stats || current.stats || {};
+    const activeLeads = Math.max(0, toNumber(stats.active, 0));
+    let badgeClass = "active";
+    let badgeText = "Ativa";
 
-    refs.editorBadge.textContent = current.id
-      ? `Editando #${current.id}`
-      : "Nova campanha";
+    if (!current.id && String(current.name || "").trim()) {
+      badgeClass = "pending";
+      badgeText = "Rascunho";
+    } else if (!current.id) {
+      badgeClass = "pending";
+      badgeText = "Nova campanha";
+    } else if (!isActive) {
+      badgeClass = "inactive";
+      badgeText = "Pausada";
+    }
+
+    refs.editorBadge.className = `status-pill editor-badge-pill ${badgeClass}`;
+    refs.editorBadge.textContent =
+      current.id && badgeClass !== "pending"
+        ? `${badgeText} | ${formatCount(activeLeads, "lead", "leads")}`
+        : badgeText;
     refs.campaignName.value = current.name || "";
     renderStageOptions();
     renderSessionOptions();
@@ -680,6 +729,9 @@
         const delay = splitDelayMs(step.delayMs);
         const canRemove = steps.length > 1;
         const messageLength = String(step.message || "").trim().length;
+        const stepTitle = getStepTitle(step, index);
+        const stepDelayCopy = getStepDelayCopy(step, index);
+        const stepPreview = getStepPreview(step);
         const mediaChip = step.filename
           ? `
             <span class="media-chip">
@@ -697,12 +749,8 @@
             <div class="step-card-top">
               <span class="step-order">${String(index + 1).padStart(2, "0")}</span>
               <div class="step-header-copy">
-                <h3>Passo ${index + 1}</h3>
-                <div class="step-meta" data-role="delay-copy">${
-                  index === 0
-                    ? "Primeiro contato do funil."
-                    : `Dispara ${formatRelativeDelay(step.delayMs)} do passo anterior.`
-                }</div>
+                <h3 data-role="step-title">${escapeHtml(stepTitle)}</h3>
+                <div class="step-meta" data-role="delay-copy">${escapeHtml(stepDelayCopy)}</div>
               </div>
               <span class="step-badge" data-role="delay-badge">${formatDelayBadge(
                 step.delayMs
@@ -719,6 +767,8 @@
                 step.filename ? "Com anexo" : "Somente texto"
               }</span>
             </div>
+
+            <div class="step-preview" data-role="step-preview">${escapeHtml(stepPreview)}</div>
 
             <div class="step-fields">
               <div class="field">
@@ -1397,7 +1447,9 @@
     if (!step || !root) return;
 
     const badge = root.querySelector('[data-role="delay-badge"]');
+    const title = root.querySelector('[data-role="step-title"]');
     const delayCopy = root.querySelector('[data-role="delay-copy"]');
+    const preview = root.querySelector('[data-role="step-preview"]');
     const messageCount = root.querySelector('[data-role="message-count"]');
     const summaryChips = root.querySelectorAll(".step-summary .inline-chip");
 
@@ -1405,11 +1457,16 @@
       badge.textContent = formatDelayBadge(step.delayMs);
     }
 
+    if (title) {
+      title.textContent = getStepTitle(step, stepIndex);
+    }
+
     if (delayCopy) {
-      delayCopy.textContent =
-        stepIndex === 0
-          ? "Primeiro contato do funil."
-          : `Dispara ${formatRelativeDelay(step.delayMs)} do passo anterior.`;
+      delayCopy.textContent = getStepDelayCopy(step, stepIndex);
+    }
+
+    if (preview) {
+      preview.textContent = getStepPreview(step);
     }
 
     if (messageCount) {
@@ -1598,8 +1655,17 @@
       void loadCampaigns({ selectedId: state.selectedCampaignId });
     });
 
+    refs.editorConfigBtn?.addEventListener("click", () => {
+      refs.editorConfigAnchor?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      refs.campaignName?.focus({ preventScroll: true });
+    });
+
     refs.campaignName.addEventListener("input", (event) => {
       state.editor.name = event.target.value;
+      renderEditorHeader();
       updateEditorStatusMessage();
       renderSelectionSummary();
       renderHeroHighlights();
@@ -1627,6 +1693,7 @@
     });
 
     refs.addStepBtn.addEventListener("click", addStep);
+    refs.timelineAddStepBtn?.addEventListener("click", addStep);
     refs.saveBtn.addEventListener("click", () => {
       void saveCampaign();
     });

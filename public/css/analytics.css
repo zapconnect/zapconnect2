@@ -36,7 +36,7 @@ body {
 
 body {
   padding: 30px 18px 52px;
-  font-family: "Manrope", var(--font-base);
+  font-family: var(--font-display);
 }
 
 a {
@@ -77,11 +77,183 @@ select {
   background: rgba(46, 230, 166, 0.12);
 }
 
+.analytics-topbar,
+.insights-strip,
+.upgrade-banner,
 .hero,
 .stats-grid,
 .content-grid {
   position: relative;
   z-index: 1;
+}
+
+.analytics-topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  margin-bottom: 18px;
+  border-radius: 28px;
+  background: linear-gradient(
+    135deg,
+    rgba(18, 25, 45, 0.94),
+    rgba(10, 15, 28, 0.9)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: var(--analytics-shadow-soft);
+  backdrop-filter: blur(18px);
+  overflow: hidden;
+}
+
+.analytics-topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at top right, rgba(82, 182, 255, 0.18), transparent 32%),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06), transparent 28%);
+}
+
+.btn-back,
+.analytics-title,
+.analytics-controls {
+  position: relative;
+  z-index: 1;
+}
+
+.btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 0 16px;
+  border-radius: 16px;
+  text-decoration: none;
+  font-weight: 800;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition:
+    transform 0.18s ease,
+    border-color 0.18s ease,
+    background 0.18s ease;
+}
+
+.btn-back:hover {
+  transform: translateY(-1px);
+  background: rgba(82, 182, 255, 0.08);
+  border-color: rgba(82, 182, 255, 0.26);
+}
+
+.analytics-title {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-display);
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+.analytics-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.analytics-controls select {
+  width: auto;
+  min-width: 132px;
+}
+
+.insights-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: -4px 0 18px;
+}
+
+.insight-chip {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 16px 18px;
+  border-radius: 24px;
+  background: linear-gradient(
+    180deg,
+    rgba(18, 25, 45, 0.94),
+    rgba(10, 15, 28, 0.9)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: var(--analytics-shadow-soft);
+  overflow: hidden;
+}
+
+.insight-chip::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  border-radius: 999px;
+  background: rgba(82, 182, 255, 0.9);
+}
+
+.insight-chip.insight-warning::before {
+  background: rgba(255, 140, 122, 0.94);
+}
+
+.insight-chip.insight-positive::before {
+  background: rgba(46, 230, 166, 0.94);
+}
+
+.insight-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 1.05rem;
+  background: rgba(82, 182, 255, 0.12);
+  border: 1px solid rgba(82, 182, 255, 0.16);
+}
+
+.insight-chip.insight-warning .insight-icon {
+  background: rgba(255, 140, 122, 0.12);
+  border-color: rgba(255, 140, 122, 0.18);
+}
+
+.insight-chip.insight-positive .insight-icon {
+  background: rgba(46, 230, 166, 0.12);
+  border-color: rgba(46, 230, 166, 0.18);
+}
+
+.insight-copy {
+  min-width: 0;
+}
+
+.insight-copy strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+  font-size: 0.98rem;
+  line-height: 1.35;
+}
+
+.insight-copy p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  line-height: 1.65;
 }
 
 .hero {
@@ -197,7 +369,7 @@ select {
 .hero h1 {
   margin: 0 0 14px;
   max-width: 11ch;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: clamp(2.4rem, 4vw, 4.2rem);
   line-height: 0.98;
   letter-spacing: -0.05em;
@@ -241,7 +413,7 @@ select {
 .hero-highlight strong {
   display: block;
   margin: 10px 0 6px;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.28rem;
   color: var(--text-primary);
 }
@@ -275,7 +447,7 @@ select {
 }
 
 .plan-chip strong {
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.24rem;
   color: var(--text-primary);
 }
@@ -451,7 +623,7 @@ select:focus {
 
 .meta-card strong {
   margin-top: 10px;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.02rem;
   line-height: 1.2;
   color: var(--text-primary);
@@ -462,6 +634,7 @@ select:focus {
   justify-content: space-between;
   gap: 16px;
   align-items: center;
+  margin-bottom: 20px;
   padding: 16px;
   border-radius: 20px;
   background: linear-gradient(
@@ -561,7 +734,7 @@ select:focus {
 .stat-value {
   display: block;
   margin-bottom: 10px;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: clamp(2rem, 3vw, 3rem);
   line-height: 0.95;
   color: var(--text-primary);
@@ -609,7 +782,7 @@ select:focus {
 
 .card-head h2 {
   margin: 7px 0 0;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.5rem;
   letter-spacing: -0.03em;
   color: var(--text-primary);
@@ -657,7 +830,7 @@ select:focus {
 
 .satisfaction-copy strong {
   display: block;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.14rem;
   color: var(--text-primary);
 }
@@ -732,7 +905,7 @@ select:focus {
   display: block;
   margin-bottom: 4px;
   color: var(--text-primary);
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1rem;
 }
 
@@ -795,7 +968,7 @@ select:focus {
 .health-item strong {
   display: block;
   margin: 12px 0 8px;
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-size: 1.05rem;
   line-height: 1.3;
   color: var(--text-primary);
@@ -874,7 +1047,7 @@ select:focus {
   flex-shrink: 0;
   background: rgba(91, 140, 255, 0.16);
   color: var(--analytics-blue);
-  font-family: "Space Grotesk", var(--font-mono);
+  font-family: var(--font-display);
   font-weight: 700;
 }
 
@@ -1121,6 +1294,10 @@ select:focus {
 }
 
 @media (max-width: 1240px) {
+  .insights-strip {
+    grid-template-columns: 1fr;
+  }
+
   .hero {
     grid-template-columns: 1fr;
   }
@@ -1141,6 +1318,26 @@ select:focus {
 }
 
 @media (max-width: 980px) {
+  .analytics-topbar {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .analytics-title {
+    order: -1;
+    flex: 1 1 calc(100% - 140px);
+  }
+
+  .analytics-controls {
+    width: 100%;
+    justify-content: stretch;
+  }
+
+  .analytics-controls select,
+  .analytics-controls .btn {
+    flex: 1 1 0;
+  }
+
   .hero-highlights,
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1154,6 +1351,17 @@ select:focus {
 @media (max-width: 760px) {
   body {
     padding: 18px 12px 34px;
+  }
+
+  .analytics-topbar {
+    padding: 14px;
+    border-radius: 22px;
+  }
+
+  .btn-back,
+  .analytics-controls .btn,
+  .analytics-controls select {
+    width: 100%;
   }
 
   .hero-copy,
@@ -1176,6 +1384,10 @@ select:focus {
   .hero-actions,
   .meter-legend {
     grid-template-columns: 1fr;
+  }
+
+  .analytics-controls {
+    flex-direction: column;
   }
 
   .span-two,

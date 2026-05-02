@@ -1,161 +1,165 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8" />
   <title>Fluxos Inteligentes</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="/css/fluxos.css">
-  <!-- Drawflow (visual editor) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.47/dist/drawflow.min.css">
   <link rel="icon" href="/img/favinco.png" />
-  <style>
-    /* ajustes mínimos para a tela de fluxos */
-    .container { padding:20px; }
-    .flow-list { display:flex; gap:12px; flex-wrap:wrap; }
-    .flow-card { background:#111827; border:1px solid #1e293b; padding:12px; border-radius:8px; width:260px; }
-    .actions-list { margin-top:8px; }
-    .action-item { background:#0f172a; padding:8px; border-radius:6px; margin-bottom:6px; display:flex; gap:8px; align-items:center; justify-content:space-between; }
-    .btn { padding:8px 10px; border-radius:8px; cursor:pointer; }
-  </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Fluxos Inteligentes</h1>
-    <p>Criar / editar / deletar fluxos por usuário</p>
+  <main class="flows-page">
+    <header class="page-header">
+      <div>
+        <p class="page-kicker">Automação</p>
+        <h1>Fluxos Inteligentes</h1>
+        <p class="page-copy">
+          Organize a ordem das ações com nós visuais, edite cada etapa inline e simule o comportamento antes de salvar.
+        </p>
+      </div>
+      <div class="page-actions">
+        <button id="btnNewFlow" class="btn btn-primary">+ Novo fluxo</button>
+      </div>
+    </header>
 
-    <div class="flow-card" id="welcomeCard" style="margin-bottom:16px; width:100%; box-sizing:border-box;">
-      <div style="display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;">
+    <section class="flow-card flow-card--welcome" id="welcomeCard">
+      <div class="flow-card-header">
         <div>
-          <h2 style="margin:0;">Fluxo de Boas-vindas automático</h2>
-          <p style="color:#94a3b8; margin:4px 0 8px;">
-            Dispara na primeira mensagem de um novo contato (registrado no CRM), sem palavra-chave.
+          <span class="flow-chip">Primeiro contato</span>
+          <h2>Fluxo de Boas-vindas automático</h2>
+          <p class="flow-description">
+            Dispara na primeira mensagem de um novo contato registrado no CRM, sem depender de palavra-chave.
           </p>
-          <div id="welcomeStatus" style="color:#cbd5e1; font-size:13px;">Carregando...</div>
+          <div id="welcomeStatus" class="flow-status">Carregando...</div>
         </div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
-          <button id="btnWelcomeEdit" class="btn">Configurar ações</button>
-          <button id="btnWelcomeToggle" class="btn">Ativar/Desativar</button>
-          <button id="btnWelcomeTest" class="btn">Simular</button>
+        <div class="flow-toolbar">
+          <button id="btnWelcomeEdit" class="btn btn-secondary">Editar fluxo</button>
+          <button id="btnWelcomeToggle" class="btn btn-secondary">Ativar/Desativar</button>
+          <button id="btnWelcomeTest" class="btn btn-ghost">Simular</button>
         </div>
       </div>
-      <div style="margin-top:10px;">
-        <strong>Prévia das ações</strong>
-        <div id="welcomeActions" class="actions-list" style="margin-top:6px;"></div>
+
+      <div class="flow-preview">
+        <div class="flow-preview-head">
+          <strong>Prévia das ações</strong>
+          <span class="flow-preview-hint">As quatro primeiras etapas aparecem aqui.</span>
+        </div>
+        <div id="welcomeActions" class="preview-list"></div>
       </div>
-    </div>
+    </section>
 
-    <div style="margin-bottom:12px">
-      <button id="btnNewFlow" class="btn">+ Novo Fluxo</button>
-      <button id="btnVisualFlow" class="btn" style="margin-left:8px;">Editor Visual (Beta)</button>
-    </div>
-
-    <div id="flowsWrap" class="flow-list"></div>
-  </div>
-
-  <!-- MODAL WELCOME FLOW -->
-  <div id="welcomeModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center;">
-    <div style="background:var(--panel,#0f172a); padding:20px; border-radius:10px; width:720px; max-height:90vh; overflow:auto;">
-      <h2>Fluxo de Boas-vindas</h2>
-
-      <label>Nome</label>
-      <input id="welcomeName" style="width:100%; padding:8px; margin-bottom:8px">
-
-      <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-        <input type="checkbox" id="welcomeActive"> Ativo
-      </label>
-
-      <h4>Ações</h4>
-      <div id="welcomeModalActions"></div>
-
-      <div style="display:flex; gap:8px; margin-top:8px;">
-        <select id="welcomeAddActionType">
-          <option value="send_text">Enviar Texto</option>
-          <option value="delay">Aguardar (segundos)</option>
-          <option value="send_media">Enviar Mídia (base64 URL)</option>
-          <option value="handover_human">Encaminhar para humano</option>
-          <option value="update_crm">Atualizar CRM</option>
-          <option value="call_webhook">Chamar Webhook</option>
-        </select>
-        <button id="welcomeAddAction" class="btn">Adicionar Ação</button>
-      </div>
-
-      <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
-        <button id="welcomeCancel" class="btn">Cancelar</button>
-        <button id="welcomeSave" class="btn">Salvar</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- MODAL -->
-  <div id="flowModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center;">
-    <div style="background:var(--panel,#0f172a); padding:20px; border-radius:10px; width:720px; max-height:90vh; overflow:auto;">
-      <h2 id="flowModalTitle">Novo Fluxo</h2>
-
-      <label>Nome</label>
-      <input id="flowName" style="width:100%; padding:8px; margin-bottom:8px">
-
-      <label>Trigger (palavra/expressão)</label>
-      <input id="flowTrigger" style="width:100%; padding:8px; margin-bottom:8px" placeholder="ex: preço, orçamento, ajuda">
-
-      <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
-        <input type="checkbox" id="flowActive" checked> Ativo
-      </label>
-
-      <h4>Ações</h4>
-      <div id="flowActions"></div>
-
-      <div style="display:flex; gap:8px; margin-top:8px;">
-        <select id="addActionType">
-          <option value="send_text">Enviar Texto</option>
-          <option value="delay">Aguardar (segundos)</option>
-          <option value="send_media">Enviar Mídia (base64 URL)</option>
-          <option value="handover_human">Encaminhar para humano</option>
-        </select>
-        <button id="btnAddAction" class="btn">Adicionar Ação</button>
-      </div>
-
-      <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px;">
-        <button id="flowCancel" class="btn">Cancelar</button>
-        <button id="flowSave" class="btn">Salvar Fluxo</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- MODAL EDITOR VISUAL -->
-  <div id="visualModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center;">
-    <div style="background:#0f172a; padding:12px; border-radius:10px; width:90vw; height:90vh; display:flex; flex-direction:column; gap:8px;">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
+    <section class="flows-section">
+      <div class="section-head">
         <div>
-          <strong id="visualTitle">Editor Visual</strong>
-          <span style="color:#94a3b8; margin-left:8px;">Arraste blocos e conecte. Salvar converte para o fluxo atual.</span>
-        </div>
-        <div style="display:flex; gap:8px;">
-          <button id="visualClose" class="btn">Fechar</button>
-          <button id="visualApply" class="btn">Aplicar ao Fluxo</button>
+          <h2>Fluxos por gatilho</h2>
+          <p>Crie automações por palavra-chave e mantenha a ordem das etapas arrastando os nós.</p>
         </div>
       </div>
-      <div style="display:flex; gap:8px; flex:1; min-height:0;">
-        <div id="palette" style="width:200px; background:#111827; border:1px solid #1f2937; border-radius:8px; padding:8px; overflow:auto;">
-          <h4 style="margin:4px 0;">Blocos</h4>
-          <div class="draggable-node" data-type="start">Start</div>
-          <div class="draggable-node" data-type="send_text">Texto</div>
-          <div class="draggable-node" data-type="delay">Delay</div>
-          <div class="draggable-node" data-type="send_media">Mídia</div>
-          <div class="draggable-node" data-type="update_crm">Atualizar CRM</div>
-          <div class="draggable-node" data-type="call_webhook">Webhook</div>
-          <div class="draggable-node" data-type="branch">Branch</div>
-          <style>
-            .draggable-node { background:#1f2937; padding:8px; border-radius:6px; margin-bottom:6px; cursor:grab; }
-            .draggable-node:hover { background:#374151; }
-          </style>
+      <div id="flowsWrap" class="flow-grid"></div>
+    </section>
+  </main>
+
+  <div id="welcomeModal" class="modal-overlay" style="display:none;">
+    <div class="modal-shell">
+      <div class="modal-header">
+        <div>
+          <span class="flow-chip">Boas-vindas</span>
+          <h2>Editar fluxo de primeiro contato</h2>
         </div>
-        <div id="drawflow-wrapper" style="flex:1; background:#0b1224; border:1px solid #1f2937; border-radius:8px; position:relative; overflow:hidden;">
-          <div id="drawflow" style="width:100%; height:100%;"></div>
+      </div>
+
+      <div class="modal-form">
+        <label class="field-block">
+          <span>Nome</span>
+          <input id="welcomeName" type="text" placeholder="Ex.: Boas-vindas padrão">
+        </label>
+
+        <label class="toggle-block">
+          <input type="checkbox" id="welcomeActive">
+          <span>Fluxo ativo</span>
+        </label>
+      </div>
+
+      <section class="builder-card">
+        <div class="builder-head">
+          <div>
+            <h3>Etapas do fluxo</h3>
+            <p>Arraste para reordenar e clique em editar para ajustar o conteúdo de cada nó.</p>
+          </div>
+          <div class="builder-actions">
+            <select id="welcomeAddActionType">
+              <option value="send_text">Enviar texto</option>
+              <option value="delay">Aguardar (segundos)</option>
+              <option value="send_media">Enviar mídia</option>
+              <option value="handover_human">Encaminhar para humano</option>
+              <option value="update_crm">Atualizar CRM</option>
+              <option value="call_webhook">Chamar webhook</option>
+              <option value="condition">Condição</option>
+            </select>
+            <button id="welcomeAddAction" class="btn btn-primary" type="button">Adicionar nó</button>
+          </div>
         </div>
-        <div id="nodeProps" style="width:260px; background:#111827; border:1px solid #1f2937; border-radius:8px; padding:8px; overflow:auto;">
-          <h4 style="margin:4px 0;">Propriedades</h4>
-          <div id="nodePropsContent" style="color:#cbd5e1;">Selecione um bloco.</div>
+        <div id="welcomeModalActions" class="flow-node-list"></div>
+      </section>
+
+      <div class="modal-footer">
+        <button id="welcomeCancel" class="btn btn-ghost" type="button">Cancelar</button>
+        <button id="welcomeSave" class="btn btn-primary" type="button">Salvar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="flowModal" class="modal-overlay" style="display:none;">
+    <div class="modal-shell">
+      <div class="modal-header">
+        <div>
+          <span class="flow-chip">Fluxo por gatilho</span>
+          <h2 id="flowModalTitle">Novo Fluxo</h2>
         </div>
+      </div>
+
+      <div class="modal-form modal-form--split">
+        <label class="field-block">
+          <span>Nome</span>
+          <input id="flowName" type="text" placeholder="Ex.: Fluxo de orçamento">
+        </label>
+
+        <label class="field-block">
+          <span>Trigger (palavra/expressão)</span>
+          <input id="flowTrigger" type="text" placeholder="Ex.: preço, orçamento, ajuda">
+        </label>
+
+        <label class="toggle-block">
+          <input type="checkbox" id="flowActive" checked>
+          <span>Fluxo ativo</span>
+        </label>
+      </div>
+
+      <section class="builder-card">
+        <div class="builder-head">
+          <div>
+            <h3>Etapas do fluxo</h3>
+            <p>Os nós seguem a ordem exibida na tela. Arraste para reorganizar antes de salvar.</p>
+          </div>
+          <div class="builder-actions">
+            <select id="addActionType">
+              <option value="send_text">Enviar texto</option>
+              <option value="delay">Aguardar (segundos)</option>
+              <option value="send_media">Enviar mídia</option>
+              <option value="handover_human">Encaminhar para humano</option>
+              <option value="update_crm">Atualizar CRM</option>
+              <option value="call_webhook">Chamar webhook</option>
+              <option value="condition">Condição</option>
+            </select>
+            <button id="btnAddAction" class="btn btn-primary" type="button">Adicionar nó</button>
+          </div>
+        </div>
+        <div id="flowActions" class="flow-node-list"></div>
+      </section>
+
+      <div class="modal-footer">
+        <button id="flowCancel" class="btn btn-ghost" type="button">Cancelar</button>
+        <button id="flowSave" class="btn btn-primary" type="button">Salvar fluxo</button>
       </div>
     </div>
   </div>
@@ -163,9 +167,8 @@
   <div id="userdata" data-user='<%- JSON.stringify(user || {}) %>'></div>
 
   <script src="/js/loading-utils.js"></script>
+  <script src="/js/flow-node-editor.js"></script>
   <script src="/js/welcome-flow.js"></script>
   <script src="/js/fluxos.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.47/dist/drawflow.min.js"></script>
-  <script src="/js/fluxos-visual.js"></script>
 </body>
 </html>

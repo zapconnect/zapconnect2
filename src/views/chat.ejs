@@ -5,21 +5,33 @@
   <meta charset="UTF-8" />
   <title>Chats • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="icon" href="/img/favinco.png" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <%- include("partials/app-head-core") %>
   <link rel="stylesheet" href="/css/chats.css" />
+  <link rel="stylesheet" href="/css/app-shell.css" />
+  <script src="/js/app-shell.js" defer></script>
 
   <!-- ✅ Variáveis definidas ANTES do chat.js carregar -->
   <script>
     window.USER_ID = "<%= user.id %>";
     window.SESSION_NAME = "<%= typeof sessionName !== 'undefined' ? sessionName : '' %>";
+    window.CHAT_BOOTSTRAP = <%- JSON.stringify({
+      user: {
+        plan: user?.plan || "free",
+        ia_messages_used: Number(user?.ia_messages_used || 0),
+        onboarding_step: Number(user?.onboarding_step || 0),
+        planConfig: planConfig
+          ? {
+              displayName: planConfig.displayName,
+              maxIaMessages: planConfig.maxIaMessages,
+            }
+          : null,
+      },
+    }) %>;
   </script>
 </head>
 
-<body>
+<body class="has-app-sidebar app-chat-page">
+  <%- include("partials/app-sidebar", { activePage: "chat" }) %>
   <div class="wrap">
 
     <!-- SIDEBAR -->
@@ -31,6 +43,10 @@
 
       <div class="search">
         <input id="searchBox" placeholder="Pesquisar ou começar uma nova conversa" autocomplete="off" />
+      </div>
+
+      <div id="chatTagFilters" class="chat-tag-filters">
+        <div class="chat-tag-filters-empty">Sem tags ainda</div>
       </div>
 
       <div id="chatlist" class="chatlist"></div>
@@ -55,8 +71,6 @@
         </div>
 
         <div class="header-actions" id="humanButtons" style="display:none;">
-          <span id="pipelineStatus" class="pipeline-status"></span>
-
           <div class="human-on-group">
             <button id="btnHumanOn"><i class="fa-solid fa-user-check"></i> Atender</button>
             <select id="humanDuration" class="human-duration-select" title="Duração do atendimento">
@@ -71,13 +85,41 @@
           <button id="btnClearAi" title="Limpar histórico da IA" style="display:none;"><i class="fa-solid fa-broom"></i> Resetar IA</button>
         </div>
 
+        <button id="btnContactTags" class="btn-tag-toggle" title="Classificar contato" disabled>
+          <i class="fa-solid fa-tags"></i>
+          <span class="btn-tag-text">Tags</span>
+        </button>
         <button id="btnNotesToggle" class="btn-notes-toggle" title="Mostrar/ocultar notas">
           <i class="fa-solid fa-note-sticky"></i>
           <span class="btn-notes-text">Notas</span>
           <i class="fa-solid fa-chevron-down" id="btnNotesChevron"></i>
         </button>
         <button id="btnSearch" class="btn-search-toggle" title="Buscar na conversa"><i class="fa-solid fa-magnifying-glass"></i></button>
+
+        <div id="contactTagDropdown" class="contact-tag-dropdown" hidden>
+          <div class="contact-tag-dropdown-head">
+            <span class="contact-tag-dropdown-kicker">Classificação rápida</span>
+            <strong id="contactTagDropdownTitle">Selecione um contato</strong>
+          </div>
+          <div id="contactTagDropdownList" class="contact-tag-dropdown-list"></div>
+          <div id="contactTagDropdownHint" class="contact-tag-dropdown-hint">Clique para aplicar ou remover tags deste contato.</div>
+        </div>
       </header>
+
+      <div id="chatContextBar" class="chat-context-bar is-idle">
+        <div class="chat-context-main">
+          <span id="contextCrmPill" class="context-pill context-crm">CRM: selecione uma conversa</span>
+          <span id="contextStagePill" class="context-pill context-stage">
+            <span class="pipeline-dot pipeline-Novo"></span>
+            Novo
+          </span>
+          <span id="contextAiPill" class="context-pill context-ai context-ai-on">IA ON</span>
+        </div>
+        <div class="chat-context-meta">
+          <span id="contextHintMeta" class="context-meta">O contexto do contato aparece aqui sem sair do chat.</span>
+          <span id="contextUsageMeta" class="context-meta context-usage">0 / 0 IA no mês</span>
+        </div>
+      </div>
 
       <!-- Barra de busca -->
       <div id="searchBar" class="search-bar" style="display:none;">
@@ -109,6 +151,16 @@
         </form>
       </div>
 
+      <div id="draftBanner" class="draft-banner" hidden>
+        <div class="draft-banner-copy">
+          <span class="draft-banner-kicker">Rascunho restaurado</span>
+          <strong id="draftBannerText">Você voltou para um texto salvo.</strong>
+        </div>
+        <button id="draftDiscard" class="draft-banner-action" type="button">
+          Descartar
+        </button>
+      </div>
+
       <main id="messages" class="messages"></main>
 
       <!-- Preview do arquivo selecionado -->
@@ -124,6 +176,28 @@
       </div>
 
       <footer class="chat-footer">
+        <div id="quickReplyDropdown" class="quick-reply-dropdown" hidden>
+          <div class="quick-reply-dropdown-head">
+            <div>
+              <span class="quick-reply-kicker">Respostas rápidas</span>
+              <strong id="quickReplyDropdownTitle">Digite / para filtrar atalhos salvos</strong>
+            </div>
+            <button id="btnQuickReplyManage" class="quick-reply-manage-btn" type="button">
+              Gerenciar
+            </button>
+          </div>
+
+          <div id="quickReplyList" class="quick-reply-list"></div>
+
+          <div id="quickReplyEmpty" class="quick-reply-empty" hidden>
+            <strong>Nenhum atalho encontrado</strong>
+            <p>Crie respostas como <code>/preco</code>, <code>/checkout</code> ou <code>/prazo</code> para acelerar o atendimento.</p>
+            <button id="btnQuickReplyCreateEmpty" class="quick-reply-empty-btn" type="button">
+              Criar resposta rápida
+            </button>
+          </div>
+        </div>
+
         <div class="input-wrapper">
           <button class="btn-emoji" title="Emojis"><i class="fa-regular fa-face-smile"></i></button>
 
@@ -138,6 +212,79 @@
 
     </section>
   </div>
+
+  <div id="quickReplyModal" class="quick-reply-modal" hidden>
+    <div class="quick-reply-modal-backdrop" data-quick-reply-close></div>
+    <div class="quick-reply-modal-card" role="dialog" aria-modal="true" aria-labelledby="quickReplyModalTitle">
+      <div class="quick-reply-modal-head">
+        <div>
+          <span class="quick-reply-kicker">Atalhos do operador</span>
+          <h3 id="quickReplyModalTitle">Respostas rápidas salvas</h3>
+        </div>
+        <button id="btnQuickReplyClose" class="quick-reply-modal-close" type="button" aria-label="Fechar">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+
+      <form id="quickReplyForm" class="quick-reply-form">
+        <div class="quick-reply-form-grid">
+          <label class="quick-reply-field">
+            <span>Atalho</span>
+            <div class="quick-reply-shortcut-input">
+              <span>/</span>
+              <input
+                id="quickReplyShortcut"
+                name="shortcut"
+                type="text"
+                maxlength="50"
+                placeholder="preco"
+                autocomplete="off"
+              />
+            </div>
+          </label>
+
+          <label class="quick-reply-field">
+            <span>Título curto</span>
+            <input
+              id="quickReplyTitle"
+              name="title"
+              type="text"
+              maxlength="100"
+              placeholder="Preço Plano Pro"
+              autocomplete="off"
+            />
+          </label>
+        </div>
+
+        <label class="quick-reply-field">
+          <span>Mensagem completa</span>
+          <textarea
+            id="quickReplyContent"
+            name="content"
+            rows="5"
+            maxlength="6000"
+            placeholder="O Plano Pro custa R$197/mês e inclui até 3 sessões..."
+          ></textarea>
+        </label>
+
+        <div class="quick-reply-form-actions">
+          <p class="quick-reply-form-hint">Digite <code>/atalho</code> no campo da conversa para abrir a lista em tempo real.</p>
+          <button id="btnQuickReplySave" class="quick-reply-save-btn" type="submit">
+            <i class="fa-solid fa-floppy-disk"></i>
+            Salvar resposta
+          </button>
+        </div>
+      </form>
+
+      <div class="quick-reply-library-head">
+        <strong>Biblioteca atual</strong>
+        <span id="quickReplyCount">0 atalhos</span>
+      </div>
+
+      <div id="quickReplyManagerList" class="quick-reply-manager-list"></div>
+    </div>
+  </div>
+
   <div id="sidebarOverlay" class="sidebar-overlay"></div>
 
   <!-- MODAL DE EMOJIS -->

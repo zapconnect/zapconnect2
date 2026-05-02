@@ -2676,6 +2676,7 @@ type ChargeListFilters = {
   search?: string;
   from?: string;
   to?: string;
+  ids?: number[];
   cliente_id?: number;
   recorrencia_id?: number;
   page?: number;
@@ -2735,6 +2736,16 @@ function buildChargeListQuery(userId: number, filters: ChargeListFilters) {
     parseDateOnly(to);
     whereParts.push(`c.vencimento <= ?`);
     params.push(to);
+  }
+
+  const ids = Array.isArray(filters.ids)
+    ? filters.ids
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  if (ids.length) {
+    whereParts.push(`c.id IN (${ids.map(() => "?").join(", ")})`);
+    params.push(...ids);
   }
 
   if (filters.cliente_id) {

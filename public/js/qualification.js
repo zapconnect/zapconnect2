@@ -59,7 +59,9 @@
     warmStage: document.getElementById("warm-stage"),
     coldStage: document.getElementById("cold-stage"),
     addStepBtn: document.getElementById("add-step-btn"),
+    scoreCalibration: document.getElementById("score-calibration"),
     stepsContainer: document.getElementById("steps-container"),
+    scoreSimulator: document.getElementById("score-simulator"),
     saveBtn: document.getElementById("save-btn"),
     deleteBtn: document.getElementById("delete-btn"),
     selectionSummary: document.getElementById("selection-summary"),
@@ -96,6 +98,7 @@
     saving: false,
     deleting: false,
     preferBlankEditor: false,
+    simulatorDrafts: {},
   };
 
   function showMessage(type, message) {
@@ -186,6 +189,329 @@
       notes: "Nota livre no CRM",
     };
     return map[field] || field;
+  }
+
+  function normalizeStageKey(value) {
+    return String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function parseLocalizedNumber(value) {
+    const cleaned = String(value || "")
+      .trim()
+      .replace(/\s+/g, "")
+      .replace(/[R$]/g, "")
+      .replace(/\./g, "")
+      .replace(",", ".")
+      .replace(/[^\d.-]/g, "");
+
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function inferBudgetScore(value) {
+    if (value >= 10000) return 35;
+    if (value >= 5000) return 28;
+    if (value >= 2000) return 18;
+    if (value > 0) return 8;
+    return 0;
+  }
+
+  function inferUrgencyScore(value) {
+    const normalized = normalizeStageKey(value);
+    if (
+      normalized.includes("agora") ||
+      normalized.includes("hoje") ||
+      normalized.includes("urgente") ||
+      normalized.includes("imediat")
+    ) {
+      return 30;
+    }
+    if (
+      normalized.includes("semana") ||
+      normalized.includes("rapido") ||
+      normalized.includes("mes") ||
+      normalized.includes("dias")
+    ) {
+      return 18;
+    }
+    if (normalized) return 8;
+    return 0;
+  }
+
+  function getStepScoreFromAnswer(step, normalizedValue) {
+    let score = Math.max(0, toNumber(step?.baseScore, 0));
+
+    if (step?.type === "options") {
+      const normalizedAnswer = normalizeStageKey(normalizedValue);
+      const matchedOption = (step.options || []).find(
+        (option) =>
+          normalizeStageKey(option.value) === normalizedAnswer ||
+          normalizeStageKey(option.label) === normalizedAnswer
+      );
+      score += Math.max(0, toNumber(matchedOption?.score, 0));
+    }
+
+    if (step?.field === "budget" && typeof normalizedValue === "number") {
+      score += inferBudgetScore(normalizedValue);
+    }
+
+    if (step?.field === "urgency") {
+      score += inferUrgencyScore(String(normalizedValue || ""));
+    }
+
+    if (step?.field === "interest" && String(normalizedValue || "").trim()) {
+      score += 10;
+    }
+
+    if (step?.field === "name" && String(normalizedValue || "").trim()) {
+      score += 4;
+    }
+
+    if (step?.field === "citystate" && String(normalizedValue || "").trim()) {
+      score += 4;
+    }
+
+    return Math.max(0, Math.min(100, Math.round(score)));
+  }
+
+  function getStepFieldBonusPeak(step) {
+    if (step?.field === "budget" && step?.type === "number") {
+      return inferBudgetScore(10000);
+    }
+
+    if (step?.field === "urgency") {
+      if (step?.type === "options" && Array.isArray(step.options) && step.options.length) {
+        return Math.max(
+          0,
+          ...step.options.map((option) =>
+            inferUrgencyScore(option.value || option.label || "")
+          )
+        );
+      }
+      return inferUrgencyScore("urgente hoje");
+    }
+
+    if (step?.field === "interest") return 10;
+    if (step?.field === "name") return 4;
+    if (step?.field === "citystate") return 4;
+    return 0;
+  }
+
+  function getStepMaxScore(step) {
+    if (!step) return 0;
+
+    if (step.type === "options" && Array.isArray(step.options) && step.options.length) {
+      return Math.max(
+        0,
+        ...step.options.map((option) =>
+          getStepScoreFromAnswer(step, option.value || option.label || "")
+        )
+      );
+    }
+
+    if (step.type === "number") {
+      const numericSamples =
+        step.field === "budget" ? [500, 2000, 5000, 10000] : [1, 10, 100];
+      return Math.max(
+        0,
+        ...numericSamples.map((value) => getStepScoreFromAnswer(step, value))
+      );
+    }
+
+    if (step.field === "urgency") {
+      return Math.max(
+        getStepScoreFromAnswer(step, "urgente hoje"),
+        getStepScoreFromAnswer(step, "esta semana"),
+        getStepScoreFromAnswer(step, "sem pressa")
+      );
+    }
+
+    return getStepScoreFromAnswer(step, "Resposta preenchida");
+  }
+
+  function getStepWeightPreview(step) {
+    const baseScore = Math.max(0, toNumber(step?.baseScore, 0));
+    const optionPeak =
+      step?.type === "options" && Array.isArray(step.options) && step.options.length
+        ? Math.max(0, ...step.options.map((option) => Math.max(0, toNumber(option.score, 0))))
+        : 0;
+    const fieldBonus = getStepFieldBonusPeak(step);
+    const maxScore = getStepMaxScore(step);
+    const detailParts = [];
+
+    if (baseScore) {
+      detailParts.push(`base ${formatCompactNumber(baseScore)}`);
+    }
+
+    if (optionPeak) {
+      detailParts.push(`melhor opcao ${formatCompactNumber(optionPeak)}`);
+    }
+
+    if (fieldBonus) {
+      detailParts.push(`bonus automatico ate ${formatCompactNumber(fieldBonus)}`);
+    }
+
+    return {
+      baseScore,
+      optionPeak,
+      fieldBonus,
+      maxScore,
+      detail: detailParts.length
+        ? `Distribuicao: ${detailParts.join(" + ")}`
+        : "Sem pontos configurados ainda para esta pergunta.",
+    };
+  }
+
+  function getSimulatorCandidates(step) {
+    const emptyCandidate = {
+      value: "",
+      label: "Sem resposta simulada",
+      points: 0,
+      answerValue: null,
+    };
+
+    if (step?.type === "options") {
+      return [
+        emptyCandidate,
+        ...(step.options || []).map((option, index) => {
+          const answerValue = option.value || option.label || `opcao-${index + 1}`;
+          return {
+            value: option.id || `sim-option-${index + 1}`,
+            label: option.label || `Opcao ${index + 1}`,
+            points: getStepScoreFromAnswer(step, answerValue),
+            answerValue,
+          };
+        }),
+      ];
+    }
+
+    if (step?.type === "number") {
+      const presets =
+        step.field === "budget"
+          ? [
+              { value: "500", label: "Orcamento enxuto (R$ 500)" },
+              { value: "2000", label: "Orcamento medio (R$ 2.000)" },
+              { value: "5000", label: "Orcamento forte (R$ 5.000)" },
+              { value: "10000", label: "Orcamento premium (R$ 10.000)" },
+            ]
+          : [
+              { value: "1", label: "Valor baixo" },
+              { value: "10", label: "Valor medio" },
+              { value: "100", label: "Valor alto" },
+            ];
+
+      return [
+        emptyCandidate,
+        ...presets.map((preset) => ({
+          value: preset.value,
+          label: preset.label,
+          points: getStepScoreFromAnswer(step, Number(preset.value)),
+          answerValue: Number(preset.value),
+        })),
+      ];
+    }
+
+    if (step?.field === "urgency") {
+      return [
+        emptyCandidate,
+        {
+          value: "urgente-hoje",
+          label: "Urgente / ainda hoje",
+          points: getStepScoreFromAnswer(step, "urgente hoje"),
+          answerValue: "urgente hoje",
+        },
+        {
+          value: "esta-semana",
+          label: "Ainda esta semana",
+          points: getStepScoreFromAnswer(step, "esta semana"),
+          answerValue: "esta semana",
+        },
+        {
+          value: "sem-pressa",
+          label: "Sem pressa",
+          points: getStepScoreFromAnswer(step, "sem pressa"),
+          answerValue: "sem pressa",
+        },
+      ];
+    }
+
+    let filledLabel = "Resposta preenchida";
+    if (step?.field === "name") filledLabel = "Nome informado";
+    if (step?.field === "interest") filledLabel = "Interesse claro";
+    if (step?.field === "citystate") filledLabel = "Cidade e estado informados";
+    if (step?.field === "notes") filledLabel = "Observacao registrada";
+
+    return [
+      emptyCandidate,
+      {
+        value: "__filled__",
+        label: filledLabel,
+        points: getStepScoreFromAnswer(step, "Resposta preenchida"),
+        answerValue: "Resposta preenchida",
+      },
+    ];
+  }
+
+  function pruneSimulatorDrafts() {
+    const validStepIds = new Set(
+      (state.editor?.steps || []).map((step) => String(step.id || ""))
+    );
+
+    Object.keys(state.simulatorDrafts || {}).forEach((key) => {
+      if (!validStepIds.has(key)) {
+        delete state.simulatorDrafts[key];
+      }
+    });
+  }
+
+  function getSimulationState(flow) {
+    pruneSimulatorDrafts();
+
+    const selections = (flow?.steps || []).map((step, index) => {
+      const candidates = getSimulatorCandidates(step);
+      const selectedValue = String(state.simulatorDrafts?.[step.id] || "");
+      const selectedCandidate =
+        candidates.find((candidate) => candidate.value === selectedValue) || null;
+      const rawScore = selectedCandidate ? Math.max(0, toNumber(selectedCandidate.points, 0)) : 0;
+      const weight = getStepWeightPreview(step);
+
+      return {
+        step,
+        index,
+        candidates,
+        selectedValue,
+        selectedCandidate,
+        rawScore,
+        maxScore: weight.maxScore,
+      };
+    });
+
+    const rawTotal = selections.reduce((sum, item) => sum + item.rawScore, 0);
+    const total = Math.min(100, rawTotal);
+
+    let band = "cold";
+    let label = `Frio -> CRM: ${labelForStage(flow?.settings?.coldStage || "Novo")}`;
+    if (total >= Math.max(0, toNumber(flow?.settings?.hotThreshold, 70))) {
+      band = "hot";
+      label = `Quente -> CRM: ${labelForStage(flow?.settings?.hotStage || "Negociacao")}`;
+    } else if (total >= Math.max(0, toNumber(flow?.settings?.warmThreshold, 40))) {
+      band = "warm";
+      label = `Morno -> CRM: ${labelForStage(flow?.settings?.warmStage || "Qualificando")}`;
+    }
+
+    return {
+      selections,
+      rawTotal,
+      total,
+      band,
+      label,
+    };
   }
 
   function createOption(index, seed = "") {
@@ -398,17 +724,10 @@
     );
     const numberQuestions = steps.filter((step) => step.type === "number").length;
     const keywords = Array.isArray(focus.triggerKeywords) ? focus.triggerKeywords : [];
-    const potentialMaxScore = steps.reduce((acc, step) => {
-      const base = Math.max(0, toNumber(step.baseScore, 0));
-      const optionScore =
-        step.type === "options" && Array.isArray(step.options) && step.options.length
-          ? Math.max(
-              0,
-              ...step.options.map((option) => Math.max(0, toNumber(option.score, 0)))
-            )
-          : 0;
-      return acc + base + optionScore;
-    }, 0);
+    const potentialMaxScore = steps.reduce(
+      (acc, step) => acc + getStepMaxScore(step),
+      0
+    );
 
     return {
       steps,
@@ -687,6 +1006,189 @@
     `;
   }
 
+  function renderScoreCalibration() {
+    if (!refs.scoreCalibration) return;
+
+    const focus = state.editor || createDefaultFlow();
+    const insights = getFlowInsights(focus);
+    const total = insights.potentialMaxScore;
+    const remainder = 100 - total;
+    const pillClass =
+      total > 100 ? "is-over" : total === 100 ? "is-balanced" : "is-under";
+    const noteClass =
+      total > 100 ? "is-over" : total === 100 ? "is-balanced" : "is-under";
+
+    let noteTitle = "Distribuicao em progresso.";
+    let noteCopy =
+      "Use os pesos das perguntas para aproximar o fluxo da escala de 100 pontos.";
+
+    if (total > 100) {
+      noteTitle = "Recomendado manter o total em 100 pts.";
+      noteCopy =
+        "Hoje o melhor cenario ultrapassa a escala esperada e pode saturar o score final.";
+    } else if (total === 100) {
+      noteTitle = "Distribuicao fechada em 100 pts.";
+      noteCopy =
+        "A calibragem esta alinhada com a meta visual sugerida para o score final.";
+    } else if (total > 0) {
+      noteTitle = `Restam ${formatCompactNumber(Math.abs(remainder))} pts para distribuir.`;
+      noteCopy =
+        "Voce ainda pode reforcar as perguntas mais importantes antes de ativar o fluxo.";
+    }
+
+    refs.scoreCalibration.innerHTML = `
+      <div class="score-calibration-head">
+        <div class="score-calibration-copy">
+          <span class="score-calibration-kicker">Calibragem de score</span>
+          <strong>Score total possivel: ${formatCompactNumber(total)} pts</strong>
+          <p>Veja o peso maximo de cada pergunta antes de colocar o quiz em producao.</p>
+        </div>
+        <span class="score-total-pill ${pillClass}">${formatCompactNumber(
+          total
+        )} pts</span>
+      </div>
+      <div class="score-calibration-note ${noteClass}">
+        <strong>${escapeHtml(noteTitle)}</strong> ${escapeHtml(noteCopy)}
+      </div>
+    `;
+  }
+
+  function renderScoreSimulator() {
+    if (!refs.scoreSimulator) return;
+
+    const focus = getEditorFocusFlow();
+    const steps = focus.steps || [];
+
+    if (!steps.length) {
+      refs.scoreSimulator.innerHTML = createEmptyState(
+        "Adicione perguntas para simular a pontuacao do lead."
+      );
+      return;
+    }
+
+    const simulation = getSimulationState(focus);
+
+    refs.scoreSimulator.innerHTML = `
+      <div class="simulator-head">
+        <div class="simulator-copy">
+          <div class="simulator-title">Simular pontuacao</div>
+          <strong>Teste respostas hipoteticas e acompanhe o score em tempo real.</strong>
+          <p>O resultado usa a mesma logica de score aplicada no backend para classificar o lead.</p>
+        </div>
+      </div>
+
+      <div class="simulator-grid">
+        ${simulation.selections
+          .map((item) => `
+            <div class="simulator-row">
+              <div class="simulator-question">
+                <strong>Pergunta ${item.index + 1}</strong>
+                <span>${escapeHtml(item.step.question || "Pergunta sem texto")}</span>
+                <small>Maximo desta pergunta: ${formatCompactNumber(item.maxScore)} pts</small>
+              </div>
+              <select class="simulator-select" data-sim-step="${escapeHtml(item.step.id)}">
+                ${item.candidates
+                  .map(
+                    (candidate) => `
+                      <option value="${escapeHtml(candidate.value)}" ${
+                        candidate.value === item.selectedValue ? "selected" : ""
+                      }>${escapeHtml(candidate.label)}${
+                        candidate.value
+                          ? ` (+${formatCompactNumber(candidate.points)} pts)`
+                          : ""
+                      }</option>
+                    `
+                  )
+                  .join("")}
+              </select>
+            </div>
+          `)
+          .join("")}
+      </div>
+
+      <div class="simulator-result">
+        <div class="sim-score-circle" data-role="sim-score-circle">0</div>
+        <div class="simulator-result-copy">
+          <div class="simulator-result-line">
+            Score simulado: <strong id="simScore">0</strong> pts
+            <span id="simClassification"></span>
+          </div>
+          <div class="sim-progress">
+            <div class="sim-progress-fill" data-role="sim-progress-fill" style="width:0%"></div>
+          </div>
+          <div class="sim-scenario" data-role="sim-scenario"></div>
+          <div class="sim-cap-note" data-role="sim-cap-note"></div>
+        </div>
+      </div>
+    `;
+
+    updateSimulator();
+  }
+
+  function updateSimulator() {
+    if (!refs.scoreSimulator) return;
+
+    const focus = getEditorFocusFlow();
+    const simulation = getSimulationState(focus);
+    const circle = refs.scoreSimulator.querySelector('[data-role="sim-score-circle"]');
+    const progressFill = refs.scoreSimulator.querySelector('[data-role="sim-progress-fill"]');
+    const scenario = refs.scoreSimulator.querySelector('[data-role="sim-scenario"]');
+    const capNote = refs.scoreSimulator.querySelector('[data-role="sim-cap-note"]');
+    const simScore = refs.scoreSimulator.querySelector("#simScore");
+    const classification = refs.scoreSimulator.querySelector("#simClassification");
+    const answered = simulation.selections.filter((item) => item.selectedCandidate);
+
+    if (simScore) {
+      simScore.textContent = formatCompactNumber(simulation.total);
+    }
+
+    if (classification) {
+      classification.textContent = simulation.label;
+      classification.className =
+        simulation.band === "hot"
+          ? "is-hot"
+          : simulation.band === "warm"
+            ? "is-warm"
+            : "";
+      classification.id = "simClassification";
+    }
+
+    if (circle) {
+      circle.textContent = formatCompactNumber(simulation.total);
+      circle.className =
+        simulation.band === "hot"
+          ? "sim-score-circle is-hot"
+          : simulation.band === "warm"
+            ? "sim-score-circle is-warm"
+            : "sim-score-circle";
+    }
+
+    if (progressFill) {
+      progressFill.style.width = `${Math.max(0, Math.min(100, simulation.total))}%`;
+    }
+
+    if (scenario) {
+      scenario.textContent = answered.length
+        ? `Cenario: ${answered
+            .slice(0, 3)
+            .map(
+              (item) =>
+                `P${item.index + 1} = ${item.selectedCandidate?.label || "sem resposta"}`
+            )
+            .join(" + ")}`
+        : "Escolha respostas hipoteticas para ver como o score reage antes de salvar o fluxo.";
+    }
+
+    if (capNote) {
+      capNote.textContent =
+        simulation.rawTotal > 100
+          ? `A soma bruta chegou a ${formatCompactNumber(
+              simulation.rawTotal
+            )} pts, mas o backend limita o score final do lead a 100.`
+          : "";
+    }
+  }
+
   function renderSelectionSummary() {
     const selected = getSelectedFlow();
     const focus = getEditorFocusFlow();
@@ -946,6 +1448,7 @@
       </article>
       ${steps
         .map((step, index) => {
+          const weight = getStepWeightPreview(step);
           const optionLines =
             step.type === "options" && step.options.length
               ? `
@@ -957,7 +1460,7 @@
                           <strong>${escapeHtml(option.label)}</strong>
                           <p>Valor: ${escapeHtml(
                             option.value || option.label
-                          )} • Score: +${formatCompactNumber(option.score)}</p>
+                          )} • Pontua: +${formatCompactNumber(option.score)}</p>
                         </div>
                       `
                     )
@@ -975,8 +1478,8 @@
                     labelForStepType(step.type)
                   )} • ${escapeHtml(labelForSaveField(step.field))}</div>
                 </div>
-                <span class="score-inline">+${formatCompactNumber(
-                  step.baseScore
+                <span class="score-inline">Ate ${formatCompactNumber(
+                  weight.maxScore
                 )}</span>
               </div>
               <p>${escapeHtml(step.question)}</p>
@@ -985,6 +1488,7 @@
                   ? escapeHtml(step.helperText)
                   : "Sem texto auxiliar configurado para esta pergunta."
               }</p>
+              <p class="flow-summary">${escapeHtml(weight.detail)}</p>
               ${optionLines}
             </article>
           `;
@@ -1198,6 +1702,7 @@
 
     refs.stepsContainer.innerHTML = steps
       .map((step, index) => {
+        const weight = getStepWeightPreview(step);
         const optionsSection =
           step.type === "options"
             ? `
@@ -1226,7 +1731,7 @@
                           )}" />
                         </label>
                         <label class="field">
-                          <span>Score</span>
+                          <span>Pontos da opcao</span>
                           <input data-field="option-score" type="number" min="0" max="100" step="1" value="${formatCompactNumber(
                             option.score
                           )}" />
@@ -1271,9 +1776,21 @@
               <span class="inline-chip" data-role="field-chip"><i class="fa-solid fa-database"></i>${escapeHtml(
                 labelForSaveField(step.field)
               )}</span>
-              <span class="inline-chip" data-role="score-chip"><i class="fa-solid fa-gauge"></i>Score base +${formatCompactNumber(
+              <span class="inline-chip" data-role="score-chip"><i class="fa-solid fa-gauge"></i>Peso base +${formatCompactNumber(
                 step.baseScore
               )}</span>
+            </div>
+
+            <div class="question-score-strip">
+              <div class="question-score-copy">
+                <strong data-role="max-score-title">Peso maximo desta pergunta: ${formatCompactNumber(
+                  weight.maxScore
+                )} pts</strong>
+                <p data-role="max-score-copy">${escapeHtml(weight.detail)}</p>
+              </div>
+              <span class="question-weight-chip" data-role="max-score-chip">Max ${formatCompactNumber(
+                weight.maxScore
+              )} pts</span>
             </div>
 
             <div class="question-grid">
@@ -1329,7 +1846,7 @@
               </label>
 
               <label class="field">
-                <span>Score base da resposta</span>
+                <span>Peso base (pontos)</span>
                 <input data-field="baseScore" type="number" min="0" max="100" step="1" value="${formatCompactNumber(
                   step.baseScore
                 )}" />
@@ -1373,7 +1890,9 @@
     renderStats();
     renderEditorHeader();
     renderEditorOverview();
+    renderScoreCalibration();
     renderSteps();
+    renderScoreSimulator();
     renderSelectionSummary();
     renderSelectionHealth();
     renderFlowList();
@@ -1457,6 +1976,8 @@
         state.editor = createDefaultFlow();
       }
 
+      state.simulatorDrafts = {};
+
       renderAll();
 
       if (state.selectedFlowId) {
@@ -1525,6 +2046,7 @@
     state.sessions = [];
     state.loadingSessions = false;
     state.editor = createDefaultFlow();
+    state.simulatorDrafts = {};
     renderAll();
     focusFlowName();
   }
@@ -1540,6 +2062,7 @@
     state.editor = cloneFlowForEditor(
       state.flows.find((flow) => Number(flow.id) === selectedId)
     );
+    state.simulatorDrafts = {};
     renderAll();
     void loadSessions(selectedId);
   }
@@ -1559,6 +2082,8 @@
   function renderDerivedPanels() {
     renderHeroHighlights();
     renderEditorOverview();
+    renderScoreCalibration();
+    renderScoreSimulator();
     renderSelectionSummary();
     renderSelectionHealth();
     renderPreviewMetrics();
@@ -1613,10 +2138,14 @@
     const step = state.editor.steps?.[stepIndex];
     if (!step || !root) return;
 
+    const weight = getStepWeightPreview(step);
     const badge = root.querySelector('[data-role="badge"]');
     const typeChip = root.querySelector('[data-role="type-chip"]');
     const fieldChip = root.querySelector('[data-role="field-chip"]');
     const scoreChip = root.querySelector('[data-role="score-chip"]');
+    const maxTitle = root.querySelector('[data-role="max-score-title"]');
+    const maxCopy = root.querySelector('[data-role="max-score-copy"]');
+    const maxChip = root.querySelector('[data-role="max-score-chip"]');
 
     if (badge) {
       badge.textContent =
@@ -1638,9 +2167,23 @@
     }
 
     if (scoreChip) {
-      scoreChip.innerHTML = `<i class="fa-solid fa-gauge"></i>Score base +${escapeHtml(
+      scoreChip.innerHTML = `<i class="fa-solid fa-gauge"></i>Peso base +${escapeHtml(
         formatCompactNumber(step.baseScore)
       )}`;
+    }
+
+    if (maxTitle) {
+      maxTitle.textContent = `Peso maximo desta pergunta: ${formatCompactNumber(
+        weight.maxScore
+      )} pts`;
+    }
+
+    if (maxCopy) {
+      maxCopy.textContent = weight.detail;
+    }
+
+    if (maxChip) {
+      maxChip.textContent = `Max ${formatCompactNumber(weight.maxScore)} pts`;
     }
   }
 
@@ -1883,6 +2426,22 @@
       const trigger = event.target.closest("[data-flow-id]");
       if (!trigger) return;
       selectFlow(trigger.getAttribute("data-flow-id"));
+    });
+
+    refs.scoreSimulator?.addEventListener("change", (event) => {
+      const control = event.target.closest("[data-sim-step]");
+      if (!control) return;
+
+      const stepId = String(control.getAttribute("data-sim-step") || "").trim();
+      if (!stepId) return;
+
+      if (!control.value) {
+        delete state.simulatorDrafts[stepId];
+      } else {
+        state.simulatorDrafts[stepId] = control.value;
+      }
+
+      updateSimulator();
     });
 
     refs.stepsContainer.addEventListener("input", (event) => {

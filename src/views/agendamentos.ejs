@@ -6,13 +6,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agendamentos • ZapConnect</title>
 
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
-    crossorigin="anonymous" referrerpolicy="no-referrer">
-  <link rel="icon" href="/img/favinco.png" />
+  <%- include("partials/app-head-core") %>
   <link rel="stylesheet" href="/css/agendamentos.css">
+  <link rel="stylesheet" href="/css/app-shell.css">
+  <script src="/js/app-shell.js" defer></script>
 </head>
 
-<body data-user-tz="<%= user.timezone_offset || -180 %>" data-default-ddi="<%= user.default_ddi || '55' %>">
+<body class="has-app-sidebar" data-user-tz="<%= user.timezone_offset || -180 %>" data-default-ddi="<%= user.default_ddi || '55' %>">
+  <%- include("partials/app-sidebar", { activePage: "agendamentos" }) %>
 
   <header class="topbar">
     <div class="brand">
@@ -26,12 +27,134 @@
   </header>
 
   <main class="container">
+    <div class="agend-layout">
+      <aside class="card agend-calendar-panel">
+        <div class="calendar-panel-head">
+          <div>
+            <span class="calendar-kicker">Visão mensal</span>
+            <h2><i class="fa-solid fa-calendar-days"></i> Calendário</h2>
+          </div>
+          <button class="btn-secondary btn-inline btn-calendar-today" type="button" id="btnCalendarToday">
+            <i class="fa-solid fa-bullseye"></i>
+            Hoje
+          </button>
+        </div>
 
-    <!-- FORM -->
-    <section class="card form">
-      <h2><i class="fa-solid fa-plus"></i> Novo Agendamento</h2>
+        <div class="cal-header">
+          <button type="button" class="calendar-nav-btn" id="btnCalendarPrev" aria-label="Mês anterior">
+            <i class="fa-solid fa-chevron-left"></i>
+          </button>
+          <span id="calendarMonthLabel">Carregando...</span>
+          <button type="button" class="calendar-nav-btn" id="btnCalendarNext" aria-label="Próximo mês">
+            <i class="fa-solid fa-chevron-right"></i>
+          </button>
+        </div>
 
-      <div class="form-grid">
+        <div id="calendarGrid" class="cal-grid">
+          <div class="loading-card">Carregando calendário...</div>
+        </div>
+
+        <div class="calendar-legend">
+          <span class="legend-item"><i class="legend-dot legend-pending"></i>Pendente</span>
+          <span class="legend-item"><i class="legend-dot legend-sent"></i>Enviado</span>
+          <span class="legend-item"><i class="legend-dot legend-failed"></i>Falha</span>
+        </div>
+      </aside>
+
+      <section class="card agend-day-panel">
+        <div class="agend-day-toolbar">
+          <div>
+            <span class="calendar-kicker">Agenda do dia</span>
+            <div class="agend-day-header" id="agendDayHeader">Selecione um dia</div>
+            <p class="agend-day-copy" id="agendDayCopy">
+              O calendário destaca a carga de mensagens por data para você agir sem rolar uma lista inteira.
+            </p>
+          </div>
+
+          <div class="agend-day-actions">
+            <button class="btn-secondary btn-inline" type="button" id="btnDayToday">
+              <i class="fa-solid fa-calendar-day"></i>
+              Ir para hoje
+            </button>
+            <button class="btn-primary btn-inline" type="button" id="btnNovoAgend">
+              <i class="fa-solid fa-plus"></i>
+              Novo agendamento
+            </button>
+          </div>
+        </div>
+
+        <div id="statusChips" class="status-chip-row" aria-label="Filtros rápidos de status">
+          <button class="status-chip is-active" type="button" data-status-chip="all" onclick="setStatusFilterQuick('all')">
+            <span>Todos</span>
+            <strong id="statusCountAll">0</strong>
+          </button>
+          <button class="status-chip" type="button" data-status-chip="pending" onclick="setStatusFilterQuick('pending')">
+            <span>Pendentes</span>
+            <strong id="statusCountPending">0</strong>
+          </button>
+          <button class="status-chip" type="button" data-status-chip="sent" onclick="setStatusFilterQuick('sent')">
+            <span>Enviados</span>
+            <strong id="statusCountSent">0</strong>
+          </button>
+          <button class="status-chip" type="button" data-status-chip="failed" onclick="setStatusFilterQuick('failed')">
+            <span>Falha</span>
+            <strong id="statusCountFailed">0</strong>
+          </button>
+          <button class="status-chip" type="button" data-status-chip="processing" id="statusChipProcessing" onclick="setStatusFilterQuick('processing')" hidden>
+            <span>Em envio</span>
+            <strong id="statusCountProcessing">0</strong>
+          </button>
+        </div>
+
+        <div class="agend-toolbar">
+          <div class="field native-filter" hidden>
+            <label><i class="fa-solid fa-filter"></i> Status</label>
+            <select id="statusFilter" onchange="resetPageAndLoad()">
+              <option value="all">Todos</option>
+              <option value="pending">Pendentes</option>
+              <option value="processing">Em envio</option>
+              <option value="sent">Enviados</option>
+              <option value="failed">Falhos</option>
+            </select>
+          </div>
+          <div class="field">
+            <label><i class="fa-solid fa-magnifying-glass"></i> Buscar número ou mensagem</label>
+            <input type="text" id="searchTerm" placeholder="54999 ou parte da mensagem" oninput="renderSelectedDay()" />
+          </div>
+        </div>
+
+        <div class="list-summary-bar day-summary-bar">
+          <span id="agSummaryCount">Selecione um dia no calendário</span>
+          <span id="agSummaryHint">Clique em um dia para abrir somente os agendamentos daquela data.</span>
+        </div>
+
+        <div id="agendDayList" class="schedule-list">
+          <div class="empty-schedule-state">
+            <strong>Selecione um dia</strong>
+            <span>Os itens daquele dia aparecem aqui com ações rápidas de editar, cancelar ou reenviar.</span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div id="scheduleFormModal" class="modal hidden modal-shell" aria-hidden="true">
+    <div class="modal-content modal-content-form">
+      <div class="modal-form-top">
+        <div>
+          <span class="calendar-kicker">Compositor de envio</span>
+          <h2 id="formModalTitle"><i class="fa-solid fa-plus"></i> Novo agendamento</h2>
+          <p class="modal-form-copy" id="formModalCopy">
+            Monte a mensagem, anexe mídia e confirme o horário sem sair da visão mensal do calendário.
+          </p>
+        </div>
+        <button class="btn-secondary modal-close-btn" type="button" id="btnCloseAgendModal">
+          <i class="fa-solid fa-xmark"></i>
+          Fechar
+        </button>
+      </div>
+
+      <div class="form-grid schedule-form-grid">
         <div class="form-fields">
           <div class="field">
             <label><i class="fa-solid fa-earth-americas"></i> Fuso horário</label>
@@ -53,7 +176,7 @@
             Lista de números
           </label>
           <div class="inline-actions">
-            <button class="btn-secondary" onclick="document.getElementById('csvInput').click()">
+            <button class="btn-secondary" type="button" onclick="document.getElementById('csvInput').click()">
               <i class="fa-solid fa-file-csv"></i>
               Importar CSV
             </button>
@@ -77,7 +200,6 @@
             Arquivo (opcional)
           </label>
 
-          <!-- Input de arquivo real -->
           <div class="file-upload-area" id="fileUploadArea" onclick="document.getElementById('fileInput').click()">
             <i class="fa-solid fa-cloud-arrow-up"></i>
             <span id="fileUploadLabel">Clique para selecionar imagem, vídeo, PDF ou áudio</span>
@@ -88,14 +210,13 @@
             style="display:none"
             onchange="handleFileSelect(this)">
 
-          <!-- Preview do arquivo -->
           <div id="filePreview" class="file-preview-area" style="display:none;">
             <img id="previewImg" style="display:none;" alt="preview">
             <div id="previewDoc" class="preview-doc" style="display:none;">
               <i class="fa-solid fa-file"></i>
               <span id="previewDocName"></span>
             </div>
-            <button class="btn-remove-file" onclick="clearFile()" title="Remover arquivo">
+            <button class="btn-remove-file" type="button" onclick="clearFile()" title="Remover arquivo">
               <i class="fa-solid fa-xmark"></i>
             </button>
           </div>
@@ -130,7 +251,7 @@
             </div>
           </div>
 
-          <button id="btnAgendar" class="btn-primary" onclick="agendar()">
+          <button id="btnAgendar" class="btn-primary" type="button" onclick="agendar()">
             <i class="fa-solid fa-calendar-plus"></i>
             Agendar Mensagem
           </button>
@@ -157,80 +278,8 @@
           </div>
         </div>
       </div>
-    </section>
-
-    <!-- LISTA -->
-    <section class="card list">
-      <h2><i class="fa-solid fa-list"></i> Agendamentos Criados</h2>
-
-      <div class="filters">
-        <div class="field">
-          <label><i class="fa-solid fa-filter"></i> Status</label>
-          <select id="statusFilter" onchange="resetPageAndLoad()">
-            <option value="all">Todos</option>
-            <option value="pending">Pendentes</option>
-            <option value="sent">Enviados</option>
-            <option value="failed">Falhos</option>
-          </select>
-        </div>
-        <div class="field">
-          <label><i class="fa-solid fa-magnifying-glass"></i> Buscar número ou mensagem</label>
-          <input type="text" id="searchTerm" placeholder="54999 ou parte da mensagem" oninput="resetPageAndLoad()" />
-        </div>
-        <div class="field">
-          <label><i class="fa-solid fa-calendar"></i> Período</label>
-          <div class="date-range">
-            <input type="date" id="dateFrom" onchange="resetPageAndLoad()">
-            <span>à</span>
-            <input type="date" id="dateTo" onchange="resetPageAndLoad()">
-          </div>
-        </div>
-        <div class="field">
-          <label><i class="fa-solid fa-arrow-down-wide-short"></i> Ordenar</label>
-          <select id="orderBy" onchange="resetPageAndLoad()">
-            <option value="send_at|desc">Data de envio (mais recente)</option>
-            <option value="send_at|asc">Data de envio (mais antiga)</option>
-            <option value="status|asc">Status (pendentes primeiro)</option>
-            <option value="status|desc">Status (enviados primeiro)</option>
-          </select>
-        </div>
-        <div class="field small">
-          <label><i class="fa-solid fa-list-ol"></i> Por página</label>
-          <select id="pageSize" onchange="resetPageAndLoad()">
-            <option value="10">10</option>
-            <option value="25">25</option>
-            <option value="50">50</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>Número(s)</th>
-              <th>Mensagem</th>
-              <th>Data / Hora</th>
-              <th>Falta</th>
-              <th>Status</th>
-              <th>Ação</th>
-            </tr>
-          </thead>
-          <tbody id="agendamentosTable">
-            <tr>
-              <td colspan="6" class="loading">Carregando...</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="pagination">
-        <button id="prevPage" class="btn-secondary" onclick="changePage(-1)">« Anterior</button>
-        <span id="pageInfo">Página 1/1</span>
-        <button id="nextPage" class="btn-secondary" onclick="changePage(1)">Próxima »</button>
-      </div>
-    </section>
-
-  </main>
+    </div>
+  </div>
 
   <!-- Modal de confirmação -->
   <div id="confirmModal" class="modal hidden">
@@ -278,8 +327,13 @@
     const MAX_NUMBERS = <%= Number(planConfig?.maxBroadcastNumbers ?? 50) %>;
     const WARN_THRESHOLD = 0.8; // 80%
     let agRows = [];
+    let lastAgendaSnapshot = "";
+    let lastAgendaRenderStateKey = "";
     let agPage = 1;
     let agTotalPages = 1;
+    let calendarViewYear = 0;
+    let calendarViewMonth = 0;
+    let selectedDateKey = "";
     let USER_TZ = Number(document.body.dataset.userTz || -180); // minutos em relação ao UTC
     const PHONE_PREFIX = getConfiguredDefaultDdi();
     const PHONE_MIN_LENGTH = PHONE_PREFIX.length + 10;
@@ -292,6 +346,75 @@
       if (type === "error") alert("❌ " + msg);
       else if (type === "warning") alert("⚠️ " + msg);
       else alert(msg);
+    }
+
+    function setFormModalMeta(title, copy) {
+      const titleEl = document.getElementById("formModalTitle");
+      const copyEl = document.getElementById("formModalCopy");
+      if (titleEl) {
+        titleEl.innerHTML = title;
+      }
+      if (copyEl) {
+        copyEl.textContent = copy;
+      }
+    }
+
+    function openScheduleFormModal() {
+      const modal = document.getElementById("scheduleFormModal");
+      if (!modal) return;
+      modal.classList.remove("hidden");
+      modal.setAttribute("aria-hidden", "false");
+    }
+
+    function closeScheduleFormModal() {
+      const modal = document.getElementById("scheduleFormModal");
+      if (!modal) return;
+      modal.classList.add("hidden");
+      modal.setAttribute("aria-hidden", "true");
+    }
+
+    function resetScheduleComposer() {
+      editingId = null;
+      existingFilename = null;
+      selectedFileData = null;
+      contactsData = [];
+      document.getElementById("nums").value = "";
+      document.getElementById("msg").value = "";
+      document.getElementById("sendAt").value = "";
+      document.getElementById("recurrence").value = "none";
+      document.getElementById("recurrenceEnd").value = "";
+      clearFile();
+      toggleRecurrenceEnd();
+      updateNumCount();
+      updatePreview();
+      setResult("", true);
+      document.getElementById("btnAgendar").innerHTML =
+        '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
+      setFormModalMeta(
+        '<i class="fa-solid fa-plus"></i> Novo agendamento',
+        "Monte a mensagem, anexe mídia e confirme o horário sem sair da visão mensal do calendário."
+      );
+    }
+
+    function prepareNewSchedule(dateKey = "") {
+      resetScheduleComposer();
+
+      if (dateKey) {
+        const parts = parseDateKey(dateKey);
+        if (parts) {
+          const suggestedLocal = `${parts.year}-${pad2(parts.month + 1)}-${pad2(parts.day)}T09:00`;
+          const suggestedUtc = toUtcFromInput(suggestedLocal, getTimezoneOffsetSelected());
+          if (suggestedUtc <= Date.now()) {
+            const suggested = new Date(Date.now() + 60 * 60 * 1000 + getTimezoneOffsetSelected() * 60000);
+            document.getElementById("sendAt").value =
+              `${suggested.getUTCFullYear()}-${pad2(suggested.getUTCMonth() + 1)}-${pad2(suggested.getUTCDate())}T${pad2(suggested.getUTCHours())}:${pad2(suggested.getUTCMinutes())}`;
+          } else {
+            document.getElementById("sendAt").value = suggestedLocal;
+          }
+        }
+      }
+
+      openScheduleFormModal();
     }
 
     function toggleRecurrenceEnd() {
@@ -315,6 +438,7 @@
         if (!res.ok || data?.ok === false) throw new Error(data?.error || "Erro ao salvar");
         USER_TZ = offset;
         notify("Fuso horário atualizado", "success");
+        carregarAgendamentos({ selectedDate: selectedDateKey || getTodayDateKey() });
       } catch (err) {
         alert(err?.message || "Erro ao salvar fuso");
       }
@@ -346,6 +470,86 @@
         .slice(0, 4);
 
       return digits || "55";
+    }
+
+    function pad2(value) {
+      return String(value).padStart(2, "0");
+    }
+
+    function capitalizeLabel(value) {
+      const text = String(value || "").trim();
+      return text ? text.charAt(0).toUpperCase() + text.slice(1) : "";
+    }
+
+    function getLocalDateParts(ts, offsetMinutes = getTimezoneOffsetSelected()) {
+      const safeTs = Number(ts || 0);
+      const d = new Date(safeTs + offsetMinutes * 60000);
+      const year = d.getUTCFullYear();
+      const month = d.getUTCMonth();
+      const day = d.getUTCDate();
+      const hours = d.getUTCHours();
+      const minutes = d.getUTCMinutes();
+
+      return {
+        year,
+        month,
+        day,
+        hours,
+        minutes,
+        key: `${year}-${pad2(month + 1)}-${pad2(day)}`,
+      };
+    }
+
+    function getTodayDateKey() {
+      return getLocalDateParts(Date.now()).key;
+    }
+
+    function buildDateKey(year, month, day) {
+      return `${year}-${pad2(month + 1)}-${pad2(day)}`;
+    }
+
+    function parseDateKey(dateKey) {
+      const [year, month, day] = String(dateKey || "")
+        .split("-")
+        .map((part) => Number(part));
+      if (!year || !month || !day) return null;
+      return { year, month: month - 1, day };
+    }
+
+    function formatMonthLabel(year, month) {
+      const date = new Date(Date.UTC(year, month, 1));
+      return capitalizeLabel(
+        new Intl.DateTimeFormat("pt-BR", {
+          month: "long",
+          year: "numeric",
+        }).format(date)
+      );
+    }
+
+    function formatDayHeaderLabel(dateKey) {
+      const parts = parseDateKey(dateKey);
+      if (!parts) return "Selecione um dia";
+      const date = new Date(Date.UTC(parts.year, parts.month, parts.day));
+      return capitalizeLabel(
+        new Intl.DateTimeFormat("pt-BR", {
+          weekday: "short",
+          day: "numeric",
+          month: "long",
+        })
+          .format(date)
+          .replace(".", "")
+      );
+    }
+
+    function getMonthRangeUtc(year, month, offsetMinutes = getTimezoneOffsetSelected()) {
+      const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+      return {
+        fromTs: toUtcFromInput(`${year}-${pad2(month + 1)}-01T00:00`, offsetMinutes),
+        toTs: toUtcFromInput(
+          `${year}-${pad2(month + 1)}-${pad2(lastDay)}T23:59`,
+          offsetMinutes
+        ),
+      };
     }
 
     function normalizeScheduledPhoneDigits(value, options = {}) {
@@ -868,13 +1072,17 @@
       // UI
       setResult("Editando agendamento pendente #" + id, true);
       document.getElementById("btnAgendar").innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Salvar alterações';
+      setFormModalMeta(
+        '<i class="fa-solid fa-pen"></i> Editar agendamento',
+        "Ajuste mensagem, horário ou recorrência e salve sem perder o contexto do calendário."
+      );
 
       updateNumCount();
       updatePreview();
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      openScheduleFormModal();
     }
 
-    function duplicar(id) {
+    function duplicar(id, options = {}) {
       const row = agRows.find(r => Number(r.id) === Number(id));
       if (!row) return;
       editingId = null; // novo
@@ -900,15 +1108,24 @@
       // Recorrência
       document.getElementById("recurrence").value = row.recurrence || "none";
       if (row.recurrence_end) {
-        const endDate = new Date(Number(row.recurrence_end));
-        document.getElementById("recurrenceEnd").value = endDate.toISOString().slice(0,10);
+        document.getElementById("recurrenceEnd").value = fromUtcToInput(
+          Number(row.recurrence_end),
+          getTimezoneOffsetSelected()
+        ).slice(0, 10);
       } else {
         document.getElementById("recurrenceEnd").value = "";
       }
       toggleRecurrenceEnd();
 
-      // Data/hora: limpa para forçar escolha nova
-      document.getElementById("sendAt").value = "";
+      // Data/hora: usa sugestão rápida quando existir
+      if (options.suggestedSendAtMs) {
+        document.getElementById("sendAt").value = fromUtcToInput(
+          Number(options.suggestedSendAtMs),
+          getTimezoneOffsetSelected()
+        );
+      } else {
+        document.getElementById("sendAt").value = "";
+      }
 
       // Preview de arquivo (mantém nome se existir)
       if (row.filename) {
@@ -922,12 +1139,59 @@
         clearFile();
       }
 
-      setResult(`Duplicando agendamento #${id}. Ajuste data/hora e salve.`, true);
-      document.getElementById("btnAgendar").innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Criar agendamento';
+      setResult(
+        options.notice || `Duplicando agendamento #${id}. Ajuste data/hora e salve.`,
+        true
+      );
+      document.getElementById("btnAgendar").innerHTML =
+        options.buttonLabel || '<i class="fa-solid fa-calendar-plus"></i> Criar agendamento';
+      setFormModalMeta(
+        '<i class="fa-solid fa-copy"></i> Duplicar envio',
+        "Revise os contatos, confirme a nova data e crie uma nova cópia deste agendamento."
+      );
 
       updateNumCount();
       updatePreview();
-      window.scrollTo({ top: 0, behavior: "smooth" });
+      openScheduleFormModal();
+    }
+
+    function scrollToScheduleForm() {
+      prepareNewSchedule(selectedDateKey);
+    }
+
+    function setStatusFilterQuick(status) {
+      const select = document.getElementById("statusFilter");
+      if (!select) return;
+      select.value = status;
+      syncStatusChipUI();
+      resetPageAndLoad();
+    }
+
+    function syncStatusChipUI() {
+      const activeStatus = document.getElementById("statusFilter")?.value || "all";
+      document.querySelectorAll("[data-status-chip]").forEach((button) => {
+        button.classList.toggle("is-active", button.dataset.statusChip === activeStatus);
+      });
+    }
+
+    function prepareQuickResend(id, mode = "resend") {
+      const delayMinutes = mode === "retry" ? 3 : 5;
+      const suggestedSendAtMs = Date.now() + delayMinutes * 60 * 1000;
+      duplicar(id, {
+        suggestedSendAtMs,
+        notice:
+          mode === "retry"
+            ? `Agendamento #${id} preparado para nova tentativa. Revise e confirme no formulário.`
+            : `Agendamento #${id} preparado para reenvio. Revise e confirme no formulário.`,
+        buttonLabel: '<i class="fa-solid fa-calendar-plus"></i> Criar agendamento',
+      });
+    }
+
+    function cancelarAgendamento(id) {
+      return excluir(id, {
+        confirmText: "Cancelar este agendamento pendente?",
+        successText: "Agendamento cancelado.",
+      });
     }
 
     function showConfirmModal(payload) {
@@ -1016,25 +1280,19 @@
           : Number(data?.skipped || 0);
 
         if (data.ok) {
+          const savedDateKey = getLocalDateParts(payload.sendAt).key;
+          const savedDateParts = getLocalDateParts(payload.sendAt);
+          calendarViewYear = savedDateParts.year;
+          calendarViewMonth = savedDateParts.month;
+          selectedDateKey = savedDateKey;
           setResult(editingId ? "✅ Agendamento atualizado!" : "✅ Agendamento criado com sucesso!", true);
           warnings.forEach((warning) => notify(warning, "warning"));
           if (skippedCount > 0) {
             notify(`${skippedCount} contato(s) foram removidos pelas regras de seguranca.`, "warning");
           }
-          // Limpar formulário
-          document.getElementById("nums").value = "";
-          document.getElementById("msg").value = "";
-          document.getElementById("sendAt").value = "";
-          document.getElementById("recurrence").value = "none";
-          document.getElementById("recurrenceEnd").value = "";
-          clearFile();
-          contactsData = [];
-          updateNumCount();
-          updatePreview();
-          carregarAgendamentos();
-          editingId = null;
-          existingFilename = null;
-          btnEl.innerHTML = '<i class="fa-solid fa-calendar-plus"></i> Agendar Mensagem';
+          closeScheduleFormModal();
+          resetScheduleComposer();
+          carregarAgendamentos({ selectedDate: savedDateKey });
         } else {
           warnings.forEach((warning) => notify(warning, "warning"));
           if (skippedCount > 0) {
@@ -1057,133 +1315,688 @@
       el.style.color = ok ? "#2ee6a6" : "#e54848";
     }
 
-    // ── Excluir ────────────────────────────────────────────────────
-    async function excluir(id) {
-      if (!confirm("Excluir este agendamento?")) return;
-      await fetch(`/api/agendamentos/delete/${id}`, { method: "DELETE" });
-      carregarAgendamentos();
+    // ── Excluir / cancelar ────────────────────────────────────────
+    async function excluir(id, options = {}) {
+      if (!confirm(options.confirmText || "Excluir este agendamento?")) return;
+
+      try {
+        const res = await fetch(`/api/agendamentos/delete/${id}`, { method: "DELETE" });
+        const data = await res.json().catch(() => ({ ok: res.ok }));
+        if (!res.ok || data?.ok === false) {
+          throw new Error(data?.error || "Não foi possível remover o agendamento.");
+        }
+        if (options.successText) {
+          notify(options.successText, "success");
+        }
+        carregarAgendamentos();
+      } catch (err) {
+        notify(err?.message || "Erro ao remover agendamento.", "error");
+      }
+    }
+
+    function escapeHtml(text) {
+      return String(text ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function readScheduleEntries(row) {
+      try {
+        const parsed = JSON.parse(row?.numbers || "[]");
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function getSchedulePrimaryLabel(entries) {
+      if (!entries.length) return "Sem destinatários";
+      const first = entries[0];
+      const name =
+        typeof first === "object"
+          ? String(first?.vars?.nome || first?.vars?.name || "").trim()
+          : "";
+      const number = typeof first === "object" ? first?.number : first;
+      const baseLabel = name || formatPhoneDisplay(number);
+      return entries.length > 1 ? `${baseLabel} +${entries.length - 1}` : baseLabel;
+    }
+
+    function formatRelativeDateLabel(ts) {
+      const offset = getTimezoneOffsetSelected();
+      const target = new Date(Number(ts) + offset * 60000);
+      const now = new Date(Date.now() + offset * 60000);
+
+      const targetDay = Date.UTC(target.getUTCFullYear(), target.getUTCMonth(), target.getUTCDate());
+      const todayDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+      const diffDays = Math.round((targetDay - todayDay) / 86400000);
+      const time = `${String(target.getUTCHours()).padStart(2, "0")}:${String(target.getUTCMinutes()).padStart(2, "0")}`;
+
+      if (diffDays === 0) return `Hoje ${time}`;
+      if (diffDays === 1) return `Amanhã ${time}`;
+      if (diffDays === -1) return `Ontem ${time}`;
+      return `${String(target.getUTCDate()).padStart(2, "0")}/${String(target.getUTCMonth() + 1).padStart(2, "0")} ${time}`;
+    }
+
+    function getStatusMeta(status) {
+      switch (status) {
+        case "pending":
+          return { label: "Pendente", tone: "pending" };
+        case "processing":
+          return { label: "Em envio", tone: "processing" };
+        case "failed":
+          return { label: "Falha", tone: "failed" };
+        default:
+          return { label: "Enviado", tone: "sent" };
+      }
+    }
+
+    function buildScheduleMetaPills(row, entries) {
+      const totalContacts = entries.length;
+      const personalizedCount = entries.filter((entry) => typeof entry === "object").length;
+      const pills = [
+        `<span class="schedule-meta-pill"><i class="fa-solid fa-users"></i>${totalContacts} contato(s)</span>`,
+        `<span class="schedule-meta-pill"><i class="fa-solid fa-clock"></i>${escapeHtml(formatRelativeDateLabel(row.send_at))}</span>`,
+      ];
+
+      if (row.recurrence && row.recurrence !== "none") {
+        pills.push(
+          `<span class="schedule-meta-pill"><i class="fa-solid fa-rotate"></i>${escapeHtml(
+            formatarRecorrencia(row.recurrence)
+          )}</span>`
+        );
+      }
+
+      if (row.status === "pending") {
+        pills.push(
+          `<span class="schedule-meta-pill countdown" data-send="${row.send_at}" data-status="${row.status}">
+            ${escapeHtml(formatarCountdown(row.send_at))}
+          </span>`
+        );
+      } else if (row.status === "processing") {
+        pills.push(`<span class="schedule-meta-pill"><i class="fa-solid fa-spinner"></i>Em processamento</span>`);
+      } else if (Number(row.last_log_sent_at || 0) > 0) {
+        const success = Number(row.last_log_success_count || 0);
+        const failure = Number(row.last_log_failure_count || 0);
+        pills.push(
+          `<span class="schedule-meta-pill"><i class="fa-solid fa-chart-simple"></i>${success} ok • ${failure} falha(s)</span>`
+        );
+      }
+
+      if (personalizedCount > 0) {
+        pills.push(`<span class="pill-personalized">${personalizedCount} com mensagem personalizada</span>`);
+      }
+
+      if (row.filename) {
+        pills.push(
+          `<span class="schedule-meta-pill"><i class="fa-solid fa-paperclip"></i>${escapeHtml(
+            row.filename
+          )}</span>`
+        );
+      }
+
+      return pills.join("");
+    }
+
+    function buildScheduleActions(row) {
+      if (row.status === "pending") {
+        return `
+          <button class="btn-quick primary" type="button" onclick="editar(${row.id})">
+            <i class="fa-solid fa-pen"></i> Editar
+          </button>
+          <button class="btn-quick danger" type="button" onclick="cancelarAgendamento(${row.id})">
+            <i class="fa-solid fa-ban"></i> Cancelar
+          </button>
+        `;
+      }
+
+      if (row.status === "failed") {
+        return `
+          <button class="btn-quick warn" type="button" onclick="prepareQuickResend(${row.id}, 'retry')">
+            <i class="fa-solid fa-rotate-right"></i> Tentar novamente
+          </button>
+          <button class="btn-quick" type="button" onclick="verDetalhes(${row.id})">
+            <i class="fa-solid fa-list"></i> Ver falha
+          </button>
+        `;
+      }
+
+      return `
+        <button class="btn-quick success" type="button" onclick="prepareQuickResend(${row.id}, 'resend')">
+          <i class="fa-solid fa-paper-plane"></i> Reenviar
+        </button>
+        <button class="btn-quick" type="button" onclick="verDetalhes(${row.id})">
+          <i class="fa-solid fa-list"></i> Detalhes
+        </button>
+      `;
+    }
+
+    function renderStatusCounts(counts = {}) {
+      const normalized = {
+        all: Number(counts?.all || 0),
+        pending: Number(counts?.pending || 0),
+        processing: Number(counts?.processing || 0),
+        sent: Number(counts?.sent || 0),
+        failed: Number(counts?.failed || 0),
+      };
+
+      const allCount = normalized.all || normalized.pending + normalized.processing + normalized.sent + normalized.failed;
+      document.getElementById("statusCountAll").textContent = String(allCount);
+      document.getElementById("statusCountPending").textContent = String(normalized.pending);
+      document.getElementById("statusCountSent").textContent = String(normalized.sent);
+      document.getElementById("statusCountFailed").textContent = String(normalized.failed);
+      document.getElementById("statusCountProcessing").textContent = String(normalized.processing);
+
+      const processingChip = document.getElementById("statusChipProcessing");
+      const selectedStatus = document.getElementById("statusFilter")?.value || "all";
+      if (processingChip) {
+        processingChip.hidden = normalized.processing === 0 && selectedStatus !== "processing";
+      }
+    }
+
+    function updateListSummary(status, payload, term) {
+      const countEl = document.getElementById("agSummaryCount");
+      const hintEl = document.getElementById("agSummaryHint");
+      if (!countEl || !hintEl) return;
+
+      const total = Number(payload?.total || 0);
+      const labelMap = {
+        all: "agendamentos",
+        pending: "pendente(s)",
+        processing: "em envio",
+        sent: "enviado(s)",
+        failed: "com falha",
+      };
+
+      countEl.textContent = `${total} ${labelMap[status] || "agendamentos"}`;
+
+      if (term) {
+        hintEl.textContent = `Mostrando resultados para "${term}".`;
+        return;
+      }
+
+      if (status === "failed") {
+        hintEl.textContent = "Falhas mostram o último erro e um atalho para nova tentativa.";
+      } else if (status === "sent") {
+        hintEl.textContent = "Use reenviar para subir uma nova cópia no formulário sem sair da página.";
+      } else if (status === "pending") {
+        hintEl.textContent = "Pendentes podem ser editados ou cancelados diretamente na lista.";
+      } else {
+        hintEl.textContent = "Use os chips para focar em pendentes, enviados ou falhas.";
+      }
+    }
+
+    function renderScheduleCard(row) {
+      const entries = readScheduleEntries(row);
+      const statusMeta = getStatusMeta(row.status);
+      const primaryLabel = getSchedulePrimaryLabel(entries);
+      const subtitle = row.last_log_sent_at
+        ? `Última execução em ${escapeHtml(formatarData(row.last_log_sent_at))}`
+        : `Programado para ${escapeHtml(formatarData(row.send_at))}`;
+      const messageText = row.message
+        ? escapeHtml(truncate(row.message, 180))
+        : `<i>${escapeHtml(row.filename ? `Arquivo: ${row.filename}` : "(arquivo)")}</i>`;
+      const errorHtml = row.last_error
+        ? `<div class="schedule-error-inline"><i class="fa-solid fa-triangle-exclamation"></i>${escapeHtml(
+            truncate(row.last_error, 160)
+          )}</div>`
+        : "";
+
+      return `
+        <article class="schedule-card status-${statusMeta.tone}">
+          <div class="schedule-card-main">
+            <span class="schedule-dot ${statusMeta.tone}"></span>
+            <div class="schedule-copy">
+              <div class="schedule-topline">
+                <strong class="schedule-title">${escapeHtml(primaryLabel)}</strong>
+                <span class="schedule-status-badge ${statusMeta.tone}">${escapeHtml(statusMeta.label)}</span>
+              </div>
+              <div class="schedule-subline">${subtitle}</div>
+              <div class="schedule-message">${messageText}</div>
+              <div class="schedule-meta-row">
+                ${buildScheduleMetaPills(row, entries)}
+              </div>
+              ${errorHtml}
+            </div>
+          </div>
+
+          <div class="schedule-actions">
+            ${buildScheduleActions(row)}
+          </div>
+        </article>
+      `;
+    }
+
+    function renderEmptySchedules(status, term) {
+      const title = term
+        ? "Nenhum resultado encontrado"
+        : status === "failed"
+          ? "Nenhuma falha por aqui"
+          : status === "sent"
+            ? "Nenhum envio encontrado"
+            : status === "pending"
+              ? "Nenhum pendente encontrado"
+              : "Nenhum agendamento criado";
+      const description = term
+        ? "Ajuste a busca ou limpe os filtros para ver outros resultados."
+        : "Assim que você criar ou processar agendamentos, eles aparecerão aqui com status e ações rápidas.";
+
+      return `
+        <div class="empty-schedule-state">
+          <strong>${escapeHtml(title)}</strong>
+          <span>${escapeHtml(description)}</span>
+        </div>
+      `;
+    }
+
+    function normalizeScheduleStatus(status) {
+      const normalized = String(status || "").toLowerCase();
+      if (["pending", "processing", "sent", "failed"].includes(normalized)) {
+        return normalized;
+      }
+      return "sent";
+    }
+
+    function getCountsFromRows(rows = []) {
+      const counts = {
+        all: 0,
+        pending: 0,
+        processing: 0,
+        sent: 0,
+        failed: 0,
+      };
+
+      rows.forEach((row) => {
+        const key = normalizeScheduleStatus(row?.status);
+        counts[key] += 1;
+        counts.all += 1;
+      });
+
+      return counts;
+    }
+
+    function searchMatchesRow(row, term) {
+      if (!term) return true;
+      const lowered = String(term || "").trim().toLowerCase();
+      if (!lowered) return true;
+
+      const entries = readScheduleEntries(row);
+      const primaryLabel = getSchedulePrimaryLabel(entries).toLowerCase();
+      const numbersRaw = Array.isArray(entries)
+        ? entries
+            .map((entry) => {
+              if (typeof entry === "object") {
+                return `${entry.number || ""} ${JSON.stringify(entry.vars || {})}`;
+              }
+              return String(entry || "");
+            })
+            .join(" ")
+        : "";
+      const haystack = [
+        row?.message || "",
+        row?.filename || "",
+        row?.numbers || "",
+        primaryLabel,
+        numbersRaw,
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(lowered);
+    }
+
+    function getRowsForDate(dateKey) {
+      return agRows
+        .filter((row) => getLocalDateParts(row.send_at).key === dateKey)
+        .sort((a, b) => Number(a.send_at || 0) - Number(b.send_at || 0));
+    }
+
+    function getFilteredDayRows(dateKey) {
+      const status = document.getElementById("statusFilter")?.value || "all";
+      const term = (document.getElementById("searchTerm")?.value || "").trim();
+
+      return getRowsForDate(dateKey).filter((row) => {
+        if (status !== "all" && normalizeScheduleStatus(row.status) !== status) {
+          return false;
+        }
+        return searchMatchesRow(row, term);
+      });
+    }
+
+    function getCalendarDayTone(rows) {
+      if (!rows.length) return "";
+      const statuses = rows.map((row) => normalizeScheduleStatus(row.status));
+      if (statuses.includes("failed")) return "has-event-warn";
+      if (statuses.includes("pending") || statuses.includes("processing")) return "has-event";
+      return "has-event-sent";
+    }
+
+    function buildRowsByDateMap(rows = []) {
+      const map = new Map();
+      rows.forEach((row) => {
+        const key = getLocalDateParts(row.send_at).key;
+        if (!map.has(key)) {
+          map.set(key, []);
+        }
+        map.get(key).push(row);
+      });
+      return map;
+    }
+
+    function buildAgendaSnapshot(rows = []) {
+      return JSON.stringify(
+        rows.map((row) => ({
+          id: Number(row?.id || 0),
+          sendAt: Number(row?.send_at || 0),
+          status: normalizeScheduleStatus(row?.status),
+          message: row?.message || "",
+          filename: row?.filename || "",
+          numbers: row?.numbers || "",
+          recurrence: row?.recurrence || "none",
+          recurrenceEndAt: Number(row?.recurrence_end_at || 0),
+          lastLogSentAt: Number(row?.last_log_sent_at || 0),
+          lastLogSuccessCount: Number(row?.last_log_success_count || 0),
+          lastLogFailureCount: Number(row?.last_log_failure_count || 0),
+          lastError: row?.last_error || "",
+          updatedAt: Number(row?.updated_at || 0),
+        }))
+      );
+    }
+
+    function buildAgendaRenderStateKey(year, month, dateKey) {
+      return `${Number(year || 0)}:${Number(month || 0)}:${String(dateKey || "")}`;
+    }
+
+    function syncAgendaRenderState() {
+      lastAgendaRenderStateKey = buildAgendaRenderStateKey(calendarViewYear, calendarViewMonth, selectedDateKey);
+    }
+
+    function ensureSelectedDateForView(preferredDate = "") {
+      const prefix = `${calendarViewYear}-${pad2(calendarViewMonth + 1)}-`;
+      const todayKey = getTodayDateKey();
+
+      if (preferredDate && preferredDate.startsWith(prefix)) {
+        selectedDateKey = preferredDate;
+        return;
+      }
+
+      if (selectedDateKey && selectedDateKey.startsWith(prefix)) {
+        return;
+      }
+
+      if (todayKey.startsWith(prefix)) {
+        selectedDateKey = todayKey;
+        return;
+      }
+
+      const firstEvent = agRows[0];
+      if (firstEvent) {
+        selectedDateKey = getLocalDateParts(firstEvent.send_at).key;
+        return;
+      }
+
+      selectedDateKey = buildDateKey(calendarViewYear, calendarViewMonth, 1);
+    }
+
+    function renderCalendar(year, month) {
+      calendarViewYear = year;
+      calendarViewMonth = month;
+
+      const grid = document.getElementById("calendarGrid");
+      const label = document.getElementById("calendarMonthLabel");
+      if (!grid || !label) return;
+
+      label.textContent = formatMonthLabel(year, month);
+
+      const rowsByDate = buildRowsByDateMap(agRows);
+      const weekHeaders = ["D", "S", "T", "Q", "Q", "S", "S"];
+      const firstDay = new Date(Date.UTC(year, month, 1));
+      const firstWeekday = firstDay.getUTCDay();
+      const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+      const daysInPrevMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+      const cells = [];
+
+      for (let offset = firstWeekday - 1; offset >= 0; offset--) {
+        const day = daysInPrevMonth - offset;
+        const date = new Date(Date.UTC(year, month - 1, day));
+        cells.push({
+          year: date.getUTCFullYear(),
+          month: date.getUTCMonth(),
+          day,
+          muted: true,
+        });
+      }
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        cells.push({ year, month, day, muted: false });
+      }
+
+      while (cells.length % 7 !== 0) {
+        const nextIndex = cells.length - daysInMonth - firstWeekday + 1;
+        const date = new Date(Date.UTC(year, month + 1, nextIndex));
+        cells.push({
+          year: date.getUTCFullYear(),
+          month: date.getUTCMonth(),
+          day: date.getUTCDate(),
+          muted: true,
+        });
+      }
+
+      const todayKey = getTodayDateKey();
+
+      grid.innerHTML = `
+        ${weekHeaders.map((item) => `<div class="cal-hd">${item}</div>`).join("")}
+        ${cells
+          .map((cell) => {
+            const dateKey = buildDateKey(cell.year, cell.month, cell.day);
+            const rows = rowsByDate.get(dateKey) || [];
+            const toneClass = getCalendarDayTone(rows);
+            const classes = ["cal-day"];
+            if (cell.muted) classes.push("muted");
+            if (dateKey === todayKey) classes.push("today");
+            if (dateKey === selectedDateKey) classes.push("selected");
+            if (toneClass) classes.push(toneClass);
+
+            return `
+              <button
+                type="button"
+                class="${classes.join(" ")}"
+                data-date="${dateKey}"
+                data-muted="${cell.muted ? "1" : "0"}"
+              >
+                <span class="cal-day-number">${cell.day}</span>
+                ${rows.length ? `<span class="cal-count">${rows.length}</span>` : ""}
+              </button>
+            `;
+          })
+          .join("")}
+      `;
+    }
+
+    function renderSelectedDay() {
+      const list = document.getElementById("agendDayList");
+      const header = document.getElementById("agendDayHeader");
+      const copy = document.getElementById("agendDayCopy");
+      const countEl = document.getElementById("agSummaryCount");
+      const hintEl = document.getElementById("agSummaryHint");
+
+      renderStatusCounts(getCountsFromRows(agRows));
+      syncStatusChipUI();
+
+      if (!list || !header || !copy || !countEl || !hintEl) return;
+
+      if (!selectedDateKey) {
+        header.textContent = "Selecione um dia";
+        copy.textContent =
+          "O calendário destaca a carga de mensagens por data para você agir sem rolar uma lista inteira.";
+        countEl.textContent = "Selecione um dia no calendário";
+        hintEl.textContent = "Clique em um dia para abrir somente os agendamentos daquela data.";
+        list.innerHTML = `
+          <div class="empty-schedule-state">
+            <strong>Selecione um dia</strong>
+            <span>Os itens daquele dia aparecem aqui com ações rápidas de editar, cancelar ou reenviar.</span>
+          </div>
+        `;
+        return;
+      }
+
+      const allDayRows = getRowsForDate(selectedDateKey);
+      const filteredRows = getFilteredDayRows(selectedDateKey);
+      const status = document.getElementById("statusFilter")?.value || "all";
+      const term = (document.getElementById("searchTerm")?.value || "").trim();
+      const counts = getCountsFromRows(allDayRows);
+      const statusMessages = [];
+
+      if (counts.pending) statusMessages.push(`${counts.pending} pendente(s)`);
+      if (counts.processing) statusMessages.push(`${counts.processing} em envio`);
+      if (counts.failed) statusMessages.push(`${counts.failed} falha(s)`);
+      if (!statusMessages.length && counts.sent) statusMessages.push(`${counts.sent} enviado(s)`);
+
+      header.textContent = `${formatDayHeaderLabel(selectedDateKey)} — ${allDayRows.length} agendamento(s)`;
+      copy.textContent = statusMessages.length
+        ? `Distribuição do dia: ${statusMessages.join(" • ")}.`
+        : "Nenhum agendamento carregado para este dia ainda.";
+
+      countEl.textContent =
+        filteredRows.length === allDayRows.length
+          ? `${allDayRows.length} agendamento(s) neste dia`
+          : `${filteredRows.length} de ${allDayRows.length} agendamento(s) visíveis`;
+
+      if (term) {
+        hintEl.textContent = `Filtro aplicado para "${term}".`;
+      } else if (status !== "all") {
+        const labels = {
+          pending: "Mostrando só pendentes do dia selecionado.",
+          processing: "Mostrando apenas itens em envio.",
+          sent: "Mostrando somente enviados deste dia.",
+          failed: "Mostrando somente falhas deste dia.",
+        };
+        hintEl.textContent = labels[status] || "Filtrando a agenda do dia.";
+      } else {
+        hintEl.textContent = "Clique em outro dia para alternar a agenda e encontrar datas sobrecarregadas.";
+      }
+
+      if (!filteredRows.length) {
+        list.innerHTML = `
+          <div class="empty-schedule-state">
+            <strong>${term || status !== "all" ? "Nenhum item com esse filtro" : "Dia sem agendamentos"}</strong>
+            <span>${term || status !== "all"
+              ? "Limpe a busca ou troque o status para voltar a ver a agenda completa deste dia."
+              : "Use o botão de novo agendamento para reservar horários nesta data."}</span>
+          </div>
+        `;
+        return;
+      }
+
+      list.innerHTML = filteredRows.map(renderScheduleCard).join("");
+      iniciarCountdowns();
+    }
+
+    function showDayAgendamentos(date) {
+      selectedDateKey = date;
+      renderCalendar(calendarViewYear, calendarViewMonth);
+      renderSelectedDay();
+      syncAgendaRenderState();
+    }
+
+    async function fetchMonthSchedules(year, month) {
+      const { fromTs, toTs } = getMonthRangeUtc(year, month);
+      const rows = [];
+      let page = 1;
+      let totalPages = 1;
+
+      do {
+        const qs = new URLSearchParams({
+          status: "all",
+          term: "",
+          page: String(page),
+          pageSize: "100",
+          orderBy: "send_at",
+          orderDir: "asc",
+          from: String(fromTs),
+          to: String(toTs),
+        });
+
+        const res = await fetch(`/api/agendamentos/list?${qs.toString()}`);
+        if (!res.ok) {
+          throw new Error("Falha ao carregar agendamentos do mês.");
+        }
+
+        const payload = await res.json();
+        const batch = Array.isArray(payload?.rows) ? payload.rows : [];
+        rows.push(...batch);
+        totalPages = Math.max(1, Number(payload?.totalPages) || 1);
+        page += 1;
+      } while (page <= totalPages);
+
+      return rows;
     }
 
     // ── Listar ─────────────────────────────────────────────────────
-    async function carregarAgendamentos() {
-      const tabela = document.getElementById("agendamentosTable");
-      tabela.innerHTML = `<tr><td colspan="6" class="loading">Carregando...</td></tr>`;
+    async function carregarAgendamentos(options = {}) {
+      const grid = document.getElementById("calendarGrid");
+      const list = document.getElementById("agendDayList");
+      const silentRefresh = options.silent === true;
+
+      if (!silentRefresh && grid) {
+        grid.innerHTML = `<div class="loading-card">Carregando calendário...</div>`;
+      }
+      if (!silentRefresh && list) {
+        list.innerHTML = `<div class="loading-card">Carregando agendamentos...</div>`;
+      }
 
       try {
-        const status = document.getElementById("statusFilter")?.value || "all";
-        const term = (document.getElementById("searchTerm")?.value || "").trim();
-        const pageSize = Number(document.getElementById("pageSize")?.value || 10);
-        const orderRaw = document.getElementById("orderBy")?.value || "send_at|desc";
-        const [orderBy, orderDir] = orderRaw.split("|");
-        const fromStr = document.getElementById("dateFrom")?.value;
-        const toStr = document.getElementById("dateTo")?.value;
-        const fromTs = fromStr ? new Date(fromStr + "T00:00:00").getTime() : "";
-        const toTs = toStr ? new Date(toStr + "T23:59:59").getTime() : "";
-
-        const qs = new URLSearchParams({
-          status,
-          term,
-          page: String(agPage),
-          pageSize: String(pageSize),
-          orderBy,
-          orderDir,
-        });
-        if (fromTs) qs.set("from", String(fromTs));
-        if (toTs) qs.set("to", String(toTs));
-
-        const res = await fetch(`/api/agendamentos/list?${qs.toString()}`);
-        const payload = await res.json();
-        const rows = Array.isArray(payload.rows) ? payload.rows : [];
-        agPage = Number(payload.page) || 1;
-        agTotalPages = Number(payload.totalPages) || 1;
-        updatePaginationUI();
-
-        agRows = rows;
-
-        if (!rows.length) {
-          tabela.innerHTML = `<tr><td colspan="6" class="loading">Nenhum agendamento encontrado</td></tr>`;
-          return;
+        if (!calendarViewYear && !calendarViewMonth) {
+          const nowParts = getLocalDateParts(Date.now());
+          calendarViewYear = nowParts.year;
+          calendarViewMonth = nowParts.month;
         }
 
-        tabela.innerHTML = "";
+        const nextRows = await fetchMonthSchedules(calendarViewYear, calendarViewMonth);
+        nextRows.sort((a, b) => Number(a.send_at || 0) - Number(b.send_at || 0));
+        agRows = nextRows;
+        ensureSelectedDateForView(options.selectedDate || "");
 
-        rows.forEach(row => {
-          const nums = JSON.parse(row.numbers || "[]");
-          const hasPersonalized = Array.isArray(nums) && nums.length && typeof nums[0] === "object";
-          const numsDisplay = hasPersonalized
-            ? nums.map((c) => `${formatPhoneDisplay(c.number || "")} <span class="pill-personalized">msg personalizada</span>`).join("<br>")
-            : nums.map((n) => formatPhoneDisplay(n)).join("<br>");
-          const recurrenceHtml = recurrenceBadge(row.recurrence);
-          const isPending = row.status === "pending";
-          const actionButtons = isPending
-            ? `<button class="btn-edit" onclick="editar(${row.id})">
-                 <i class="fa-solid fa-pen"></i> Editar
-               </button>
-               <button class="btn-secondary" onclick="duplicar(${row.id})">
-                 <i class="fa-solid fa-copy"></i> Duplicar
-               </button>
-               <button class="btn-del" onclick="excluir(${row.id})">
-                 <i class="fa-solid fa-trash"></i>
-                 Excluir
-               </button>`
-            : `<button class="btn-secondary" onclick="verDetalhes(${row.id})">
-                 <i class="fa-solid fa-list"></i>
-                 Detalhes
-               </button>
-               <button class="btn-del" onclick="excluir(${row.id})">
-                 <i class="fa-solid fa-trash"></i>
-                 Excluir
-               </button>`;
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${numsDisplay}</td>
-            <td>${row.message || "<i>(arquivo)</i>"}</td>
-            <td>
-              ${formatarData(row.send_at)}
-              ${recurrenceHtml}
-            </td>
-            <td>
-              <span class="countdown" data-send="${row.send_at}" data-status="${row.status}">
-                ${isPending ? formatarCountdown(row.send_at) : "-"}
-              </span>
-            </td>
-            <td class="status ${row.status}">
-              ${formatStatusLabel(row.status)}
-            </td>
-            <td class="action-cell">
-              ${actionButtons}
-            </td>
-          `;
-          tabela.appendChild(tr);
-        });
+        const nextSnapshot = buildAgendaSnapshot(agRows);
+        const nextRenderStateKey = buildAgendaRenderStateKey(calendarViewYear, calendarViewMonth, selectedDateKey);
+        const shouldRender =
+          !silentRefresh ||
+          nextSnapshot !== lastAgendaSnapshot ||
+          nextRenderStateKey !== lastAgendaRenderStateKey;
 
-        iniciarCountdowns();
+        // Background refresh keeps the current UI mounted to avoid a visible blink every 10 seconds.
+        if (shouldRender) {
+          renderCalendar(calendarViewYear, calendarViewMonth);
+          renderSelectedDay();
+          syncAgendaRenderState();
+        }
 
-      } catch {
-        tabela.innerHTML = `<tr><td colspan="6" class="error">Erro ao carregar</td></tr>`;
+        lastAgendaSnapshot = nextSnapshot;
+      } catch (err) {
+        if (silentRefresh) {
+          return;
+        }
+        if (grid) {
+          grid.innerHTML = `<div class="empty-schedule-state"><strong>Erro ao carregar</strong><span>Tente novamente em alguns instantes.</span></div>`;
+        }
+        if (list) {
+          list.innerHTML = `<div class="empty-schedule-state"><strong>Erro ao carregar</strong><span>Tente novamente em alguns instantes.</span></div>`;
+        }
       }
     }
 
     function resetPageAndLoad() {
-      agPage = 1;
-      carregarAgendamentos();
+      syncStatusChipUI();
+      renderSelectedDay();
     }
 
-    function changePage(delta) {
-      const next = Math.min(Math.max(1, agPage + delta), agTotalPages);
-      if (next === agPage) return;
-      agPage = next;
-      carregarAgendamentos();
+    function changePage() {
+      renderSelectedDay();
     }
 
-    function updatePaginationUI() {
-      const info = document.getElementById("pageInfo");
-      if (info) info.textContent = `Página ${agPage}/${agTotalPages}`;
-      const prev = document.getElementById("prevPage");
-      const next = document.getElementById("nextPage");
-      if (prev) prev.disabled = agPage <= 1;
-      if (next) next.disabled = agPage >= agTotalPages;
-    }
+    function updatePaginationUI() {}
 
     function formatarData(ts) {
       const offset = getTimezoneOffsetSelected();
@@ -1244,17 +2057,6 @@
       </div>`;
     }
 
-    function formatStatusLabel(status) {
-      switch (status) {
-        case "pending":
-          return "⏳ Pendente";
-        case "failed":
-          return "❌ Falhou";
-        default:
-          return "✅ Enviado";
-      }
-    }
-
     async function verDetalhes(id) {
       const modal = document.getElementById("detailsModal");
       const body = document.getElementById("detailsBody");
@@ -1311,8 +2113,71 @@
     const tzSel = document.getElementById("timezoneSelect");
     if (tzSel) tzSel.value = String(USER_TZ);
     toggleRecurrenceEnd();
-    carregarAgendamentos();
-    setInterval(carregarAgendamentos, 10000);
+    syncStatusChipUI();
+
+    const todayParts = getLocalDateParts(Date.now());
+    calendarViewYear = todayParts.year;
+    calendarViewMonth = todayParts.month;
+    selectedDateKey = todayParts.key;
+
+    document.getElementById("btnNovoAgend")?.addEventListener("click", () => {
+      prepareNewSchedule(selectedDateKey);
+    });
+    document.getElementById("btnCloseAgendModal")?.addEventListener("click", closeScheduleFormModal);
+    document.getElementById("scheduleFormModal")?.addEventListener("click", (event) => {
+      if (event.target?.id === "scheduleFormModal") {
+        closeScheduleFormModal();
+      }
+    });
+
+    const goToTodayInCalendar = () => {
+      const todayKey = getTodayDateKey();
+      const parts = parseDateKey(todayKey);
+      if (!parts) return;
+      calendarViewYear = parts.year;
+      calendarViewMonth = parts.month;
+      selectedDateKey = todayKey;
+      carregarAgendamentos({ selectedDate: todayKey });
+    };
+
+    document.getElementById("btnCalendarToday")?.addEventListener("click", goToTodayInCalendar);
+    document.getElementById("btnDayToday")?.addEventListener("click", goToTodayInCalendar);
+
+    document.getElementById("btnCalendarPrev")?.addEventListener("click", () => {
+      const next = new Date(Date.UTC(calendarViewYear, calendarViewMonth - 1, 1));
+      calendarViewYear = next.getUTCFullYear();
+      calendarViewMonth = next.getUTCMonth();
+      carregarAgendamentos();
+    });
+
+    document.getElementById("btnCalendarNext")?.addEventListener("click", () => {
+      const next = new Date(Date.UTC(calendarViewYear, calendarViewMonth + 1, 1));
+      calendarViewYear = next.getUTCFullYear();
+      calendarViewMonth = next.getUTCMonth();
+      carregarAgendamentos();
+    });
+
+    document.getElementById("calendarGrid")?.addEventListener("click", (event) => {
+      const trigger = event.target.closest("[data-date]");
+      if (!trigger) return;
+
+      const dateKey = String(trigger.getAttribute("data-date") || "");
+      const parts = parseDateKey(dateKey);
+      if (!parts) return;
+
+      if (trigger.getAttribute("data-muted") === "1") {
+        calendarViewYear = parts.year;
+        calendarViewMonth = parts.month;
+        selectedDateKey = dateKey;
+        carregarAgendamentos({ selectedDate: dateKey });
+        return;
+      }
+
+      showDayAgendamentos(dateKey);
+    });
+
+    carregarAgendamentos({ selectedDate: selectedDateKey });
+    setInterval(() => carregarAgendamentos({ selectedDate: selectedDateKey, silent: true }), 10000);
   </script>
 
 </body>

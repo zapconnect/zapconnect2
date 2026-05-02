@@ -24,19 +24,7 @@
     refreshBtn: document.getElementById("refresh-btn"),
     exportBtn: document.getElementById("export-btn"),
     upgradeBanner: document.getElementById("upgrade-banner"),
-    planName: document.getElementById("plan-name"),
-    historyCapPill: document.getElementById("history-cap-pill"),
-    pdfCapPill: document.getElementById("pdf-cap-pill"),
-    heroSelectedDate: document.getElementById("hero-selected-date"),
-    heroSelectedWindow: document.getElementById("hero-selected-window"),
-    heroReportCount: document.getElementById("hero-report-count"),
-    heroReportFoot: document.getElementById("hero-report-foot"),
-    heroPlanAccess: document.getElementById("hero-plan-access"),
-    heroPlanFoot: document.getElementById("hero-plan-foot"),
-    metaWindow: document.getElementById("meta-window"),
-    metaMessages: document.getElementById("meta-messages"),
-    metaModel: document.getElementById("meta-model"),
-    metaGeneratedAt: document.getElementById("meta-generated-at"),
+    insightsStrip: document.getElementById("insightsStrip"),
     historyList: document.getElementById("history-list"),
     summaryText: document.getElementById("summary-text"),
     reportDateBadge: document.getElementById("report-date-badge"),
@@ -96,6 +84,52 @@
     tooltipBg: "rgba(10, 15, 28, 0.96)",
   };
 
+  const insightStopwords = new Set([
+    "como",
+    "para",
+    "com",
+    "sem",
+    "mais",
+    "essa",
+    "esse",
+    "isso",
+    "pela",
+    "pelas",
+    "pelo",
+    "pelos",
+    "qual",
+    "quais",
+    "onde",
+    "quando",
+    "sobre",
+    "entre",
+    "posso",
+    "pode",
+    "podem",
+    "quero",
+    "quero",
+    "tenho",
+    "meu",
+    "minha",
+    "seu",
+    "sua",
+    "das",
+    "dos",
+    "das",
+    "nos",
+    "nas",
+    "uma",
+    "umas",
+    "uns",
+    "que",
+    "ser",
+    "tem",
+    "vou",
+    "por",
+    "pra",
+    "pro",
+  ]);
+
   function escapeHtml(value) {
     return String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -120,6 +154,16 @@
   function formatPercentage(value) {
     const numeric = Number(value);
     return `${Math.round(Number.isFinite(numeric) ? numeric : 0)}%`;
+  }
+
+  function clipText(value, maxLength = 140) {
+    const text = String(value ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!text) return "";
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength - 1).trimEnd()}…`;
   }
 
   function showMessage(type, message) {
@@ -220,6 +264,28 @@
     return `${formatter.format(start)} at\u00e9 ${formatter.format(end)}`;
   }
 
+  function normalizeInsightToken(value) {
+    return String(value ?? "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  }
+
+  function tokenizeInsightText(value) {
+    return String(value ?? "")
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .map((token) => token.trim())
+      .filter((token) => {
+        const normalized = normalizeInsightToken(token);
+        return (
+          normalized.length >= 4 &&
+          !insightStopwords.has(normalized) &&
+          !/^\d+$/.test(normalized)
+        );
+      });
+  }
+
   function normalizePriority(priority) {
     if (priority === "high" || priority === "medium" || priority === "low") {
       return priority;
@@ -236,12 +302,6 @@
       default:
         return "M\u00c9DIA";
     }
-  }
-
-  function buildPlanFoot() {
-    return access.canExportPdf
-      ? `PDF liberado e hist\u00f3rico de at\u00e9 ${access.maxHistoryDays} dias.`
-      : `PDF bloqueado e hist\u00f3rico de ${access.maxHistoryDays} dias.`;
   }
 
   function buildLimitState(source) {
@@ -296,39 +356,19 @@
   }
 
   function renderPlanCapabilities() {
-    const planLabel = String(access.plan || "free").toUpperCase();
-
-    refs.planName.textContent = planLabel;
-    refs.heroPlanAccess.textContent = planLabel;
-    refs.heroPlanFoot.textContent = buildPlanFoot();
-
-    refs.historyCapPill.textContent = access.fullHistoryEnabled
-      ? `Hist\u00f3rico ${access.maxHistoryDays}d`
-      : `${access.maxHistoryDays} dias de hist\u00f3rico`;
-    refs.historyCapPill.classList.toggle("is-active", Boolean(access.fullHistoryEnabled));
-    refs.historyCapPill.classList.toggle("is-locked", !access.fullHistoryEnabled);
-
-    refs.pdfCapPill.textContent = access.canExportPdf
-      ? "PDF liberado"
-      : "PDF bloqueado";
-    refs.pdfCapPill.classList.toggle("is-active", Boolean(access.canExportPdf));
-    refs.pdfCapPill.classList.toggle("is-locked", !access.canExportPdf);
-
     refs.exportBtn.classList.toggle("is-locked", !access.canExportPdf);
-  }
-
-  function renderHero(report) {
-    refs.heroSelectedDate.textContent = report
-      ? formatDateLabel(report.reportDate)
-      : "Sem relat\u00f3rio";
-    refs.heroSelectedWindow.textContent = report
-      ? formatWindowRange(report)
-      : "\u00daltimas 24h";
-
-    refs.heroReportCount.textContent = formatCompactNumber(state.reports.length);
-    refs.heroReportFoot.textContent = state.reports.length
-      ? `${formatCountLabel(state.reports.length, "relat\u00f3rio", "relat\u00f3rios")} nos \u00faltimos ${state.days} dias`
-      : `Nenhum relat\u00f3rio nos \u00faltimos ${state.days} dias`;
+    refs.exportBtn.setAttribute(
+      "title",
+      access.canExportPdf
+        ? "Exportar relat\u00f3rio em PDF"
+        : "Dispon\u00edvel apenas no plano Pro"
+    );
+    refs.daysSelect.setAttribute(
+      "title",
+      access.fullHistoryEnabled
+        ? `Hist\u00f3rico dispon\u00edvel: at\u00e9 ${access.maxHistoryDays} dias`
+        : `Seu plano mostra at\u00e9 ${access.maxHistoryDays} dias de hist\u00f3rico.`
+    );
   }
 
   function renderNotes(report) {
@@ -571,22 +611,177 @@
       : "Sem pico detectado";
   }
 
-  function renderMeta(report) {
-    const source = report?.data?.source || {};
-    const generatedAt = report?.data?.generatedAt || report?.updatedAt || null;
+  function extractTopUnansweredTheme(report) {
+    const items = report?.data?.unansweredQuestions || [];
+    if (!items.length) return null;
 
-    refs.metaWindow.textContent = formatWindowRange(report);
-    refs.metaMessages.textContent = formatCountLabel(
-      source.estimatedMessages || 0,
-      "mensagem",
-      "mensagens"
-    );
-    refs.metaModel.textContent = source.fallbackUsed
-      ? "Fallback local"
-      : report?.data?.model || "Heur\u00edsticas locais";
-    refs.metaGeneratedAt.textContent = generatedAt
-      ? formatDateTimeLabel(generatedAt)
-      : "--";
+    const tokenWeights = new Map();
+    const tokenLabels = new Map();
+    let topQuestion = null;
+    let totalOccurrences = 0;
+
+    items.forEach((item) => {
+      const occurrences = Math.max(1, Number(item?.occurrences) || 0);
+      const questionText = String(item?.question || "").trim();
+      totalOccurrences += occurrences;
+
+      if (!topQuestion || occurrences > topQuestion.occurrences) {
+        topQuestion = {
+          question: questionText,
+          occurrences,
+        };
+      }
+
+      const seenTokens = new Set();
+
+      tokenizeInsightText(questionText).forEach((token) => {
+        const normalized = normalizeInsightToken(token);
+        if (!normalized || seenTokens.has(normalized)) return;
+
+        seenTokens.add(normalized);
+        tokenWeights.set(normalized, (tokenWeights.get(normalized) || 0) + occurrences);
+        if (!tokenLabels.has(normalized)) {
+          tokenLabels.set(normalized, token);
+        }
+      });
+    });
+
+    let winningToken = null;
+    let winningWeight = 0;
+
+    tokenWeights.forEach((weight, normalized) => {
+      if (weight > winningWeight) {
+        winningWeight = weight;
+        winningToken = normalized;
+      }
+    });
+
+    if (winningToken) {
+      return {
+        label: tokenLabels.get(winningToken) || winningToken,
+        occurrences: winningWeight,
+        share: totalOccurrences ? Math.round((winningWeight / totalOccurrences) * 100) : 0,
+      };
+    }
+
+    if (!topQuestion) return null;
+
+    return {
+      label: clipText(topQuestion.question, 40),
+      occurrences: topQuestion.occurrences,
+      share: totalOccurrences
+        ? Math.round((topQuestion.occurrences / totalOccurrences) * 100)
+        : 0,
+    };
+  }
+
+  function buildInsights(report) {
+    if (!report?.data) return [];
+
+    const insights = [];
+    const peakHour = report.data.peakHours?.[0];
+    const unansweredTheme = extractTopUnansweredTheme(report);
+    const leadingSuggestion = report.data.promptSuggestions?.[0];
+    const satisfaction = report.data.satisfaction || {};
+    const topTheme = report.data.themes?.[0];
+
+    if (peakHour) {
+      insights.push({
+        emoji: "\ud83d\udcc8",
+        tone: "accent",
+        title: `Pico de demanda em ${peakHour.label}`,
+        text: `${formatCountLabel(
+          peakHour.count || 0,
+          "conversa ativa",
+          "conversas ativas"
+        )}. Vale refor\u00e7ar resposta r\u00e1pida e monitoramento humano nesse hor\u00e1rio.`,
+      });
+    }
+
+    if (unansweredTheme) {
+      insights.push({
+        emoji: "\u26a0\ufe0f",
+        tone: "warning",
+        title: `Lacuna recorrente em "${clipText(unansweredTheme.label, 24)}"`,
+        text: `${formatCountLabel(
+          unansweredTheme.occurrences,
+          "ocorr\u00eancia",
+          "ocorr\u00eancias"
+        )} e cerca de ${unansweredTheme.share}% das perguntas sem resposta. Atualize o prompt com orienta\u00e7\u00e3o objetiva para esse tema.`,
+      });
+    }
+
+    if (leadingSuggestion?.suggestion) {
+      const priority = normalizePriority(leadingSuggestion.priority);
+
+      insights.push({
+        emoji:
+          priority === "high"
+            ? "\ud83d\udee0\ufe0f"
+            : priority === "low"
+              ? "\u2705"
+              : "\ud83d\udca1",
+        tone:
+          priority === "high"
+            ? "warning"
+            : priority === "low"
+              ? "positive"
+              : "accent",
+        title: leadingSuggestion.title || "Pr\u00f3ximo ajuste recomendado",
+        text: clipText(leadingSuggestion.suggestion, 150),
+      });
+    } else if (typeof satisfaction.score === "number" && satisfaction.score > 0) {
+      const underPressure = satisfaction.score < 70;
+
+      insights.push({
+        emoji: underPressure ? "\ud83e\uddef" : "\u2728",
+        tone: underPressure ? "warning" : "positive",
+        title: underPressure
+          ? "Satisfa\u00e7\u00e3o pede escalonamento mais cedo"
+          : "Clima das conversas segue est\u00e1vel",
+        text: underPressure
+          ? `A satisfa\u00e7\u00e3o estimada fechou em ${Math.round(
+              satisfaction.score
+            )}%. Vale antecipar a transfer\u00eancia para humano em sinais de frustra\u00e7\u00e3o ou repeti\u00e7\u00e3o.`
+          : `A satisfa\u00e7\u00e3o estimada est\u00e1 em ${Math.round(
+              satisfaction.score
+            )}%. Continue alimentando o prompt com exemplos reais para sustentar esse padr\u00e3o.`,
+      });
+    } else if (topTheme?.topic) {
+      insights.push({
+        emoji: "\ud83c\udfaf",
+        tone: "positive",
+        title: `Tema dominante: ${clipText(topTheme.topic, 32)}`,
+        text: `Esse assunto liderou o per\u00edodo. Reforce respostas-padr\u00e3o e exemplos pr\u00e1ticos no prompt para reduzir improviso do bot.`,
+      });
+    }
+
+    return insights.slice(0, 3);
+  }
+
+  function renderInsights(report) {
+    const insights = buildInsights(report);
+
+    if (!insights.length) {
+      refs.insightsStrip.innerHTML = createEmptyState(
+        "Assim que houver relat\u00f3rios consistentes, os principais alertas e oportunidades aparecem aqui no topo."
+      );
+      return;
+    }
+
+    refs.insightsStrip.innerHTML = insights
+      .map(
+        (item) => `
+          <article class="insight-chip insight-${escapeHtml(item.tone || "accent")}">
+            <span class="insight-icon" aria-hidden="true">${escapeHtml(item.emoji || "\ud83d\udca1")}</span>
+            <div class="insight-copy">
+              <strong>${escapeHtml(item.title || "Insight")}</strong>
+              <p>${escapeHtml(item.text || "")}</p>
+            </div>
+          </article>
+        `
+      )
+      .join("");
   }
 
   function renderHealth(report) {
@@ -840,7 +1035,7 @@
 
   function setEmptyContent(message) {
     renderPlanCapabilities();
-    renderHero(null);
+    renderInsights(null);
 
     refs.summaryText.textContent = message;
     refs.reportDateBadge.textContent = "Sem relat\u00f3rio";
@@ -863,11 +1058,6 @@
     refs.suggestionsList.innerHTML = createEmptyState(
       "As sugest\u00f5es aparecer\u00e3o aqui quando houver dados suficientes."
     );
-
-    refs.metaWindow.textContent = "\u00daltimas 24h";
-    refs.metaMessages.textContent = "0 mensagens";
-    refs.metaModel.textContent = "Aguardando";
-    refs.metaGeneratedAt.textContent = "--";
 
     refs.healthConversations.textContent = "0 conversas";
     refs.healthMessages.textContent = "0 mensagens estimadas";
@@ -923,11 +1113,10 @@
       return;
     }
 
-    renderHero(report);
+    renderStats(report);
+    renderInsights(report);
     renderSummary(report);
     renderThemeList(report);
-    renderStats(report);
-    renderMeta(report);
     renderHealth(report);
     renderQuestions(report);
     renderRisks(report);

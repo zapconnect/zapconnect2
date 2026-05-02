@@ -6,7 +6,13 @@ let clients = [];
 let selectedClient = null;
 let sortBy = "name"; // "name" | "last_seen" | "follow_up" | "value"
 let sortDir = "asc"; // "asc" | "desc"
-let activeTag = null; // tag clicada para filtrar
+let activeFilters = {
+    text: "",
+    stages: [],
+    tags: [],
+    minValue: 0,
+    hasFollowUp: false,
+};
 
 let modalTags = [];
 let modalNotes = [];
@@ -18,6 +24,15 @@ const PAGE_SIZE = 100;
 const PHONE_BR_PREFIX = getConfiguredDefaultDdi();
 const PHONE_BR_MIN_LENGTH = PHONE_BR_PREFIX.length + 10;
 const PHONE_BR_MAX_LENGTH = PHONE_BR_PREFIX.length + 11;
+const CRM_STAGE_ORDER = ["Novo", "Qualificando", "Negociação", "Fechado", "Perdido"];
+const CRM_STAGE_SHORT_LABELS = {
+    Novo: "Novo",
+    Qualificando: "Qualif.",
+    "Negociação": "Negociar",
+    Fechado: "Fechar",
+    Perdido: "Perdido",
+};
+let activeQuickPanel = { clientId: null, type: null };
 
 // ------------------------------------------------------
 // SOCKET.IO (atualização em tempo real)
@@ -65,6 +80,195 @@ function escapeHtml(text) {
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;")
         .replace(/'/g, "&#039;");
+}
+
+function parseJsonArray(value) {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") {
+        try {
+            const parsed = JSON.parse(value);
+            return Array.isArray(parsed) ? parsed : [];
+        } catch {
+            return [];
+        }
+    }
+    return [];
+}
+
+function stageToSlug(stage) {
+    return String(stage || "Novo")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+}
+
+function getClientById(id) {
+    return clients.find((client) => Number(client.id) === Number(id)) || null;
+}
+
+function isQuickPanelOpen(clientId, type) {
+    return Number(activeQuickPanel.clientId) === Number(clientId)
+        && activeQuickPanel.type === type;
+}
+
+function setActiveQuickPanel(clientId = null, type = null) {
+    const samePanel = Number(activeQuickPanel.clientId) === Number(clientId)
+        && activeQuickPanel.type === type;
+
+    activeQuickPanel = samePanel || !clientId
+        ? { clientId: null, type: null }
+        : { clientId: Number(clientId), type };
+
+    renderBoard();
+}
+
+function closeQuickPanel() {
+    if (!activeQuickPanel.clientId) return;
+    activeQuickPanel = { clientId: null, type: null };
+    renderBoard();
+}
+
+function getQuickStageOptions(currentStage) {
+    const stage = normalizeStage(currentStage);
+
+    if (stage === "Novo") return ["Qualificando", "Negociação", "Fechado", "Perdido"];
+    if (stage === "Qualificando") return ["Negociação", "Novo", "Fechado", "Perdido"];
+    if (stage === "Negociação") return ["Fechado", "Perdido", "Qualificando", "Novo"];
+    if (stage === "Fechado") return ["Negociação", "Qualificando", "Novo", "Perdido"];
+    if (stage === "Perdido") return ["Negociação", "Qualificando", "Novo", "Fechado"];
+
+    return CRM_STAGE_ORDER.filter((item) => item !== stage);
+}
+
+function getQuickFollowUpTimestamp(mode) {
+    if (mode === "clear") return null;
+
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+
+    if (mode === "tomorrow") {
+        date.setDate(date.getDate() + 1);
+    } else if (mode === "next7") {
+        date.setDate(date.getDate() + 7);
+    }
+
+    return date.getTime();
+}
+
+function buildClientUpdateBody(client, patch = {}) {
+    const hasOwn = (key) => Object.prototype.hasOwnProperty.call(patch, key);
+    const rawDealValue = hasOwn("deal_value") ? patch.deal_value : client?.deal_value;
+    const normalizedDealValue = rawDealValue == null || rawDealValue === ""
+        ? null
+        : (Number(rawDealValue) || 0);
+
+    return {
+        id: Number(client?.id || 0),
+        name: String(hasOwn("name") ? patch.name : client?.name || "").trim(),
+        phone: String(hasOwn("phone") ? patch.phone : client?.phone || "").replace(/\D/g, ""),
+        citystate: String(hasOwn("citystate") ? patch.citystate : client?.citystate || "").trim(),
+        stage: normalizeStage(hasOwn("stage") ? patch.stage : client?.stage),
+        tags: JSON.stringify(hasOwn("tags") ? parseJsonArray(patch.tags) : parseJsonArray(client?.tags)),
+        notes: JSON.stringify(hasOwn("notes") ? parseJsonArray(patch.notes) : parseJsonArray(client?.notes)),
+        deal_value: normalizedDealValue,
+        follow_up_date: hasOwn("follow_up_date")
+            ? patch.follow_up_date
+            : (client?.follow_up_date ? Number(client.follow_up_date) : null),
+    };
+}
+
+function patchClientInMemory(id, patch = {}) {
+    const targetId = Number(id);
+    const index = clients.findIndex((client) => Number(client.id) === targetId);
+    if (index === -1) return;
+
+    clients[index] = { ...clients[index], ...patch };
+
+    if (selectedClient && Number(selectedClient.id) === targetId) {
+        selectedClient = { ...selectedClient, ...patch };
+    }
+}
+
+function openClientEditor(id, { focusFollowUp = false } = {}) {
+    closeQuickPanel();
+    selectClient(id);
+    openClientModal();
+
+    if (focusFollowUp && modalFollowUp) {
+        setTimeout(() => {
+            modalFollowUp.scrollIntoView({ behavior: "smooth", block: "center" });
+            modalFollowUp.focus();
+            try { modalFollowUp.showPicker?.(); } catch { /* ignore */ }
+        }, 160);
+    }
+}
+
+async function quickMoveClientStage(id, stage) {
+    const client = getClientById(id);
+    if (!client) return;
+
+    const nextStage = normalizeStage(stage);
+    if (normalizeStage(client.stage) === nextStage) {
+        closeQuickPanel();
+        return;
+    }
+
+    try {
+        const res = await fetch("/api/crm/stage", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ id, stage: nextStage }),
+        });
+        const data = await res.json();
+
+        if (!res.ok || data.ok === false) {
+            throw new Error(data.error || "Erro ao atualizar estágio");
+        }
+
+        patchClientInMemory(id, { stage: nextStage });
+        activeQuickPanel = { clientId: null, type: null };
+        renderBoard();
+        notifyCrmChanged();
+        showToast(`Cliente movido para ${nextStage}.`);
+    } catch (err) {
+        console.error(err);
+        showToast(err?.message || "Erro ao atualizar estágio", "error");
+    }
+}
+
+async function quickSetFollowUp(id, mode) {
+    const client = getClientById(id);
+    if (!client) return;
+
+    const followUpDate = getQuickFollowUpTimestamp(mode);
+    const labels = {
+        today: "Follow-up agendado para hoje.",
+        tomorrow: "Follow-up agendado para amanhã.",
+        next7: "Follow-up agendado para daqui 7 dias.",
+        clear: "Follow-up removido.",
+    };
+
+    try {
+        const body = buildClientUpdateBody(client, { follow_up_date: followUpDate });
+        const res = await fetch("/api/crm/update", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json();
+
+        if (!res.ok || data.ok === false) {
+            throw new Error(data.error || "Erro ao atualizar follow-up");
+        }
+
+        patchClientInMemory(id, { follow_up_date: followUpDate });
+        activeQuickPanel = { clientId: null, type: null };
+        renderBoard();
+        showToast(labels[mode] || "Follow-up atualizado.");
+    } catch (err) {
+        console.error(err);
+        showToast(err?.message || "Erro ao atualizar follow-up", "error");
+    }
 }
 
 function getConfiguredDefaultDdi() {
@@ -205,7 +409,12 @@ function getPhoneDigits(value) {
 // ELEMENTOS
 // ------------------------------------------------------
 const refreshBtn = document.getElementById("refreshBtn");
-const searchInput = document.getElementById("q");
+const searchInput = document.getElementById("crmSearch");
+const stagePillsWrap = document.getElementById("stagePills");
+const tagPillsWrap = document.getElementById("tagPills");
+const minValueInput = document.getElementById("minValueInput");
+const followUpCheck = document.getElementById("followUpCheck");
+const crmResultCount = document.getElementById("crmResultCount");
 
 // Filtros
 const filterNovo = document.getElementById("filterNovo");
@@ -304,13 +513,6 @@ function autoViewByWidth() {
 window.addEventListener("resize", autoViewByWidth);
 window.addEventListener("load", autoViewByWidth);
 
-// Busca com debounce
-let searchDebounce = null;
-searchInput?.addEventListener("input", () => {
-    clearTimeout(searchDebounce);
-    searchDebounce = setTimeout(() => loadClients(true), 250);
-});
-
 // ------------------------------------------------------
 // RENDER TAGS DO MODAL
 // ------------------------------------------------------
@@ -378,6 +580,217 @@ function mergeClientsPage(incomingClients, replace = false) {
     clients = nextClients;
 }
 
+function getClientTags(client) {
+    return Array.isArray(client?.tags) ? client.tags : parseJsonArray(client?.tags);
+}
+
+function hasClientFollowUp(client) {
+    return Boolean(client?.follow_up_date || client?.follow_up_at);
+}
+
+function getUniqueClientTags() {
+    return Array.from(
+        new Set(
+            clients.flatMap((client) =>
+                getClientTags(client)
+                    .map((tag) => String(tag || "").trim())
+                    .filter(Boolean)
+            )
+        )
+    ).sort((a, b) => a.localeCompare(b, "pt-BR"));
+}
+
+function syncFilterInputs() {
+    if (searchInput) searchInput.value = activeFilters.text;
+    if (minValueInput) {
+        minValueInput.value = activeFilters.minValue ? String(activeFilters.minValue) : "";
+    }
+    if (followUpCheck) followUpCheck.checked = Boolean(activeFilters.hasFollowUp);
+}
+
+function sanitizeActiveFilters() {
+    activeFilters.text = String(activeFilters.text || "").trim().toLowerCase();
+    activeFilters.stages = activeFilters.stages
+        .map((stage) => normalizeStage(stage))
+        .filter((stage, index, list) => CRM_STAGE_ORDER.includes(stage) && list.indexOf(stage) === index);
+
+    const availableTags = new Set(getUniqueClientTags());
+    activeFilters.tags = activeFilters.tags
+        .map((tag) => String(tag || "").trim())
+        .filter((tag, index, list) => tag && availableTags.has(tag) && list.indexOf(tag) === index);
+
+    activeFilters.minValue = Math.max(0, Number(activeFilters.minValue) || 0);
+    activeFilters.hasFollowUp = Boolean(activeFilters.hasFollowUp);
+}
+
+function applyFilters() {
+    sanitizeActiveFilters();
+
+    return clients.filter((client) => {
+        const normalizedStage = normalizeStage(client.stage);
+        const tags = getClientTags(client);
+        const phone = String(client.phone || "").replace(/\D/g, "");
+        const textHaystack = [
+            client.name || "",
+            phone,
+            client.citystate || "",
+        ]
+            .join(" ")
+            .toLowerCase();
+
+        const textMatch = !activeFilters.text || textHaystack.includes(activeFilters.text);
+        const stageMatch =
+            activeFilters.stages.length === 0 || activeFilters.stages.includes(normalizedStage);
+        const tagMatch =
+            activeFilters.tags.length === 0
+                || activeFilters.tags.some((tag) => tags.includes(tag));
+        const valueMatch =
+            !activeFilters.minValue || (Number(client.deal_value || 0) >= activeFilters.minValue);
+        const followUpMatch = !activeFilters.hasFollowUp || hasClientFollowUp(client);
+
+        return textMatch && stageMatch && tagMatch && valueMatch && followUpMatch;
+    });
+}
+
+function getSortedClients(items) {
+    return [...items].sort((a, b) => {
+        let va;
+        let vb;
+
+        if (sortBy === "name") {
+            va = (a.name || "").toLowerCase();
+            vb = (b.name || "").toLowerCase();
+        } else if (sortBy === "last_seen") {
+            va = Number(a.last_seen) || 0;
+            vb = Number(b.last_seen) || 0;
+        } else if (sortBy === "follow_up") {
+            va = Number(a.follow_up_date) || Infinity;
+            vb = Number(b.follow_up_date) || Infinity;
+        } else if (sortBy === "value") {
+            va = Number(a.deal_value) || 0;
+            vb = Number(b.deal_value) || 0;
+        }
+
+        if (va < vb) return sortDir === "asc" ? -1 : 1;
+        if (va > vb) return sortDir === "asc" ? 1 : -1;
+        return 0;
+    });
+}
+
+function updateResultCount(count) {
+    if (!crmResultCount) return;
+
+    const totalLabel = count === 1 ? "cliente" : "clientes";
+    const extras = [];
+
+    if (activeFilters.minValue > 0) {
+        extras.push(`R$ ${activeFilters.minValue.toLocaleString("pt-BR")}+`);
+    }
+    if (activeFilters.hasFollowUp) {
+        extras.push("com follow-up");
+    }
+
+    crmResultCount.textContent = `${count} ${totalLabel}${extras.length ? ` • ${extras.join(" • ")}` : ""}`;
+}
+
+function renderFilterPills() {
+    sanitizeActiveFilters();
+
+    if (stagePillsWrap) {
+        stagePillsWrap.innerHTML = CRM_STAGE_ORDER.map((stage) => {
+            const isActive = activeFilters.stages.includes(stage);
+            return `
+              <button
+                type="button"
+                class="filter-pill${isActive ? " active" : ""}"
+                data-filter-type="stage"
+                data-filter-value="${escapeHtml(stage)}"
+              >
+                ${escapeHtml(stage)}${isActive ? " ✕" : ""}
+              </button>
+            `;
+        }).join("");
+
+        stagePillsWrap.querySelectorAll("[data-filter-type='stage']").forEach((button) => {
+            button.addEventListener("click", () => {
+                toggleFilterValue("stages", button.dataset.filterValue || "");
+            });
+        });
+    }
+
+    if (tagPillsWrap) {
+        const availableTags = getUniqueClientTags();
+
+        if (!availableTags.length) {
+            tagPillsWrap.innerHTML = `<span class="filter-pill empty">Sem tags carregadas</span>`;
+        } else {
+            tagPillsWrap.innerHTML = availableTags.map((tag) => {
+                const isActive = activeFilters.tags.includes(tag);
+                return `
+                  <button
+                    type="button"
+                    class="filter-pill${isActive ? " active" : ""}"
+                    data-filter-type="tag"
+                    data-filter-value="${escapeHtml(tag)}"
+                  >
+                    ${escapeHtml(tag)}${isActive ? " ✕" : ""}
+                  </button>
+                `;
+            }).join("");
+
+            tagPillsWrap.querySelectorAll("[data-filter-type='tag']").forEach((button) => {
+                button.addEventListener("click", () => {
+                    toggleFilterValue("tags", button.dataset.filterValue || "");
+                });
+            });
+        }
+    }
+
+    syncFilterInputs();
+}
+
+function toggleFilterValue(key, value) {
+    const normalizedValue = key === "stages" ? normalizeStage(value) : String(value || "").trim();
+    if (!normalizedValue) return;
+
+    const currentValues = Array.isArray(activeFilters[key]) ? [...activeFilters[key]] : [];
+    const nextValues = currentValues.includes(normalizedValue)
+        ? currentValues.filter((item) => item !== normalizedValue)
+        : [...currentValues, normalizedValue];
+
+    activeFilters = { ...activeFilters, [key]: nextValues };
+    renderFilterPills();
+    renderBoard();
+}
+
+function updateFilter(key, value) {
+    if (key === "text") {
+        activeFilters = { ...activeFilters, text: String(value || "").trim().toLowerCase() };
+    } else if (key === "minValue") {
+        activeFilters = { ...activeFilters, minValue: Math.max(0, Number(value) || 0) };
+    } else if (key === "hasFollowUp") {
+        activeFilters = { ...activeFilters, hasFollowUp: Boolean(value) };
+    } else {
+        activeFilters = { ...activeFilters, [key]: value };
+    }
+
+    renderFilterPills();
+    renderBoard();
+}
+
+function clearAllFilters() {
+    activeFilters = {
+        text: "",
+        stages: [],
+        tags: [],
+        minValue: 0,
+        hasFollowUp: false,
+    };
+
+    renderFilterPills();
+    renderBoard();
+}
+
 // ------------------------------------------------------
 // LOAD CLIENTS
 // ------------------------------------------------------
@@ -387,6 +800,7 @@ async function loadClients(reset = false) {
     currentPage = 1;
     totalPages = 1;
     clients = [];
+    renderFilterPills();
     renderBoard();
   }
 
@@ -394,12 +808,10 @@ async function loadClients(reset = false) {
 
   isLoading = true;
   try {
-    const term = (searchInput?.value || "").trim();
     const qs = new URLSearchParams({
       page: String(currentPage),
       pageSize: String(PAGE_SIZE),
     });
-    if (term) qs.set("term", term);
 
     const res = await fetch(`/api/crm/list?${qs.toString()}`);
     const data = await res.json();
@@ -410,6 +822,7 @@ async function loadClients(reset = false) {
     totalPages = data.totalPages || 1;
 
     toggleLoadMore();
+    renderFilterPills();
     renderBoard();
   } catch (err) {
     console.error(err);
@@ -465,6 +878,45 @@ function renderTag(t, isClickable, isActive) {
     >${safeTag}</span>`;
 }
 
+function renderQuickActionPanel(client, stage, followUpLabel) {
+    const clientId = Number(client?.id || 0);
+
+    if (isQuickPanelOpen(clientId, "move")) {
+        const options = getQuickStageOptions(stage)
+            .map((option) => `
+              <button
+                type="button"
+                class="card-quick-chip"
+                data-quick-stage="${escapeHtml(option)}"
+              >${escapeHtml(CRM_STAGE_SHORT_LABELS[option] || option)}</button>
+            `)
+            .join("");
+
+        return `
+          <div class="card-quick-panel">
+            <div class="card-quick-panel-meta">Mover sem arrastar:</div>
+            ${options}
+          </div>
+        `;
+    }
+
+    if (isQuickPanelOpen(clientId, "followup")) {
+        return `
+          <div class="card-quick-panel">
+            <div class="card-quick-panel-meta">
+              ${followUpLabel ? `Retorno atual: ${escapeHtml(followUpLabel)}` : "Nenhum follow-up agendado."}
+            </div>
+            <button type="button" class="card-quick-chip" data-quick-followup="today">Hoje</button>
+            <button type="button" class="card-quick-chip" data-quick-followup="tomorrow">Amanhã</button>
+            <button type="button" class="card-quick-chip" data-quick-followup="next7">+7 dias</button>
+            ${followUpLabel ? `<button type="button" class="card-quick-chip danger" data-quick-followup="clear">Limpar</button>` : ""}
+          </div>
+        `;
+    }
+
+    return "";
+}
+
 // ------------------------------------------------------
 // RENDER KANBAN
 // ------------------------------------------------------
@@ -480,55 +932,16 @@ function renderBoard() {
     Object.values(stages).forEach(z => z.innerHTML = "");
     if (listView) listView.innerHTML = "";
 
-    const search = (searchInput?.value || "").toLowerCase();
     const counts = { Novo: 0, Qualificando: 0, "Negociação": 0, Fechado: 0, Perdido: 0 };
     const values = { Novo: 0, Qualificando: 0, "Negociação": 0, Fechado: 0, Perdido: 0 };
     let rendered = 0;
 
-    // Ordenar antes de renderizar
-    const sorted = [...clients].sort((a, b) => {
-        let va, vb;
-        if (sortBy === "name") {
-            va = (a.name || "").toLowerCase();
-            vb = (b.name || "").toLowerCase();
-        } else if (sortBy === "last_seen") {
-            va = Number(a.last_seen) || 0;
-            vb = Number(b.last_seen) || 0;
-        } else if (sortBy === "follow_up") {
-            va = Number(a.follow_up_date) || Infinity;
-            vb = Number(b.follow_up_date) || Infinity;
-        } else if (sortBy === "value") {
-            va = Number(a.deal_value) || 0;
-            vb = Number(b.deal_value) || 0;
-        }
-        if (va < vb) return sortDir === "asc" ? -1 : 1;
-        if (va > vb) return sortDir === "asc" ?  1 : -1;
-        return 0;
-    });
+    const sorted = getSortedClients(getFilteredClients());
+    updateResultCount(sorted.length);
 
     sorted.forEach(c => {
         const stage = normalizeStage(c.stage);
-
-        // filtros
-        if (stage === "Novo" && !filterNovo.checked) return;
-        if (stage === "Qualificando" && !filterQualificando.checked) return;
-        if (stage === "Negociação" && !filterNegociacao.checked) return;
-        if (stage === "Fechado" && !filterFechado.checked) return;
-        if (stage === "Perdido" && !filterPerdido.checked) return;
-
-        // busca
-        const tags = Array.isArray(c.tags) ? c.tags : [];
-        const haystack = [
-            c.name || "",
-            c.phone || "",
-            c.citystate || "",
-            ...tags
-        ].join(" ").toLowerCase();
-
-        if (search && !haystack.includes(search)) return;
-
-        // filtro por tag clicada
-        if (activeTag && !tags.includes(activeTag)) return;
+        const tags = getClientTags(c);
 
         const chatPhone = (c.phone || "").replace(/\D/g, "");
         const zoneName = stage;
@@ -606,6 +1019,9 @@ function renderBoard() {
         const safeCityState = escapeHtml(c.citystate || "");
         const safeChatPhone = encodeURIComponent(chatPhone);
         const safeAvatar = escapeHtml(c.avatar || "");
+        const safeStageLabel = escapeHtml(zoneName);
+        const stageSlug = stageToSlug(zoneName);
+        const quickPanelOpen = Number(activeQuickPanel.clientId) === Number(c.id);
 
         // Valor formatado
         const valueStr = Number(c.deal_value) > 0
@@ -624,7 +1040,10 @@ function renderBoard() {
                 : `<span>${safeInitials}</span>`}
             </div>
               <div class="card-info">
-                <div class="card-name">${safeName}</div>
+                <div class="card-name-row">
+                  <div class="card-name">${safeName}</div>
+                  <span class="card-stage-badge card-stage-${stageSlug}">${safeStageLabel}</span>
+                </div>
                 <div class="card-phone" title="${safePhone}">
                   <i class="fa-solid fa-phone"></i>
                   <span class="card-phone-text">${safePhone}</span>
@@ -643,7 +1062,7 @@ function renderBoard() {
             <!-- Tags -->
             ${tags.length > 0 ? `
             <div class="card-tags">
-              ${tags.slice(0, 3).map(t => renderTag(t, true, activeTag === t)).join("")}
+              ${tags.slice(0, 3).map(t => renderTag(t, true, activeFilters.tags.includes(t))).join("")}
               ${tags.length > 3 ? `<span class="tag more">+${tags.length - 3}</span>` : ""}
             </div>` : ""}
 
@@ -656,24 +1075,89 @@ function renderBoard() {
 
             <!-- Footer: botão chat -->
             <div class="card-footer">
-              <a href="/chat?contact=${safeChatPhone}" class="btn-open-chat" title="Abrir chat" onclick="event.stopPropagation()">
-                <i class="fa-brands fa-whatsapp"></i> Chat
-              </a>
+              <div class="card-quick-actions">
+                <a
+                  href="/chat?contact=${safeChatPhone}"
+                  class="card-quick-btn quick-chat"
+                  title="Abrir chat"
+                  data-quick-action="chat"
+                  onclick="event.stopPropagation()"
+                >
+                  <i class="fa-brands fa-whatsapp"></i>
+                  <span>Chat</span>
+                </a>
+                <button type="button" class="card-quick-btn quick-followup" data-quick-action="followup">
+                  <i class="fa-regular fa-calendar-check"></i>
+                  <span>Follow-up</span>
+                </button>
+                <button type="button" class="card-quick-btn quick-move" data-quick-action="move">
+                  <i class="fa-solid fa-arrow-right-arrow-left"></i>
+                  <span>Mover</span>
+                </button>
+                <button type="button" class="card-quick-btn quick-edit" data-quick-action="edit" aria-label="Editar cliente">
+                  <i class="fa-solid fa-plus"></i>
+                </button>
+              </div>
+              ${renderQuickActionPanel(c, zoneName, fupLabel)}
             </div>
 
           </div>
         `;
 
+        card.classList.toggle("quick-open", quickPanelOpen);
+
         card.addEventListener("click", (e) => {
+            const quickActionEl = e.target.closest("[data-quick-action], [data-quick-stage], [data-quick-followup]");
+            if (quickActionEl) {
+                const isChatLink = quickActionEl.matches("a[data-quick-action='chat']");
+                e.stopPropagation();
+                if (!isChatLink) e.preventDefault();
+
+                const quickAction = quickActionEl.dataset.quickAction;
+                const quickStage = quickActionEl.dataset.quickStage;
+                const quickFollowUp = quickActionEl.dataset.quickFollowup;
+
+                if (quickStage) {
+                    void quickMoveClientStage(c.id, quickStage);
+                    return;
+                }
+
+                if (quickFollowUp) {
+                    void quickSetFollowUp(c.id, quickFollowUp);
+                    return;
+                }
+
+                if (quickAction === "edit") {
+                    openClientEditor(c.id);
+                    return;
+                }
+
+                if (quickAction === "followup") {
+                    setActiveQuickPanel(c.id, "followup");
+                    return;
+                }
+
+                if (quickAction === "move") {
+                    setActiveQuickPanel(c.id, "move");
+                    return;
+                }
+
+                if (quickAction === "chat") {
+                    activeQuickPanel = { clientId: null, type: null };
+                    return;
+                }
+            }
+
             // Se clicou em uma tag, filtrar por ela
             const tagEl = e.target.closest(".tag-clickable");
             if (tagEl) {
                 e.stopPropagation();
                 const tag = tagEl.dataset.tag;
-                setActiveTag(activeTag === tag ? null : tag); // toggle
+                setActiveTag(tag);
                 return;
             }
             selectClient(c.id);
+            closeQuickPanel();
             openClientModal();
         });
 
@@ -720,9 +1204,23 @@ function closeClientModal() {
 
 
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && activeQuickPanel.clientId) {
+    activeQuickPanel = { clientId: null, type: null };
+    renderBoard();
+    return;
+  }
+
   if (e.key === "Escape" && clientModal.style.display === "flex") {
     closeClientModal();
   }
+});
+
+document.addEventListener("click", (e) => {
+    if (!activeQuickPanel.clientId) return;
+    if (e.target.closest(".kanban-card")) return;
+
+    activeQuickPanel = { clientId: null, type: null };
+    renderBoard();
 });
 
 // ------------------------------------------------------
@@ -956,6 +1454,9 @@ modalSave.addEventListener("click", async () => {
 let draggedCard = null;
 
 function onCardDragStart(e) {
+    if (activeQuickPanel.clientId) {
+        activeQuickPanel = { clientId: null, type: null };
+    }
     draggedCard = e.currentTarget;
     draggedCard.classList.add("dragging");
 }
@@ -1041,7 +1542,6 @@ Object.entries(stageMap).forEach(([checkboxId, stage]) => {
 // EVENTOS
 // ------------------------------------------------------
 refreshBtn?.addEventListener("click", () => loadClients(true));
-searchInput?.addEventListener("input", renderBoard);
 
 [
     filterNovo,
@@ -1056,32 +1556,11 @@ searchInput?.addEventListener("input", renderBoard);
 // EXPORTAR CSV
 // ------------------------------------------------------
 function getFilteredClients() {
-    const search = (searchInput?.value || "").toLowerCase();
-
-    return clients.filter(c => {
-        const stage = normalizeStage(c.stage);
-
-        // Aplicar mesmos filtros do renderBoard
-        if (stage === "Novo"          && !filterNovo.checked)          return false;
-        if (stage === "Qualificando"  && !filterQualificando.checked)  return false;
-        if (stage === "Negociação" && !filterNegociacao.checked) return false;
-        if (stage === "Fechado"       && !filterFechado.checked)       return false;
-        if (stage === "Perdido"       && !filterPerdido.checked)       return false;
-
-        // Busca
-        if (search) {
-            const tags = Array.isArray(c.tags) ? c.tags : [];
-            const haystack = [c.name, c.phone, c.citystate, ...tags]
-                .join(" ").toLowerCase();
-            if (!haystack.includes(search)) return false;
-        }
-
-        return true;
-    });
+    return applyFilters();
 }
 
 function exportCSV() {
-    const data = getFilteredClients();
+    const data = getSortedClients(getFilteredClients());
 
     if (!data.length) {
         showToast("Nenhum cliente para exportar", "error");
@@ -1091,7 +1570,7 @@ function exportCSV() {
     const headers = ["Nome", "Telefone", "Cidade/Estado", "Estágio", "Tags", "Notas", "Última atividade"];
 
     const rows = data.map(c => {
-        const tags  = Array.isArray(c.tags)  ? c.tags.join("; ")  : "";
+        const tags  = getClientTags(c).join("; ");
         const notes = Array.isArray(c.notes) ? c.notes.map(n => n.text).join("; ") : "";
         const lastSeen = c.last_seen ? new Date(c.last_seen).toLocaleDateString("pt-BR") : "";
 
@@ -1109,7 +1588,7 @@ function exportCSV() {
         ].join(",");
     });
 
-    const csv = [headers.join(","), ...rows].join("");
+    const csv = [headers.join(","), ...rows].join("\n");
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }); // BOM para Excel
     const url  = URL.createObjectURL(blob);
 
@@ -1130,25 +1609,19 @@ document.getElementById("exportBtn")?.addEventListener("click", exportCSV);
 // FILTRO POR TAG
 // ------------------------------------------------------
 function setActiveTag(tag) {
-    activeTag = tag;
-
-    // Atualizar badge de filtro ativo
-    const badge = document.getElementById("activeTagBadge");
-    const label = document.getElementById("activeTagLabel");
-
-    if (tag) {
-        if (badge) badge.style.display = "flex";
-        if (label) label.textContent = tag;
+    if (!tag) {
+        activeFilters = { ...activeFilters, tags: [] };
     } else {
-        if (badge) badge.style.display = "none";
+        const normalizedTag = String(tag).trim();
+        const nextTags = activeFilters.tags.includes(normalizedTag)
+            ? activeFilters.tags.filter((item) => item !== normalizedTag)
+            : [...activeFilters.tags, normalizedTag];
+        activeFilters = { ...activeFilters, tags: nextTags };
     }
 
+    renderFilterPills();
     renderBoard();
 }
-
-document.getElementById("clearTagFilter")?.addEventListener("click", () => {
-    setActiveTag(null);
-});
 
 // ------------------------------------------------------
 // ORDENAÇÃO DAS COLUNAS

@@ -5,6 +5,7 @@ import { mainGoogle } from "../service/google";
 import { createLRUCache } from "../utils/lru";
 import { queryKb } from "./kbService";
 import { isInSilenceWindow } from "./silenceUtils";
+import { loadRecentHistory } from "./chatHistoryService";
 
 type CrmClientRow = {
   name: string | null;
@@ -19,14 +20,20 @@ type CrmClientRow = {
 };
 
 type AiProvider = "GPT" | "GEMINI";
+type AIHistoryTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
 
 const OPERATOR_PROMPT_MAX_CHARS = 4000;
+const PERSISTED_HISTORY_LIMIT = 32;
 const AI_CONTEXT_BUDGETS = {
   maxTotal: 28_000,
   prompt: 3000,
   rag: 1200,
   crm: 500,
   misc: 300,
+  history: 3200,
   buffer: 8000,
   geminiSystem: 4500,
   crmTagsRaw: 4000,
@@ -72,7 +79,7 @@ const INTERNAL_CONTEXT_PREAMBLE = [
 const INTERNAL_CONTEXT_LEAK_FALLBACK =
   "Desculpe, tive uma falha interna ao montar a resposta. Pode repetir sua ultima mensagem?";
 
-type PromptSectionKey = "prompt" | "rag" | "crm" | "misc" | "buffer";
+type PromptSectionKey = "prompt" | "rag" | "crm" | "misc" | "history" | "buffer";
 
 type PromptSection = {
   key: PromptSectionKey;
@@ -98,7 +105,14 @@ function buildBoundedMessage(sections: PromptSection[], maxChars: number): strin
   let finalText = compose();
   if (finalText.length <= maxChars) return finalText;
 
-  const trimOrder: PromptSectionKey[] = ["rag", "crm", "misc", "prompt", "buffer"];
+  const trimOrder: PromptSectionKey[] = [
+    "rag",
+    "crm",
+    "misc",
+    "prompt",
+    "history",
+    "buffer",
+  ];
   for (const key of trimOrder) {
     const target = items.find((item) => item.key === key);
     if (!target?.text) continue;
@@ -396,6 +410,38 @@ async function getRagContext(params: {
   return context;
 }
 
+async function getPersistedHistoryContext(
+  userId: number,
+  chatId: string
+): Promise<AIHistoryTurn[]> {
+  try {
+    const history = await loadRecentHistory(
+      userId,
+      chatId,
+      PERSISTED_HISTORY_LIMIT
+    );
+    return history
+      .map((entry) => {
+        const content = entry.parts
+          .map((part) => String(part?.text || ""))
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+        if (!content) return null;
+
+        return {
+          role: entry.role === "user" ? "user" : "assistant",
+          content,
+        } as AIHistoryTurn;
+      })
+      .filter(Boolean) as AIHistoryTurn[];
+  } catch (err) {
+    console.warn("Nao foi possivel carregar historico persistido:", err);
+    return [];
+  }
+}
+
 export async function generateAIResponse({
   aiSelected,
   prompt,
@@ -419,6 +465,7 @@ export async function generateAIResponse({
 
   const rawConversationText = buffer.join("\n").trim();
   const crmContextPromise = getCrmContext(userId, chatId);
+  const persistedHistoryPromise = getPersistedHistoryContext(userId, chatId);
   const lang = detectLanguageSimple(rawConversationText);
   const langInstr =
     lang === "pt" ? "portugues" :
@@ -426,7 +473,6 @@ export async function generateAIResponse({
     lang === "en" ? "ingles" : null;
 
   const sanitizedPrompt = sanitizeOperatorPrompt(prompt);
-  const safePrompt = buildSafePromptContext(sanitizedPrompt);
   const geminiSystemInstruction = clipToBudget(
     buildGeminiSystemInstruction(sanitizedPrompt),
     AI_CONTEXT_BUDGETS.geminiSystem
@@ -446,9 +492,10 @@ export async function generateAIResponse({
         return "";
       })
     : Promise.resolve("");
-  const [crmContext, ragContext] = await Promise.all([
+  const [crmContext, ragContext, persistedHistory] = await Promise.all([
     crmContextPromise,
     ragContextPromise,
+    persistedHistoryPromise,
   ]);
 
   const miscContext = buildMiscContext(langInstr);
@@ -477,22 +524,44 @@ export async function generateAIResponse({
   const runtimeMessage = buildPrivateContextEnvelope(
     buildBoundedMessage(runtimeSections, maxGeminiRuntimeChars)
   );
+  const openAISystemInstruction = buildPrivateContextEnvelope(
+    buildBoundedMessage(
+      [
+        {
+          key: "prompt",
+          text: geminiSystemInstruction,
+          budget: AI_CONTEXT_BUDGETS.geminiSystem,
+        },
+        { key: "rag", text: ragContext, budget: AI_CONTEXT_BUDGETS.rag },
+        {
+          key: "crm",
+          text: crmContext ? `Contexto do cliente:\n${crmContext}` : "",
+          budget: AI_CONTEXT_BUDGETS.crm,
+        },
+        { key: "misc", text: miscContext, budget: AI_CONTEXT_BUDGETS.misc },
+      ],
+      Math.max(
+        AI_CONTEXT_BUDGETS.geminiSystem,
+        AI_CONTEXT_BUDGETS.maxTotal - AI_CONTEXT_BUDGETS.buffer
+      )
+    )
+  );
 
   const finalMessage =
     aiSelected === "GPT"
-      ? buildPrivateContextEnvelope(
-          buildBoundedMessage(
-            [
-              { key: "prompt", text: safePrompt, budget: AI_CONTEXT_BUDGETS.prompt },
-              ...runtimeSections,
-            ],
-            AI_CONTEXT_BUDGETS.maxTotal
-          )
-        )
+      ? clippedConversationText || "(vazia)"
       : runtimeMessage;
+  const persistedHistoryChars = persistedHistory.reduce(
+    (sum, entry) => sum + entry.content.length,
+    0
+  );
 
   const inputChars =
-    finalMessage.length + (aiSelected === "GEMINI" ? geminiSystemInstruction.length : 0);
+    finalMessage.length +
+    persistedHistoryChars +
+    (aiSelected === "GEMINI"
+      ? geminiSystemInstruction.length
+      : openAISystemInstruction.length);
 
   const db = getDB();
   const startedAt = Date.now();
@@ -502,12 +571,18 @@ export async function generateAIResponse({
 
   try {
     if (aiSelected === "GPT") {
-      responseText = await mainOpenAI({ currentMessage: finalMessage, chatId });
+      responseText = await mainOpenAI({
+        currentMessage: finalMessage,
+        systemInstruction: openAISystemInstruction,
+        history: persistedHistory,
+        chatId,
+      });
     } else {
       responseText = await mainGoogle({
         currentMessage: runtimeMessage,
         userMessage: clippedConversationText || runtimeMessage,
         systemInstruction: geminiSystemInstruction,
+        history: persistedHistory,
         chatId,
         userId,
         sessionName,

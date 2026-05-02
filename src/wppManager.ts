@@ -41,8 +41,58 @@ import {
   detectDispatchConsentCommand,
   upsertDispatchSuppression,
 } from "./services/dispatchPolicy";
-import { updateChargeWhatsappAckByMessageId } from "./services/cobrancaWhatsappTracking";
+import {
+  getChargeWhatsappDeliveryStatusFromAck,
+  normalizeChargeWhatsappAckValue,
+  normalizeChargeWhatsappMessageId,
+  updateChargeWhatsappAckByMessageId,
+} from "./services/cobrancaWhatsappTracking";
 import { logAudit } from "./utils/audit";
+import {
+  appendChatHistoryEntries,
+  loadRecentHistory,
+} from "./services/chatHistoryService";
+
+type PanelMessageDeliveryStatus = "sent" | "delivered" | "read";
+
+function resolvePanelMessageStatusFromAck(value: unknown): PanelMessageDeliveryStatus | null {
+  const ack = normalizeChargeWhatsappAckValue(value);
+  if (ack == null) return null;
+  if (ack >= 3) return "read";
+  if (ack === 2) return "delivered";
+  if (ack >= 1) return "sent";
+  return null;
+}
+
+function resolveAckChatId(ack: any): string | null {
+  const direct =
+    ack?.chatId ||
+    ack?.to ||
+    ack?.id?.remote ||
+    ack?.from ||
+    null;
+  const chatId = String(direct || "").trim();
+  return chatId || null;
+}
+
+function emitPanelTypingEvent(
+  userId: number,
+  sessionName: string,
+  chatId: string,
+  phase: "start" | "stop"
+) {
+  const legacyEvent = phase === "start" ? "typing:start" : "typing:stop";
+  const nextEvent = phase === "start" ? "bot:typing" : "bot:typed";
+  const payload = { chatId, userId, sessionName };
+
+  try {
+    emitToUser(userId, legacyEvent, payload);
+  } catch { }
+
+  try {
+    emitToUser(userId, nextEvent, payload);
+  } catch { }
+}
 
 
 
@@ -141,10 +191,17 @@ type FlowContext = {
   localTimeStr?: string;
   lastResponse?: string;
   isNewContact?: boolean;
+  iaMessageCount?: number;
 };
 
 type BranchCondition = {
   contains?: string | string[];
+};
+
+type ActionCondition = {
+  field?: "crm_stage" | "ia_message_count" | "tag";
+  operator?: "equals";
+  value?: string | number;
 };
 
 function matchFlowConditions(conditions: FlowConditions | null, ctx: FlowContext): boolean {
@@ -866,6 +923,7 @@ function clearInactiveChatState(
     chatHumanLock.delete(chatKey);
     chatHumanDuration.delete(chatKey);
     chatHumanLastActivity.delete(chatKey);
+    pendingAIProcessingRetry.delete(chatKey);
     pausedChats.delete(chatKey);
     inboundCount.delete(chatKey);
     messageBuffer.delete(chatKey);
@@ -1065,6 +1123,8 @@ async function callWebhookFromFlow(
 ): Promise<void> {
   const url = String(payload?.url || "").trim();
   if (!url) return;
+  const timeoutMs = Math.max(1000, Number(payload?.timeout_ms || 8000) || 8000);
+  const maxRetries = Math.max(1, Number(payload?.max_retries || 3) || 3);
 
   const body = {
     user_id: ctx.userId,
@@ -1085,15 +1145,45 @@ async function callWebhookFromFlow(
     last_ai_response: ctx.lastResponse || null,
   };
 
-  const config: any = {};
-  if (payload?.headers && typeof payload.headers === "object") {
-    config.headers = payload.headers;
-  }
+  const target = (() => {
+    try {
+      const parsed = new URL(url);
+      return `${parsed.origin}${parsed.pathname}`;
+    } catch {
+      return url;
+    }
+  })();
 
-  await axios.post(url, body, {
-    timeout: Number(payload?.timeout_ms || 8000),
-    ...config,
+  const result = await deliverWebhook({
+    userId: ctx.userId,
+    url,
+    eventType: "flow_webhook",
+    payload: body,
+    timeoutMs,
+    maxRetries,
+    headers:
+      payload?.headers && typeof payload.headers === "object"
+        ? payload.headers
+        : undefined,
   });
+  const error = "error" in result ? result.error : null;
+  const failureId = "failureId" in result ? result.failureId : null;
+
+  await logAudit(
+    result.ok ? "flow_webhook_success" : "flow_webhook_failure",
+    ctx.userId,
+    "chat",
+    ctx.chatId,
+    {
+      target,
+      attempts: result.attempts,
+      timeoutMs,
+      maxRetries,
+      ok: result.ok,
+      error,
+      failureId,
+    }
+  );
 }
 
 function matchesBranchCondition(cond: BranchCondition | null, ctx: FlowContext): boolean {
@@ -1106,6 +1196,59 @@ function matchesBranchCondition(cond: BranchCondition | null, ctx: FlowContext):
       : [];
   if (!list.length) return false;
   return list.some((c) => text.includes(String(c || "").toLowerCase()));
+}
+
+async function getFlowActionIaMessageCount(ctx: FlowContext): Promise<number> {
+  if (typeof ctx.iaMessageCount === "number" && Number.isFinite(ctx.iaMessageCount)) {
+    return ctx.iaMessageCount;
+  }
+
+  try {
+    const history = await loadRecentHistory(ctx.userId, ctx.chatId, 32);
+    ctx.iaMessageCount = history.filter((entry) => entry.role === "model").length;
+  } catch {
+    ctx.iaMessageCount = 0;
+  }
+
+  return ctx.iaMessageCount;
+}
+
+function describeActionCondition(cond: ActionCondition | null): string {
+  if (!cond?.field) return "condição inválida";
+
+  const value = String(cond.value ?? "").trim() || "(vazio)";
+  if (cond.field === "crm_stage") return `crm_stage = "${value}"`;
+  if (cond.field === "tag") return `tag = "${value}"`;
+  if (cond.field === "ia_message_count") return `ia_message_count = "${value}"`;
+  return `${cond.field} = "${value}"`;
+}
+
+async function matchesActionCondition(
+  cond: ActionCondition | null,
+  ctx: FlowContext
+): Promise<boolean> {
+  if (!cond?.field) return false;
+
+  const expectedValue = String(cond.value ?? "").trim();
+
+  if (cond.field === "crm_stage") {
+    const stage = String(ctx.crm?.stage || "").trim().toLowerCase();
+    return !!expectedValue && stage === expectedValue.toLowerCase();
+  }
+
+  if (cond.field === "tag") {
+    const tags = Array.isArray(ctx.crm?.tags) ? ctx.crm.tags : [];
+    return !!expectedValue && tags.some((tag) => String(tag || "").trim().toLowerCase() === expectedValue.toLowerCase());
+  }
+
+  if (cond.field === "ia_message_count") {
+    const expectedCount = Number(expectedValue);
+    if (!Number.isFinite(expectedCount)) return false;
+    const actualCount = await getFlowActionIaMessageCount(ctx);
+    return actualCount === expectedCount;
+  }
+
+  return false;
 }
 
 type RunOptions = { simulate?: boolean; logs?: string[] };
@@ -1226,6 +1369,17 @@ async function runFlowActions(
             sessionName: ctx.sessionName,
           });
         } catch { }
+      }
+    }
+
+    else if (a.type === "condition") {
+      const cond: ActionCondition | null = a.payload || a.value || a.condition || null;
+      const passed = await matchesActionCondition(cond, ctx);
+      if (options.simulate) {
+        options.logs?.push(`condition (${describeActionCondition(cond)}) -> ${passed ? "passou" : "bloqueou"}`);
+      }
+      if (!passed) {
+        break;
       }
     }
 
@@ -1389,6 +1543,10 @@ export const messageTimeouts = createLRUCache<string, NodeJS.Timeout>(
     },
   }
 );
+const AI_RESPONSE_DEBOUNCE_MS = 1000;
+const AI_RETRY_WHILE_PROCESSING_MS = 500;
+const processingChats = new Set<string>();
+const pendingAIProcessingRetry = new Set<string>();
 const pausedChats = createLRUCache<string, boolean>(
   "WPP_CHAT_RUNTIME_CACHE_MAX",
   50_000
@@ -1407,10 +1565,39 @@ export function cancelAIDebounce(chatKey: string) {
   if (t) clearTimeout(t);
 
   // remove tudo
+  pendingAIProcessingRetry.delete(chatKey);
   messageTimeouts.delete(chatKey);
   messageBuffer.delete(chatKey);
 
   console.log(" IA debounce cancelado:", chatKey);
+}
+
+function takeBufferedMessages(chatKey: string): string[] {
+  const buffered = messageBuffer.get(chatKey);
+  if (!buffered?.length) return [];
+  messageBuffer.delete(chatKey);
+  return [...buffered];
+}
+
+function scheduleBufferedAIProcessing(
+  chatKey: string,
+  task: () => Promise<void> | void,
+  delayMs = AI_RESPONSE_DEBOUNCE_MS
+) {
+  const existing = messageTimeouts.get(chatKey);
+  if (existing) {
+    clearTimerSafely(existing);
+    messageTimeouts.delete(chatKey);
+  }
+
+  const timeout = setTimeout(() => {
+    if (messageTimeouts.get(chatKey) === timeout) {
+      messageTimeouts.delete(chatKey);
+    }
+    void task();
+  }, delayMs);
+
+  messageTimeouts.set(chatKey, timeout);
 }
 
 
@@ -1743,18 +1930,30 @@ async function handleAutomaticFallback(options: {
       ? null
       : (decision.config.humanDurationMs ?? HUMAN_INACTIVITY_DEFAULT_MS);
 
-  enableHumanTemporarily(
-    userId,
-    sessionName,
-    chatId,
-    duration,
-    {
-      contactMessage: decision.config.fallbackMessage,
-      sendTransferMessage:
-        decision.config.sendTransferMessage === true &&
-        decision.config.internalNoteOnly !== true,
-    }
-  );
+  const shouldSendToContact =
+    decision.config.sendTransferMessage === true &&
+    decision.config.internalNoteOnly !== true &&
+    String(decision.config.fallbackMessage || "").trim().length > 0;
+
+  if (decision.config.handoverEnabled !== false) {
+    enableHumanTemporarily(
+      userId,
+      sessionName,
+      chatId,
+      duration,
+      {
+        contactMessage: decision.config.fallbackMessage,
+        sendTransferMessage: shouldSendToContact,
+      }
+    );
+  } else if (shouldSendToContact) {
+    await sendSystemMessage(
+      userId,
+      sessionName,
+      chatId,
+      decision.config.fallbackMessage
+    );
+  }
 
   clearFallbackRuntime(userId, sessionName, chatId);
 
@@ -1797,7 +1996,7 @@ async function handleAutomaticFallback(options: {
     }
   }
 
-  if (decision.config.alertPhone) {
+  if (decision.config.alertEnabled !== false && decision.config.alertPhone) {
     const template = decision.config.alertMessage || "Alerta: assuma a conversa {chatId} da sessão {sessionName}.";
     const msg = template
       .replace(/{chatId}/g, chatId.replace("@c.us", ""))
@@ -2019,17 +2218,38 @@ async function attachEvents(
 
   client.onAck(async (ack) => {
     try {
+      const messageId = normalizeChargeWhatsappMessageId((ack as any)?.id);
+      const panelStatus = resolvePanelMessageStatusFromAck((ack as any)?.ack);
+      const panelChatId = resolveAckChatId(ack);
+      const rawStatus = getChargeWhatsappDeliveryStatusFromAck((ack as any)?.ack);
       const occurredAt =
         Number((ack as any)?.t || 0) > 0
           ? Number((ack as any).t) * 1000
           : Date.now();
-      const updated = await updateChargeWhatsappAckByMessageId({
-        userId,
-        sessionName: shortName,
-        messageId: (ack as any)?.id,
-        ack: (ack as any)?.ack,
-        occurredAt,
-      });
+      const updated = messageId
+        ? await updateChargeWhatsappAckByMessageId({
+          userId,
+          sessionName: shortName,
+          messageId,
+          ack: (ack as any)?.ack,
+          occurredAt,
+        })
+        : null;
+
+      if (
+        panelChatId &&
+        messageId &&
+        panelStatus &&
+        rawStatus !== "FAILED"
+      ) {
+        emitToUser(userId, "msg:status", {
+          chatId: panelChatId,
+          msgId: messageId,
+          status: panelStatus,
+          ack: normalizeChargeWhatsappAckValue((ack as any)?.ack),
+          occurredAt,
+        });
+      }
 
       if (updated) {
         emitToUser(userId, "cobranca:atualizada", {
@@ -2043,7 +2263,6 @@ async function attachEvents(
   });
 
   client.onMessage(async (msg) => {
-    let typingTimeout: NodeJS.Timeout | null = null;
 
     // =================================================
     //  BLOQUEIO TOTAL DE STATUS / STORY (100% SAFE)
@@ -2541,12 +2760,15 @@ async function attachEvents(
       // =================================================
       // ⏳ DEBOUNCE DA RESPOSTA
       // =================================================
-      if (messageTimeouts.has(chatKey)) {
-        clearTimeout(messageTimeouts.get(chatKey)!);
-        messageTimeouts.delete(chatKey);
-      }
+      const processBufferedAIResponse = async () => {
+        let localTypingTimeout: NodeJS.Timeout | null = null;
 
-      const timeout = setTimeout(async () => {
+        if (processingChats.has(chatKey)) {
+          pendingAIProcessingRetry.add(chatKey);
+          return;
+        }
+
+        processingChats.add(chatKey);
         try {
           if (chatHumanLock.get(humanKey) === true) {
             messageBuffer.delete(chatKey);
@@ -2555,24 +2777,8 @@ async function attachEvents(
             } catch { }
             return;
           }
-          const db = await getDB();
 
-          const userConfig = await db.get(
-            `SELECT prompt, ia_enabled FROM users WHERE id = ?`,
-            [userId]
-          );
-
-          // ERRO IA GLOBAL DESLIGADA
-          if (!userConfig?.ia_enabled) {
-            messageBuffer.delete(chatKey);
-            try {
-              await client.stopTyping(chatId);
-            } catch { }
-            return;
-          }
-
-          const prompt = userConfig?.prompt || "";
-          const buffer = messageBuffer.get(chatKey) || [];
+          const buffer = takeBufferedMessages(chatKey);
 
           // Segurança extra
           if (!buffer.length) {
@@ -2582,6 +2788,23 @@ async function attachEvents(
             return;
           }
 
+          const db = await getDB();
+
+          const userConfig = await db.get(
+            `SELECT prompt, ia_enabled FROM users WHERE id = ?`,
+            [userId]
+          );
+
+          // ERRO IA GLOBAL DESLIGADA
+          if (!userConfig?.ia_enabled) {
+            try {
+              await client.stopTyping(chatId);
+            } catch { }
+            return;
+          }
+
+          const prompt = userConfig?.prompt || "";
+
           // =================================================
           // DIGITANDO DIGITANDO (SÓ AQUI! DEPOIS DE CONFIRMAR QUE VAI RESPONDER)
           // =================================================
@@ -2590,11 +2813,9 @@ async function attachEvents(
           } catch { }
 
           //  Avisar o painel que a IA está digitando
-          try {
-            emitToUser(userId, "typing:start", { chatId, userId, sessionName: shortName });
-          } catch { }
+          emitPanelTypingEvent(userId, shortName, chatId, "start");
 
-          typingTimeout = setTimeout(() => {
+          localTypingTimeout = setTimeout(() => {
             try {
               client.stopTyping(chatId);
             } catch { }
@@ -2683,21 +2904,63 @@ async function attachEvents(
 
           const messages = splitMessages(response);
 
+          emitPanelTypingEvent(userId, shortName, chatId, "stop");
+
           await sendMessagesWithDelay({
             client,
             messages,
             targetNumber: msg.from,
+            sessionName: shortName,
+            onSent: async ({ chatId: sentChatId, body: sentBody, timestamp, sentMessage }) => {
+              const messageId = normalizeChargeWhatsappMessageId((sentMessage as any)?.id);
+              const ackValue = normalizeChargeWhatsappAckValue((sentMessage as any)?.ack) ?? 1;
+              const status = resolvePanelMessageStatusFromAck(ackValue) || "sent";
+
+              emitToUser(userId, "newMessage", {
+                chatId: sentChatId,
+                body: sentBody,
+                timestamp,
+                fromBot: true,
+                _isFromMe: true,
+                fromMe: true,
+                name: "Bot",
+                id: messageId,
+                messageId,
+                ack: ackValue,
+                deliveryStatus: status,
+              });
+            },
           });
+
+          if (AI_SELECTED === "GPT") {
+            try {
+              const persistedUserMessage = buffer.join("\n").trim();
+              const persistedBotMessage = String(response || "").trim();
+
+              if (persistedUserMessage && persistedBotMessage) {
+                await appendChatHistoryEntries({
+                  userId,
+                  sessionName: shortName,
+                  chatId,
+                  entries: [
+                    { role: "user", parts: [{ text: persistedUserMessage }] },
+                    { role: "model", parts: [{ text: persistedBotMessage }] },
+                  ],
+                });
+              }
+            } catch (historyErr) {
+              console.warn("Falha ao persistir historico do chat:", historyErr);
+            }
+          }
 
           // OK CONSUMIR 1 MENSAGEM IA
           await consumeIaMessage(userId);
         } catch (err) {
           console.error("ERRO Erro no debounce IA:", err);
         } finally {
-          //  limpar tudo
-          messageBuffer.delete(chatKey);
+          processingChats.delete(chatKey);
 
-          if (typingTimeout) clearTimeout(typingTimeout);
+          if (localTypingTimeout) clearTimeout(localTypingTimeout);
 
           //  GARANTE que para SEMPRE
           try {
@@ -2705,13 +2968,26 @@ async function attachEvents(
           } catch { }
 
           //  Avisar o painel que a IA parou de digitar
-          try {
-            emitToUser(userId, "typing:stop", { chatId, userId, sessionName: shortName });
-          } catch { }
-        }
-      }, 1000);
+          emitPanelTypingEvent(userId, shortName, chatId, "stop");
 
-      messageTimeouts.set(chatKey, timeout);
+          if (pendingAIProcessingRetry.has(chatKey)) {
+            pendingAIProcessingRetry.delete(chatKey);
+            if (
+              messageBuffer.has(chatKey) &&
+              !messageTimeouts.has(chatKey) &&
+              chatHumanLock.get(humanKey) !== true
+            ) {
+              scheduleBufferedAIProcessing(
+                chatKey,
+                processBufferedAIResponse,
+                AI_RETRY_WHILE_PROCESSING_MS
+              );
+            }
+          }
+        }
+      };
+
+      scheduleBufferedAIProcessing(chatKey, processBufferedAIResponse);
     } catch (err) {
       console.error("ERRO Erro no onMessage:", err);
 

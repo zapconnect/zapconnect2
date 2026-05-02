@@ -25,6 +25,10 @@ type ChatHistory = {
   role: "user" | "model";
   parts: { text: string }[];
 }[];
+type AIHistoryTurn = {
+  role: "user" | "assistant";
+  content: string;
+};
 
 type CachedHistory = { history: ChatHistory; expiresAt: number };
 
@@ -181,17 +185,43 @@ const setCachedHistory = (chatKey: string, history: ChatHistory) => {
   activeChats.set(chatKey, { history, expiresAt: Date.now() + CHAT_CACHE_TTL_MS });
 };
 
+const mapAIHistoryTurnsToGeminiHistory = (
+  history: AIHistoryTurn[]
+): ChatHistory =>
+  trimHistory(
+    history
+      .map((entry) => {
+        const text = String(entry?.content || "").trim();
+        if (!text) return null;
+        return {
+          role: entry.role === "user" ? "user" : "model",
+          parts: [{ text }],
+        };
+      })
+      .filter(Boolean) as ChatHistory
+  );
+
 const getCachedOrStoredHistory = async ({
   chatKey,
   userId,
   chatId,
+  history,
 }: {
   chatKey: string;
   userId: number | string;
   chatId: string;
+  history?: AIHistoryTurn[];
 }): Promise<ChatHistory | null> => {
   const cached = getCachedHistory(chatKey);
   if (cached?.length) return cached;
+
+  if (history?.length) {
+    const bootstrapHistory = mapAIHistoryTurnsToGeminiHistory(history);
+    if (bootstrapHistory.length) {
+      setCachedHistory(chatKey, bootstrapHistory);
+      return bootstrapHistory;
+    }
+  }
 
   const stored = await loadHistoryFromDB({ userId, chatId });
   if (stored?.length) {
@@ -324,16 +354,19 @@ const getOrCreateChatSession = async ({
   systemInstruction,
   userId,
   chatId,
+  history: bootstrapHistory,
 }: {
   chatKey: string;
   systemInstruction?: string | null;
   userId: number;
   chatId: string;
+  history?: AIHistoryTurn[];
 }): Promise<ChatSession> => {
   let history = await getCachedOrStoredHistory({
     chatKey,
     userId,
     chatId,
+    history: bootstrapHistory,
   });
 
   if (!history || !history.length) {
@@ -450,6 +483,7 @@ export const mainGoogle = async ({
   currentMessage,
   userMessage,
   systemInstruction,
+  history,
   chatId,
   userId,
   sessionName,
@@ -458,6 +492,7 @@ export const mainGoogle = async ({
   currentMessage: string;
   userMessage?: string;
   systemInstruction?: string | null;
+  history?: AIHistoryTurn[];
   chatId: string;
   userId: number | string;
   sessionName: string;
@@ -493,6 +528,7 @@ export const mainGoogle = async ({
     const chat = await getOrCreateChatSession({
       chatKey,
       systemInstruction,
+      history,
       userId: Number(userId),
       chatId,
     });
@@ -542,10 +578,10 @@ export const mainGoogle = async ({
       throw lastErr ?? new Error("Falha desconhecida na IA");
     }
 
-    const history =
+    const updatedHistory =
       (await getCachedOrStoredHistory({ chatKey, userId, chatId })) ||
       [];
-    history.push(
+    updatedHistory.push(
       { role: "user", parts: [{ text: userMessage || currentMessage }] },
       { role: "model", parts: [{ text }] }
     );
@@ -555,7 +591,7 @@ export const mainGoogle = async ({
       userId: Number(userId),
       sessionName,
       chatId,
-      history,
+      history: updatedHistory,
     });
 
     console.log(`Gemini resposta (${chatKey}):`, text);

@@ -1,4 +1,6 @@
 import axios from "axios";
+import { lookup } from "node:dns/promises";
+import net from "node:net";
 import { getDB } from "../database";
 
 const DEFAULT_WEBHOOK_TIMEOUT_MS = Math.max(
@@ -17,8 +19,14 @@ const DEFAULT_WEBHOOK_BACKOFF_MAX_MS = Math.max(
   DEFAULT_WEBHOOK_BACKOFF_BASE_MS,
   Number(process.env.WEBHOOK_DELIVERY_BACKOFF_MAX_MS || 15000)
 );
+const WEBHOOK_ALLOWED_HOST_PATTERNS = String(
+  process.env.WEBHOOK_ALLOWED_HOSTS || ""
+)
+  .split(",")
+  .map((value) => value.trim().toLowerCase())
+  .filter(Boolean);
 
-export type WebhookDeliveryEventType = "fallback_handoff";
+export type WebhookDeliveryEventType = "fallback_handoff" | "flow_webhook";
 
 export type DeliverWebhookOptions = {
   userId: number;
@@ -27,6 +35,7 @@ export type DeliverWebhookOptions = {
   eventType?: WebhookDeliveryEventType;
   maxRetries?: number;
   timeoutMs?: number;
+  headers?: Record<string, unknown>;
 };
 
 export type DeliverWebhookResult =
@@ -62,6 +71,145 @@ function safeJsonStringify(value: unknown) {
       error: "payload_unserializable",
       at: Date.now(),
     });
+  }
+}
+
+function normalizePositiveInt(
+  value: unknown,
+  fallback: number,
+  minimum = 1
+) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(minimum, Math.trunc(parsed));
+}
+
+function normalizeWebhookHeaders(headers: unknown) {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return undefined;
+  }
+
+  const normalizedEntries = Object.entries(headers).flatMap(([key, value]) => {
+    const headerKey = String(key || "").trim();
+    if (!headerKey) return [];
+    return [[headerKey, String(value ?? "").trim()]];
+  });
+
+  return normalizedEntries.length
+    ? Object.fromEntries(normalizedEntries)
+    : undefined;
+}
+
+function isPrivateIpv4(host: string) {
+  const parts = host.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+
+  const [a, b] = parts;
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+function isPrivateIpv6(host: string) {
+  const normalized = host.toLowerCase();
+  return (
+    normalized === "::1" ||
+    normalized === "::" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe8") ||
+    normalized.startsWith("fe9") ||
+    normalized.startsWith("fea") ||
+    normalized.startsWith("feb")
+  );
+}
+
+function matchesAllowedWebhookHost(host: string) {
+  if (!WEBHOOK_ALLOWED_HOST_PATTERNS.length) return true;
+
+  return WEBHOOK_ALLOWED_HOST_PATTERNS.some((pattern) => {
+    if (pattern.startsWith("*.")) {
+      const suffix = pattern.slice(1);
+      return host.endsWith(suffix);
+    }
+
+    return host === pattern;
+  });
+}
+
+export function isWebhookUrlSafe(rawUrl: string) {
+  try {
+    const parsed = new URL(String(rawUrl || "").trim());
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      return false;
+    }
+
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (!host) return false;
+
+    if (
+      host === "localhost" ||
+      host === "0.0.0.0" ||
+      host === "::1" ||
+      host.endsWith(".localhost") ||
+      host.endsWith(".local") ||
+      host === "metadata.google.internal"
+    ) {
+      return false;
+    }
+
+    if (!matchesAllowedWebhookHost(host)) {
+      return false;
+    }
+
+    const ipVersion = net.isIP(host);
+    if (ipVersion === 4) {
+      return !isPrivateIpv4(host);
+    }
+
+    if (ipVersion === 6) {
+      return !isPrivateIpv6(host);
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isResolvedWebhookHostSafe(rawUrl: string) {
+  try {
+    const parsed = new URL(String(rawUrl || "").trim());
+    const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (!host) return false;
+
+    if (net.isIP(host)) {
+      return true;
+    }
+
+    const results = await lookup(host, { all: true });
+    if (!results.length) return false;
+
+    return results.every((result) => {
+      if (result.family === 4) {
+        return !isPrivateIpv4(result.address);
+      }
+
+      if (result.family === 6) {
+        return !isPrivateIpv6(result.address);
+      }
+
+      return false;
+    });
+  } catch {
+    return false;
   }
 }
 
@@ -137,13 +285,53 @@ export async function deliverWebhook({
   eventType = "fallback_handoff",
   maxRetries = DEFAULT_WEBHOOK_MAX_RETRIES,
   timeoutMs = DEFAULT_WEBHOOK_TIMEOUT_MS,
+  headers,
 }: DeliverWebhookOptions): Promise<DeliverWebhookResult> {
-  const safeMaxRetries = Math.max(1, maxRetries);
+  const safeMaxRetries = normalizePositiveInt(
+    maxRetries,
+    DEFAULT_WEBHOOK_MAX_RETRIES
+  );
+  const safeTimeoutMs = normalizePositiveInt(
+    timeoutMs,
+    DEFAULT_WEBHOOK_TIMEOUT_MS,
+    1000
+  );
+  const normalizedHeaders = normalizeWebhookHeaders(headers);
   let lastError = "erro desconhecido";
+
+  if (!isWebhookUrlSafe(url) || !(await isResolvedWebhookHostSafe(url))) {
+    lastError = "Webhook URL invalida ou nao permitida para saida HTTP.";
+    const failureId = await persistWebhookFailure({
+      userId,
+      url,
+      payload,
+      eventType,
+      attempts: 0,
+      maxRetries: safeMaxRetries,
+      error: lastError,
+    });
+
+    console.error(
+      `❌ Webhook ${eventType} bloqueado por URL insegura para user ${userId}. Registro dead-letter: ${failureId ?? "sem id"}. URL: ${url}`
+    );
+
+    return {
+      ok: false,
+      attempts: 0,
+      error: lastError,
+      failureId,
+    };
+  }
 
   for (let attempt = 1; attempt <= safeMaxRetries; attempt++) {
     try {
-      await axios.post(url, payload, { timeout: timeoutMs });
+      await axios.post(url, payload, {
+        timeout: safeTimeoutMs,
+        headers: normalizedHeaders,
+      });
+      console.log(
+        `✅ Webhook ${eventType} entregue para user ${userId} em ${attempt} tentativa(s).`
+      );
       return { ok: true, attempts: attempt };
     } catch (err) {
       lastError = getWebhookErrorMessage(err);

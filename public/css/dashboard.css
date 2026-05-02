@@ -100,7 +100,7 @@ section {
 }
 
 .topbar h1 {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 16px;
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -275,7 +275,7 @@ section {
 
 .card b {
   display: block;
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 28px;
   font-weight: 700;
   letter-spacing: -.02em;
@@ -441,7 +441,7 @@ section {
 }
 
 .chart-card-header h3 {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
@@ -502,7 +502,7 @@ section {
 }
 
 .donut-big {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 20px;
   font-weight: 700;
   color: var(--text);
@@ -548,7 +548,7 @@ section {
   padding-left: 10px;
   font-size: 12px;
   font-weight: 600;
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   transition: width 1s cubic-bezier(.4, 0, .2, 1);
 }
 
@@ -558,7 +558,7 @@ section {
   width: 36px;
   text-align: right;
   flex-shrink: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
 }
 
 /* ===================================
@@ -810,7 +810,7 @@ section {
 }
 
 .result-count {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 12px;
   color: var(--text-muted);
   white-space: nowrap;
@@ -860,7 +860,7 @@ section {
 }
 
 .table-header h2 {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 14px;
   font-weight: 700;
   display: flex;
@@ -982,7 +982,7 @@ tbody tr:hover td {
 }
 
 td.danger-cell {
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   font-size: 13px;
   color: var(--red);
   font-weight: 700;
@@ -1121,7 +1121,7 @@ tr.abandoned td:first-child {
   font-size: 13px;
   cursor: pointer;
   transition: all .2s;
-  font-family: var(--font-mono);
+  font-family: var(--font-display);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1217,7 +1217,7 @@ tr.abandoned td:first-child {
   color: #e9eef5;
   border-radius: var(--radius-md);
   padding: 10px 12px;
-  font-family: 'DM Sans', system-ui, sans-serif;
+  font-family: var(--font-display);
 }
 
 .plan-config-fields textarea {
@@ -1310,7 +1310,7 @@ tr.abandoned td:first-child {
   color: #e9eef5;
   border-radius: var(--radius-md);
   padding: 10px 12px;
-  font-family: 'DM Sans', system-ui, sans-serif;
+  font-family: var(--font-display);
 }
 .template-controls textarea {
   min-height: 180px;

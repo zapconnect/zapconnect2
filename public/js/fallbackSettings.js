@@ -1,19 +1,163 @@
-// public/js/fallbackSettings.js
 const DEFAULTS = {
+  enableFallback: true,
   fallbackMessage: "Vou encaminhar você para um atendente humano, aguarde um momento.",
   sendTransferMessage: false,
   internalNoteOnly: true,
+  repetitionEnabled: true,
+  directRequestEnabled: true,
+  frustrationEnabled: true,
+  aiUncertaintyEnabled: true,
+  aiTransferEnabled: true,
+  handoverEnabled: true,
+  alertEnabled: false,
+  fallbackSensitivity: "medium",
+  maxRepetitions: 3,
+  maxFrustration: 2,
+  maxIaFailures: 2,
+  triggerWords: [
+    "humano",
+    "pessoa",
+    "atendente",
+    "falar com humano",
+    "falar com atendente",
+    "suporte humano",
+  ],
+  frustrationWords: [
+    "reclamação",
+    "reclamacao",
+    "frustrado",
+    "frustrada",
+    "cansado",
+    "cansada",
+    "irritado",
+    "irritada",
+    "não funciona",
+    "nao funciona",
+    "péssimo",
+    "pessimo",
+    "de novo",
+  ],
+  aiUncertaintyPhrases: [
+    "não tenho certeza",
+    "nao tenho certeza",
+    "não entendi",
+    "nao entendi",
+    "não consegui",
+    "nao consegui",
+    "pode fornecer mais detalhes",
+    "pode repetir",
+    "não sei",
+    "nao sei",
+  ],
+  aiTransferPhrases: [
+    "transferindo...",
+    "vou encaminhar você para um humano",
+    "vou transferir você para um atendente",
+  ],
   humanModeDuration: 15,
-  aiTransferPhrases: ["transferindo...", "vou encaminhar você para um humano"],
-  source: "default",
+  notifyPanel: true,
+  notifyWebhook: false,
+  webhookUrl: "",
   alertPhone: "",
   alertMessage: "Alerta: assuma a conversa {chatId} da sessão {sessionName}.",
   fallbackCooldownMinutes: 5,
+  source: "default",
 };
 
-let lastConfig = { ...DEFAULTS };
-let cachedList = [];
+const LIST_FIELDS = new Set([
+  "triggerWords",
+  "frustrationWords",
+  "aiUncertaintyPhrases",
+  "aiTransferPhrases",
+]);
+
+const NUMBER_FIELDS = new Set([
+  "maxRepetitions",
+  "maxFrustration",
+  "maxIaFailures",
+  "humanModeDuration",
+  "fallbackCooldownMinutes",
+]);
+
+const TOGGLE_FIELDS = new Set([
+  "enableFallback",
+  "sendTransferMessage",
+  "repetitionEnabled",
+  "directRequestEnabled",
+  "frustrationEnabled",
+  "aiUncertaintyEnabled",
+  "aiTransferEnabled",
+  "handoverEnabled",
+  "notifyPanel",
+  "alertEnabled",
+  "notifyWebhook",
+]);
+
+const CONFIG_FIELDS = [
+  "enableFallback",
+  "sendTransferMessage",
+  "directRequestEnabled",
+  "triggerWords",
+  "repetitionEnabled",
+  "maxRepetitions",
+  "frustrationEnabled",
+  "frustrationWords",
+  "maxFrustration",
+  "fallbackSensitivity",
+  "aiUncertaintyEnabled",
+  "aiUncertaintyPhrases",
+  "maxIaFailures",
+  "aiTransferEnabled",
+  "aiTransferPhrases",
+  "fallbackMessage",
+  "handoverEnabled",
+  "humanModeDuration",
+  "fallbackCooldownMinutes",
+  "notifyPanel",
+  "alertEnabled",
+  "alertPhone",
+  "alertMessage",
+  "notifyWebhook",
+  "webhookUrl",
+];
+
+const RULE_CONFIG = {
+  directRequestEnabled: ["triggerWords"],
+  repetitionEnabled: ["maxRepetitions"],
+  frustrationEnabled: ["frustrationWords", "maxFrustration", "fallbackSensitivity"],
+  aiUncertaintyEnabled: ["aiUncertaintyPhrases", "maxIaFailures"],
+  aiTransferEnabled: ["aiTransferPhrases"],
+  sendTransferMessage: ["fallbackMessage"],
+  handoverEnabled: ["humanModeDuration", "fallbackCooldownMinutes"],
+  notifyPanel: [],
+  alertEnabled: ["alertPhone", "alertMessage"],
+  notifyWebhook: ["webhookUrl"],
+};
+
+const DETECTION_RULES = [
+  "directRequestEnabled",
+  "repetitionEnabled",
+  "frustrationEnabled",
+  "aiUncertaintyEnabled",
+  "aiTransferEnabled",
+];
+
+const ACTION_RULES = [
+  "sendTransferMessage",
+  "handoverEnabled",
+  "notifyPanel",
+  "alertEnabled",
+  "notifyWebhook",
+];
+
+const SAVE_DEBOUNCE_MS = 800;
+
+let currentConfig = { ...DEFAULTS };
+let settingsBuffer = {};
+let saveTimeout = null;
+let isHydrating = false;
 let cachedSessions = [];
+let cachedList = [];
 
 function qs(id) {
   return document.getElementById(id);
@@ -24,68 +168,243 @@ function listToText(arr) {
 }
 
 function textToList(text) {
-  return (text || "")
-    .split(/[\n,]/)
-    .map((s) => s.trim())
+  return String(text || "")
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
     .filter(Boolean);
 }
 
-function showStatus(msg, ok = true) {
+function setSaveState(kind, message) {
+  const pill = qs("pill-save-state");
+  if (!pill) return;
+  pill.textContent = message;
+  pill.className = `pill ${kind}`;
+}
+
+function showStatus(message, ok = true) {
   const box = qs("status-box");
   if (!box) return;
   box.style.display = "block";
   box.className = ok ? "status ok" : "status err";
-  box.textContent = msg;
+  box.textContent = message;
 }
 
-function syncTransferMessageUi() {
-  const internalNoteOnly = qs("internalNoteOnly");
-  const sendTransferMessage = qs("sendTransferMessage");
-  const fallbackMessage = qs("fallbackMessage");
-  if (!internalNoteOnly || !sendTransferMessage || !fallbackMessage) return;
-
-  const shouldEnableMessage = sendTransferMessage.checked && !internalNoteOnly.checked;
-  fallbackMessage.disabled = !shouldEnableMessage;
-  fallbackMessage.style.opacity = shouldEnableMessage ? "1" : "0.6";
+function hideStatus() {
+  const box = qs("status-box");
+  if (!box) return;
+  box.style.display = "none";
+  box.textContent = "";
 }
 
-function handleInternalNoteOnlyChange() {
-  const internalNoteOnly = qs("internalNoteOnly");
-  const sendTransferMessage = qs("sendTransferMessage");
-  if (!internalNoteOnly || !sendTransferMessage) return;
+function getSessionName() {
+  return String(qs("sessionName")?.value || "").trim();
+}
 
-  if (internalNoteOnly.checked) {
-    sendTransferMessage.checked = false;
+function getFieldValue(key) {
+  const el = qs(key);
+  if (!el) return undefined;
+
+  if (TOGGLE_FIELDS.has(key)) {
+    return !!el.checked;
   }
 
-  syncTransferMessageUi();
-}
-
-function handleSendTransferMessageChange() {
-  const internalNoteOnly = qs("internalNoteOnly");
-  const sendTransferMessage = qs("sendTransferMessage");
-  if (!internalNoteOnly || !sendTransferMessage) return;
-
-  if (sendTransferMessage.checked) {
-    internalNoteOnly.checked = false;
+  if (LIST_FIELDS.has(key)) {
+    return textToList(el.value);
   }
 
-  syncTransferMessageUi();
+  if (NUMBER_FIELDS.has(key)) {
+    const numeric = Number(el.value);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      return DEFAULTS[key];
+    }
+    return numeric;
+  }
+
+  return String(el.value || "");
+}
+
+function updateSourcePill(source) {
+  const pill = qs("pill-src");
+  if (!pill) return;
+  pill.textContent = `Fonte: ${source === "db" ? "Personalizada" : "Padrão"}`;
+}
+
+function countActiveRules(keys) {
+  return keys.filter((key) => currentConfig[key] === true).length;
+}
+
+function updateRuleCounters() {
+  const detectBadge = qs("detectRulesBadge");
+  const actionBadge = qs("actionRulesBadge");
+
+  if (detectBadge) {
+    const total = countActiveRules(DETECTION_RULES);
+    detectBadge.textContent = `${total} regra${total === 1 ? "" : "s"} ativa${total === 1 ? "" : "s"}`;
+  }
+
+  if (actionBadge) {
+    const total = countActiveRules(ACTION_RULES);
+    actionBadge.textContent = `${total} regra${total === 1 ? "" : "s"} ativa${total === 1 ? "" : "s"}`;
+  }
+}
+
+function syncRuleCards() {
+  Object.entries(RULE_CONFIG).forEach(([toggleKey, fieldIds]) => {
+    const toggle = qs(toggleKey);
+    const card = document.querySelector(`[data-rule="${toggleKey}"]`);
+    const enabled = !!toggle?.checked;
+    if (!card) return;
+
+    card.classList.toggle("rule-disabled", !enabled);
+    fieldIds.forEach((fieldId) => {
+      const field = qs(fieldId);
+      if (!field) return;
+      field.disabled = !enabled;
+    });
+  });
+
+  const shell = qs("fallbackShell");
+  if (shell) {
+    shell.classList.toggle("shell-paused", !currentConfig.enableFallback);
+  }
+
+  updateRuleCounters();
+}
+
+function applyConfig(config) {
+  const merged = {
+    ...DEFAULTS,
+    ...config,
+    alertEnabled:
+      config?.alertEnabled !== undefined
+        ? !!config.alertEnabled
+        : Boolean(config?.alertPhone),
+  };
+
+  currentConfig = {
+    ...merged,
+    internalNoteOnly: merged.sendTransferMessage ? false : true,
+  };
+
+  isHydrating = true;
+
+  CONFIG_FIELDS.forEach((key) => {
+    const el = qs(key);
+    if (!el) return;
+
+    if (TOGGLE_FIELDS.has(key)) {
+      el.checked = !!currentConfig[key];
+      return;
+    }
+
+    if (LIST_FIELDS.has(key)) {
+      el.value = listToText(currentConfig[key]);
+      return;
+    }
+
+    const value = currentConfig[key];
+    el.value = value === null || value === undefined ? "" : String(value);
+  });
+
+  isHydrating = false;
+
+  updateSourcePill(currentConfig.source);
+  syncRuleCards();
+}
+
+function buildPayloadFromDefaults() {
+  return {
+    ...DEFAULTS,
+    sessionName: getSessionName(),
+    source: undefined,
+  };
+}
+
+function queueSave(key, value) {
+  if (isHydrating) return;
+  const sessionName = getSessionName();
+  if (!sessionName) {
+    showStatus("Selecione uma sessão antes de editar as regras.", false);
+    return;
+  }
+
+  hideStatus();
+  currentConfig[key] = value;
+  settingsBuffer[key] = value;
+
+  if (key === "sendTransferMessage") {
+    currentConfig.internalNoteOnly = !value;
+    settingsBuffer.internalNoteOnly = !value;
+  }
+
+  syncRuleCards();
+  setSaveState("saving", "Salvando alterações...");
+
+  clearTimeout(saveTimeout);
+  saveTimeout = setTimeout(() => {
+    saveTimeout = null;
+    saveSettings();
+  }, SAVE_DEBOUNCE_MS);
+}
+
+async function saveSettings() {
+  const sessionName = getSessionName();
+  if (!sessionName) return;
+  if (!Object.keys(settingsBuffer).length) return;
+
+  const payload = {
+    sessionName,
+    ...settingsBuffer,
+  };
+
+  try {
+    setSaveState("saving", "Salvando alterações...");
+    const res = await fetch("/api/fallback-settings", {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      throw new Error("Não foi possível salvar as alterações do fallback.");
+    }
+
+    const data = await res.json();
+    settingsBuffer = {};
+    applyConfig(data.config || currentConfig);
+    setSaveState("saved", "Salvo agora");
+    fetchList();
+  } catch (err) {
+    console.error(err);
+    setSaveState("error", "Erro ao salvar");
+    showStatus(err.message || "Erro ao salvar fallback.", false);
+  }
+}
+
+async function flushPendingSave() {
+  if (!Object.keys(settingsBuffer).length) return;
+  clearTimeout(saveTimeout);
+  saveTimeout = null;
+  await saveSettings();
 }
 
 function populateSessions(sessions) {
   cachedSessions = sessions || [];
   const select = qs("sessionName");
   if (!select) return;
+
   if (!cachedSessions.length) {
     select.innerHTML = '<option value="" disabled selected>Nenhuma sessão encontrada</option>';
+    setSaveState("error", "Nenhuma sessão encontrada");
     return;
   }
+
   select.innerHTML = cachedSessions
-    .map(
-      (s, idx) =>
-        `<option value="${s.session_name}" ${idx === 0 ? "selected" : ""}>${s.session_name} (${s.status})</option>`
-    )
+    .map((session) => {
+      const label = `${session.session_name} (${session.status})`;
+      return `<option value="${session.session_name}">${label}</option>`;
+    })
     .join("");
 }
 
@@ -102,13 +421,14 @@ function renderList(items) {
   body.innerHTML = cachedList
     .map((item) => {
       const updated = item.updated_at ? new Date(item.updated_at).toLocaleString() : "—";
-      const webhook = item.notify_webhook ? "Sim" : "Não";
-      const alert = item.alert_phone ? item.alert_phone : "—";
+      const fallbackState = item.enable_fallback ? "Ligado" : "Desligado";
+      const webhookState = item.notify_webhook ? "Ativo" : "—";
+
       return `
         <div class="table-row">
           <span>${item.session_name}</span>
-          <span>${webhook}</span>
-          <span>${alert}</span>
+          <span>${fallbackState}</span>
+          <span>${webhookState}</span>
           <span>${updated}</span>
           <span class="actions-cell">
             <button class="btn-link" data-action="edit" data-session="${item.session_name}">Editar</button>
@@ -119,20 +439,24 @@ function renderList(items) {
     })
     .join("");
 
-  body.querySelectorAll("button[data-action='edit']").forEach((btn) => {
-    btn.onclick = () => {
-      const sessionName = btn.getAttribute("data-session") || "";
+  body.querySelectorAll("[data-action='edit']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const sessionName = String(button.getAttribute("data-session") || "");
+      if (!sessionName) return;
+      await flushPendingSave();
       qs("sessionName").value = sessionName;
-      loadConfig();
-    };
+      await loadConfig();
+    });
   });
 
-  body.querySelectorAll("button[data-action='delete']").forEach((btn) => {
-    btn.onclick = async () => {
-      const sessionName = btn.getAttribute("data-session") || "";
+  body.querySelectorAll("[data-action='delete']").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const sessionName = String(button.getAttribute("data-session") || "");
       if (!sessionName) return;
-      const confirmDelete = window.confirm(`Excluir configuração da sessão "${sessionName}"?`);
-      if (!confirmDelete) return;
+
+      const confirmed = window.confirm(`Excluir a configuração da sessão "${sessionName}"?`);
+      if (!confirmed) return;
+
       try {
         const res = await fetch("/api/fallback-settings", {
           method: "DELETE",
@@ -140,14 +464,18 @@ function renderList(items) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ sessionName }),
         });
-        if (!res.ok) throw new Error("Falha ao excluir configuração.");
-        showStatus("Configuração excluída.", true);
+
+        if (!res.ok) {
+          throw new Error("Não foi possível excluir a configuração.");
+        }
+
+        showStatus("Configuração excluída com sucesso.", true);
         fetchList();
       } catch (err) {
         console.error(err);
-        showStatus(err.message || "Erro ao excluir.", false);
+        showStatus(err.message || "Erro ao excluir configuração.", false);
       }
-    };
+    });
   });
 }
 
@@ -163,135 +491,125 @@ async function fetchList() {
   }
 }
 
+async function loadConfig() {
+  const sessionName = getSessionName();
+  if (!sessionName) return;
+
+  setSaveState("saving", "Carregando sessão...");
+  hideStatus();
+
+  try {
+    const res = await fetch(`/api/fallback-settings?sessionName=${encodeURIComponent(sessionName)}`, {
+      credentials: "include",
+    });
+
+    if (!res.ok) {
+      throw new Error("Não foi possível carregar a configuração dessa sessão.");
+    }
+
+    const data = await res.json();
+    settingsBuffer = {};
+    applyConfig(data.config || DEFAULTS);
+    setSaveState("saved", "Sessão carregada");
+  } catch (err) {
+    console.error(err);
+    setSaveState("error", "Erro ao carregar");
+    showStatus(err.message || "Erro ao carregar configuração.", false);
+  }
+}
+
 async function fetchSessions() {
   try {
     const res = await fetch("/api/sessions", { credentials: "include" });
     if (!res.ok) throw new Error("Não foi possível carregar as sessões.");
     const data = await res.json();
     populateSessions(data.sessions || []);
-    // auto-load primeira sessão se houver
-    const first = (data.sessions || [])[0];
-    if (first?.session_name) {
-      qs("sessionName").value = first.session_name;
-      loadConfig();
+
+    const firstSession = data.sessions?.[0]?.session_name;
+    if (firstSession) {
+      qs("sessionName").value = firstSession;
+      await loadConfig();
     }
   } catch (err) {
     console.error(err);
-    populateSessions([]);
+    setSaveState("error", "Erro ao buscar sessões");
     showStatus(err.message || "Erro ao listar sessões.", false);
   }
 }
 
-function applyConfig(cfg) {
-  const merged = { ...DEFAULTS, ...cfg };
-  const internalNoteOnly = merged.internalNoteOnly !== false;
-  const sendTransferMessage = merged.sendTransferMessage === true && !internalNoteOnly;
-  lastConfig = { ...merged, internalNoteOnly, sendTransferMessage };
-
-  qs("fallbackMessage").value = merged.fallbackMessage ?? DEFAULTS.fallbackMessage;
-  qs("sendTransferMessage").checked = sendTransferMessage;
-  qs("internalNoteOnly").checked = internalNoteOnly;
-  const duration = merged.humanModeDuration === null ? 0 : merged.humanModeDuration;
-  qs("humanModeDuration").value = Number.isFinite(duration) ? duration : DEFAULTS.humanModeDuration;
-  qs("aiTransferPhrases").value = listToText(merged.aiTransferPhrases ?? DEFAULTS.aiTransferPhrases);
-  qs("alertPhone").value = merged.alertPhone ?? "";
-  qs("alertMessage").value = merged.alertMessage ?? DEFAULTS.alertMessage;
-  qs("fallbackCooldownMinutes").value =
-    merged.fallbackCooldownMinutes === null || merged.fallbackCooldownMinutes === undefined
-      ? DEFAULTS.fallbackCooldownMinutes
-      : merged.fallbackCooldownMinutes;
-  qs("pill-src").textContent = `Fonte: ${merged.source === "db" ? "Personalizada" : "Padrão"}`;
-  syncTransferMessageUi();
+async function handleSessionChange() {
+  await flushPendingSave();
+  await loadConfig();
 }
 
-async function loadConfig() {
-  const sessionName = qs("sessionName").value.trim();
-  if (!sessionName) return showStatus("Informe o sessionName antes de carregar.", false);
-  showStatus("Carregando...", true);
-  try {
-    const res = await fetch(`/api/fallback-settings?sessionName=${encodeURIComponent(sessionName)}`, {
-      credentials: "include",
-    });
-    if (!res.ok) throw new Error("Falha ao carregar configurações.");
-    const data = await res.json();
-    applyConfig(data.config || DEFAULTS);
-    showStatus("Configurações carregadas.", true);
-  } catch (err) {
-    console.error(err);
-    showStatus(err.message || "Erro ao carregar.", false);
-  }
-}
-
-async function saveConfig() {
-  const sessionName = qs("sessionName").value.trim();
-  const btnSave = qs("btnSave");
-  clearAllFieldErrors(document);
+async function resetCurrentSession() {
+  const sessionName = getSessionName();
   if (!sessionName) {
-    showFieldError("sessionName", "Selecione uma sessão.");
-    setButtonLoading(btnSave, false);
-    return showStatus("Informe o sessionName antes de salvar.", false);
+    showStatus("Selecione uma sessão antes de restaurar o padrão.", false);
+    return;
   }
 
-  const transferList = textToList(qs("aiTransferPhrases").value);
-  const internalNoteOnly = qs("internalNoteOnly").checked;
-  const sendTransferMessage = qs("sendTransferMessage").checked && !internalNoteOnly;
-  const payload = {
-    sessionName,
-    fallbackMessage: qs("fallbackMessage").value.trim(),
-    sendTransferMessage,
-    internalNoteOnly,
-    humanModeDuration: (() => {
-      const n = Number(qs("humanModeDuration").value);
-      if (!Number.isFinite(n) || n < 0) return 0;
-      return n;
-    })(),
-    aiTransferPhrases: transferList.length ? transferList : DEFAULTS.aiTransferPhrases,
-    alertPhone: qs("alertPhone").value.trim(),
-    alertMessage: qs("alertMessage").value.trim() || DEFAULTS.alertMessage,
-    fallbackCooldownMinutes: (() => {
-      const n = Number(qs("fallbackCooldownMinutes").value);
-      if (!Number.isFinite(n) || n < 0) return DEFAULTS.fallbackCooldownMinutes;
-      return n;
-    })(),
-  };
+  const confirmed = window.confirm(`Restaurar os padrões da sessão "${sessionName}"?`);
+  if (!confirmed) return;
 
-  showStatus("Salvando...", true);
-  setButtonLoading(btnSave, true, "Salvando...");
+  clearTimeout(saveTimeout);
+  saveTimeout = null;
+  settingsBuffer = {};
+  applyConfig(DEFAULTS);
+
   try {
+    setSaveState("saving", "Restaurando padrão...");
     const res = await fetch("/api/fallback-settings", {
-      method: "POST",
+      method: "PATCH",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(buildPayloadFromDefaults()),
     });
-    if (!res.ok) throw new Error("Falha ao salvar configurações.");
+
+    if (!res.ok) {
+      throw new Error("Não foi possível restaurar o padrão.");
+    }
+
     const data = await res.json();
-    applyConfig(data.config || { ...lastConfig, ...payload });
-    showStatus("Configurações salvas e aplicadas.", true);
+    applyConfig(data.config || DEFAULTS);
+    setSaveState("saved", "Padrão restaurado");
+    showStatus("Configuração restaurada para o padrão.", true);
     fetchList();
   } catch (err) {
     console.error(err);
-    showStatus(err.message || "Erro ao salvar.", false);
-  } finally {
-    setButtonLoading(btnSave, false);
+    setSaveState("error", "Erro ao restaurar");
+    showStatus(err.message || "Erro ao restaurar padrão.", false);
   }
 }
 
-function resetLocal() {
-  applyConfig(DEFAULTS);
-  showStatus("Valores resetados localmente. Clique em salvar para aplicar.", true);
+function bindFieldEvents() {
+  CONFIG_FIELDS.forEach((key) => {
+    const el = qs(key);
+    if (!el) return;
+
+    const eventName =
+      TOGGLE_FIELDS.has(key) || el.tagName === "SELECT" ? "change" : "input";
+
+    el.addEventListener(eventName, () => {
+      const value = getFieldValue(key);
+      queueSave(key, value);
+    });
+  });
+
+  qs("sessionName")?.addEventListener("change", handleSessionChange);
+  qs("btnResetSession")?.addEventListener("click", resetCurrentSession);
+  qs("btnRefreshList")?.addEventListener("click", fetchList);
 }
 
-window.onload = () => {
-  applyConfig(DEFAULTS);
-  fetchSessions();
-  fetchList();
+window.addEventListener("beforeunload", (event) => {
+  if (!Object.keys(settingsBuffer).length) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
 
-  qs("btnLoad")?.addEventListener("click", loadConfig);
-  qs("btnSave")?.addEventListener("click", saveConfig);
-  qs("btnReset")?.addEventListener("click", resetLocal);
-  qs("btnRefreshList")?.addEventListener("click", fetchList);
-  qs("sessionName")?.addEventListener("change", loadConfig);
-  qs("internalNoteOnly")?.addEventListener("change", handleInternalNoteOnlyChange);
-  qs("sendTransferMessage")?.addEventListener("change", handleSendTransferMessageChange);
-};
+window.addEventListener("load", async () => {
+  applyConfig(DEFAULTS);
+  bindFieldEvents();
+  fetchList();
+  await fetchSessions();
+});

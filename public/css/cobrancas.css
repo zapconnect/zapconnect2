@@ -513,7 +513,7 @@ body {
   justify-content: space-between;
   gap: 14px;
   flex-wrap: wrap;
-  margin: 14px 0 0;
+  margin: 0 0 14px;
   padding: 14px 16px;
   background: rgba(13, 19, 38, 0.82);
   border: 1px solid rgba(108, 100, 239, 0.22);
@@ -550,6 +550,13 @@ body {
 .bulk-whatsapp-btn:hover:not(:disabled) {
   border-color: rgba(37, 211, 102, 0.32);
   color: #25d366;
+}
+
+.bulk-links-btn:hover:not(:disabled),
+.bulk-export-btn:hover:not(:disabled) {
+  border-color: rgba(108, 100, 239, 0.4);
+  color: var(--text);
+  background: rgba(108, 100, 239, 0.08);
 }
 
 .filter-shortcuts {
@@ -1410,7 +1417,7 @@ body {
   display: none;
   align-items: center;
   justify-content: center;
-  z-index: 999;
+  z-index: 1300;
   padding: 16px;
 }
 

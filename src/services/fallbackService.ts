@@ -1,4 +1,5 @@
 import { getDB } from "../database";
+import { createLRUCache } from "../utils/lru";
 import { isInSilenceWindow as isInSilenceWindowUtil } from "./silenceUtils";
 
 export type FallbackSensitivity = "low" | "medium" | "high";
@@ -18,6 +19,13 @@ export interface FallbackSettings {
   fallbackMessage: string;
   sendTransferMessage: boolean;
   internalNoteOnly: boolean;
+  repetitionEnabled: boolean;
+  directRequestEnabled: boolean;
+  frustrationEnabled: boolean;
+  aiUncertaintyEnabled: boolean;
+  aiTransferEnabled: boolean;
+  handoverEnabled: boolean;
+  alertEnabled: boolean;
   fallbackSensitivity: FallbackSensitivity;
   maxRepetitions: number;
   maxFrustration: number;
@@ -58,6 +66,13 @@ const DEFAULT_FALLBACK_SETTINGS: FallbackSettings = {
   fallbackMessage: "Vou encaminhar você para um atendente humano, aguarde um momento.",
   sendTransferMessage: false,
   internalNoteOnly: true,
+  repetitionEnabled: true,
+  directRequestEnabled: true,
+  frustrationEnabled: true,
+  aiUncertaintyEnabled: true,
+  aiTransferEnabled: true,
+  handoverEnabled: true,
+  alertEnabled: false,
   fallbackSensitivity: "medium",
   maxRepetitions: 3,
   maxFrustration: 2,
@@ -122,9 +137,27 @@ type RuntimeState = {
 
 type CachedEntry = { value: EffectiveFallbackSettings; storedAt: number };
 export const fallbackSettingsCache = new Map<string, CachedEntry>();
-const runtimeByChat = new Map<string, RuntimeState>();
-const lastFallbackAt = new Map<string, number>();
-const silenceCache = new Map<number, { value: boolean; fetchedAt: number }>();
+const FALLBACK_RUNTIME_TTL_MS = 6 * 60 * 60 * 1000;
+const FALLBACK_LAST_AT_TTL_MS = 24 * 60 * 60 * 1000;
+const FALLBACK_SILENCE_CACHE_TTL_MS = 5 * 60 * 1000;
+const runtimeByChat = createLRUCache<string, RuntimeState>(
+  "FALLBACK_RUNTIME_CACHE_MAX",
+  20_000,
+  {
+    ttl: FALLBACK_RUNTIME_TTL_MS,
+    updateAgeOnGet: true,
+  }
+);
+const lastFallbackAt = createLRUCache<string, number>(
+  "FALLBACK_LAST_AT_CACHE_MAX",
+  20_000,
+  { ttl: FALLBACK_LAST_AT_TTL_MS }
+);
+const silenceCache = createLRUCache<number, boolean>(
+  "FALLBACK_SILENCE_CACHE_MAX",
+  10_000,
+  { ttl: FALLBACK_SILENCE_CACHE_TTL_MS }
+);
 
 const LONG_AUDIO_SECONDS = 90;
 const DOCUMENT_NO_TEXT_WEIGHT = 2;
@@ -168,15 +201,14 @@ function normalize(text: string) {
 }
 
 async function isInSilenceWindow(userId: number): Promise<boolean> {
-  const now = Date.now();
   const cached = silenceCache.get(userId);
-  if (cached && now - cached.fetchedAt < 5 * 60 * 1000) {
-    return cached.value;
+  if (cached !== undefined) {
+    return cached;
   }
 
   try {
     const value = await isInSilenceWindowUtil(userId);
-    silenceCache.set(userId, { value, fetchedAt: now });
+    silenceCache.set(userId, value);
     return value;
   } catch (err) {
     console.warn("Falha ao checar horÃ¡rio de silÃªncio (fallback):", err);
@@ -291,6 +323,34 @@ export async function loadFallbackSettings(
       row.internal_note_only === null || row.internal_note_only === undefined
         ? DEFAULT_FALLBACK_SETTINGS.internalNoteOnly
         : row.internal_note_only !== 0,
+    repetitionEnabled:
+      row.repetition_enabled === null || row.repetition_enabled === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.repetitionEnabled
+        : row.repetition_enabled !== 0,
+    directRequestEnabled:
+      row.direct_request_enabled === null || row.direct_request_enabled === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.directRequestEnabled
+        : row.direct_request_enabled !== 0,
+    frustrationEnabled:
+      row.frustration_enabled === null || row.frustration_enabled === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.frustrationEnabled
+        : row.frustration_enabled !== 0,
+    aiUncertaintyEnabled:
+      row.ai_uncertainty_enabled === null || row.ai_uncertainty_enabled === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.aiUncertaintyEnabled
+        : row.ai_uncertainty_enabled !== 0,
+    aiTransferEnabled:
+      row.ai_transfer_enabled === null || row.ai_transfer_enabled === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.aiTransferEnabled
+        : row.ai_transfer_enabled !== 0,
+    handoverEnabled:
+      row.handover_enabled === null || row.handover_enabled === undefined
+        ? DEFAULT_FALLBACK_SETTINGS.handoverEnabled
+        : row.handover_enabled !== 0,
+    alertEnabled:
+      row.alert_enabled === null || row.alert_enabled === undefined
+        ? Boolean(row.alert_phone || DEFAULT_FALLBACK_SETTINGS.alertEnabled)
+        : row.alert_enabled !== 0,
     fallbackSensitivity: (row.fallback_sensitivity as FallbackSensitivity) || DEFAULT_FALLBACK_SETTINGS.fallbackSensitivity,
     maxRepetitions: row.max_repetitions ?? DEFAULT_FALLBACK_SETTINGS.maxRepetitions,
     maxFrustration: row.max_frustration ?? DEFAULT_FALLBACK_SETTINGS.maxFrustration,
@@ -335,6 +395,13 @@ export async function saveFallbackSettings(
       fallback_message,
       send_transfer_message,
       internal_note_only,
+      repetition_enabled,
+      direct_request_enabled,
+      frustration_enabled,
+      ai_uncertainty_enabled,
+      ai_transfer_enabled,
+      handover_enabled,
+      alert_enabled,
       fallback_sensitivity,
       max_repetitions,
       max_frustration,
@@ -350,12 +417,19 @@ export async function saveFallbackSettings(
       alert_phone,
       alert_message,
       fallback_cooldown_minutes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON DUPLICATE KEY UPDATE
       enable_fallback = VALUES(enable_fallback),
       fallback_message = VALUES(fallback_message),
       send_transfer_message = VALUES(send_transfer_message),
       internal_note_only = VALUES(internal_note_only),
+      repetition_enabled = VALUES(repetition_enabled),
+      direct_request_enabled = VALUES(direct_request_enabled),
+      frustration_enabled = VALUES(frustration_enabled),
+      ai_uncertainty_enabled = VALUES(ai_uncertainty_enabled),
+      ai_transfer_enabled = VALUES(ai_transfer_enabled),
+      handover_enabled = VALUES(handover_enabled),
+      alert_enabled = VALUES(alert_enabled),
       fallback_sensitivity = VALUES(fallback_sensitivity),
       max_repetitions = VALUES(max_repetitions),
       max_frustration = VALUES(max_frustration),
@@ -379,6 +453,13 @@ export async function saveFallbackSettings(
       payload.fallbackMessage,
       payload.sendTransferMessage ? 1 : 0,
       payload.internalNoteOnly ? 1 : 0,
+      payload.repetitionEnabled ? 1 : 0,
+      payload.directRequestEnabled ? 1 : 0,
+      payload.frustrationEnabled ? 1 : 0,
+      payload.aiUncertaintyEnabled ? 1 : 0,
+      payload.aiTransferEnabled ? 1 : 0,
+      payload.handoverEnabled ? 1 : 0,
+      payload.alertEnabled ? 1 : 0,
       payload.fallbackSensitivity,
       payload.maxRepetitions,
       payload.maxFrustration,
@@ -414,7 +495,7 @@ function getRuntimeState(key: string): RuntimeState {
   const now = Date.now();
   const existing = runtimeByChat.get(key);
 
-  if (existing && now - existing.lastUpdated < 6 * 60 * 60 * 1000) {
+  if (existing) {
     existing.lastUpdated = now;
     return existing;
   }
@@ -536,17 +617,18 @@ export async function checkFallbackTriggers(params: {
 
     const isDocumentNoText = params.mediaType === "document" && params.hasText === false;
 
-    if (isLongAudio) {
+    if (config.frustrationEnabled && isLongAudio) {
       state.frustrationScore += DOCUMENT_NO_TEXT_WEIGHT; // peso 2 para áudio longo
       state.lastFrustration = "[audio_longo]";
     }
 
-    if (isDocumentNoText) {
+    if (config.frustrationEnabled && isDocumentNoText) {
       state.frustrationScore += DOCUMENT_NO_TEXT_WEIGHT; // peso 2 para doc sem contexto
       state.lastFrustration = "[documento_sem_contexto]";
     }
-    const directRequest = findMatch(text, config.triggerWords);
-    if (directRequest) {
+    const directRequest =
+      config.directRequestEnabled ? findMatch(text, config.triggerWords) : null;
+    if (config.directRequestEnabled && directRequest) {
       return {
         shouldFallback: true,
         reason: "user_request",
@@ -555,12 +637,16 @@ export async function checkFallbackTriggers(params: {
       };
     }
 
-    const matchFrustration = findMatch(text, config.frustrationWords);
-    if (matchFrustration) {
+    const matchFrustration =
+      config.frustrationEnabled ? findMatch(text, config.frustrationWords) : null;
+    if (config.frustrationEnabled && matchFrustration) {
       state.frustrationScore += frustrationWeight(matchFrustration);
       state.lastFrustration = matchFrustration;
-    } else {
+    } else if (config.frustrationEnabled) {
       state.frustrationScore = Math.max(0, state.frustrationScore - 1);
+      state.lastFrustration = null;
+    } else {
+      state.frustrationScore = 0;
       state.lastFrustration = null;
     }
 
@@ -572,7 +658,7 @@ export async function checkFallbackTriggers(params: {
       state.repetitionCount = 1;
     }
 
-    if (state.repetitionCount >= config.limits.repetition) {
+    if (config.repetitionEnabled && state.repetitionCount >= config.limits.repetition) {
       return {
         shouldFallback: true,
         reason: "repetition_limit",
@@ -581,7 +667,7 @@ export async function checkFallbackTriggers(params: {
       };
     }
 
-    if (state.frustrationScore >= config.limits.frustration) {
+    if (config.frustrationEnabled && state.frustrationScore >= config.limits.frustration) {
       return {
         shouldFallback: true,
         reason: "frustration_limit",
@@ -594,6 +680,10 @@ export async function checkFallbackTriggers(params: {
   }
 
   if (params.event === "ai_error") {
+    if (!config.aiUncertaintyEnabled) {
+      return { shouldFallback: false, config };
+    }
+
     state.iaFailureCount += 1;
     if (state.iaFailureCount >= config.limits.iaFailures) {
       return {
@@ -608,8 +698,9 @@ export async function checkFallbackTriggers(params: {
   if (params.event === "ai_response" && params.aiResponse) {
     const response = params.aiResponse;
 
-    const transfer = findMatch(response, config.aiTransferPhrases);
-    if (transfer) {
+    const transfer =
+      config.aiTransferEnabled ? findMatch(response, config.aiTransferPhrases) : null;
+    if (config.aiTransferEnabled && transfer) {
       return {
         shouldFallback: true,
         reason: "ai_transfer",
@@ -618,8 +709,9 @@ export async function checkFallbackTriggers(params: {
       };
     }
 
-    const uncertainty = findMatch(response, config.aiUncertaintyPhrases);
-    if (uncertainty) {
+    const uncertainty =
+      config.aiUncertaintyEnabled ? findMatch(response, config.aiUncertaintyPhrases) : null;
+    if (config.aiUncertaintyEnabled && uncertainty) {
       state.iaFailureCount += 1;
       if (state.iaFailureCount >= config.limits.iaFailures) {
         return {
@@ -629,7 +721,7 @@ export async function checkFallbackTriggers(params: {
           config,
         };
       }
-    } else {
+    } else if (config.aiUncertaintyEnabled) {
       state.iaFailureCount = Math.max(0, state.iaFailureCount - 1);
     }
   }

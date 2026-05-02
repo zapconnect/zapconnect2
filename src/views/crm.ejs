@@ -6,19 +6,19 @@
   <title>CRM Kanban • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- Font Awesome -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
-    crossorigin="anonymous" referrerpolicy="no-referrer">
-  <link rel="icon" href="/img/favinco.png" />
+  <%- include("partials/app-head-core") %>
   <!-- CSS -->
   <link rel="stylesheet" href="/css/crm.css">
+  <link rel="stylesheet" href="/css/app-shell.css">
+  <script src="/js/app-shell.js" defer></script>
   <script src="/socket.io/socket.io.js"></script>
   <script>
     window.USER_ID = "<%= user.id %>";
   </script>
 </head>
 
-<body data-default-ddi="<%= user.default_ddi || '55' %>">
+<body class="has-app-sidebar" data-default-ddi="<%= user.default_ddi || '55' %>">
+  <%- include("partials/app-sidebar", { activePage: "crm" }) %>
 
   <div class="page">
 
@@ -41,12 +41,6 @@
         </div>
 
         <div class="main-actions">
-
-          <div class="search-box">
-            <i class="fa-solid fa-magnifying-glass"></i>
-            <input id="q" placeholder="Buscar cliente, telefone ou tag">
-          </div>
-
           <div class="sort-controls">
             <select id="sortSelect" class="sort-select" title="Ordenar por">
               <option value="name">Nome</option>
@@ -92,28 +86,56 @@
       <!-- =============================
          🔎 FILTROS
     ============================== -->
-      <div class="filters" id="filters">
-        <button type="button" class="filters-toggle" id="filtersToggle" aria-expanded="true">
-          <i class="fa-solid fa-filter"></i>
-          Filtros
-          <i class="fa-solid fa-chevron-down chevron"></i>
-        </button>
-
-        <div class="filters-panel" id="filtersPanel">
-          <div class="filters-options">
-            <label><input type="checkbox" id="filterNovo" checked> Novo</label>
-            <label><input type="checkbox" id="filterQualificando" checked> Qualificando</label>
-            <label><input type="checkbox" id="filterNegociacao" checked> Negociação</label>
-            <label><input type="checkbox" id="filterFechado" checked> Fechado</label>
-            <label><input type="checkbox" id="filterPerdido" checked> Perdido</label>
-          </div>
+      <div class="crm-filters-bar">
+        <div class="crm-search-row">
+          <label class="crm-search-field" for="crmSearch">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input
+              id="crmSearch"
+              class="crm-search-input"
+              placeholder="Buscar cliente ou número..."
+              oninput="updateFilter('text', this.value)"
+            >
+          </label>
+          <span id="crmResultCount" class="crm-result-count">0 clientes</span>
         </div>
 
-        <!-- Badge de tag ativa -->
-        <div id="activeTagBadge" class="active-tag-badge" style="display:none;">
-          <i class="fa-solid fa-tag"></i>
-          <span id="activeTagLabel"></span>
-          <button id="clearTagFilter" title="Remover filtro">✕</button>
+        <div class="crm-filter-group">
+          <span class="crm-filter-label">Stages</span>
+          <div class="filter-pills" id="stagePills"></div>
+        </div>
+
+        <div class="crm-filter-group">
+          <span class="crm-filter-label">Tags</span>
+          <div class="filter-pills" id="tagPills"></div>
+        </div>
+
+        <div class="crm-filter-extras">
+          <label class="crm-extra-field" for="minValueInput">
+            <span>Valor mínimo</span>
+            <input
+              type="number"
+              id="minValueInput"
+              min="0"
+              step="0.01"
+              placeholder="0"
+              onchange="updateFilter('minValue', this.value)"
+            >
+          </label>
+
+          <label class="crm-checkbox-field" for="followUpCheck">
+            <input
+              type="checkbox"
+              id="followUpCheck"
+              onchange="updateFilter('hasFollowUp', this.checked)"
+            >
+            <span>Com follow-up</span>
+          </label>
+
+          <button type="button" class="btn ghost btn-clear-filters" onclick="clearAllFilters()">
+            <i class="fa-solid fa-rotate-left"></i>
+            Limpar tudo
+          </button>
         </div>
       </div>
 

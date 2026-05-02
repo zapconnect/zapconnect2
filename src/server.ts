@@ -20,9 +20,12 @@ import { sendEmail } from "./utils/sendEmail";
 import adminRoutes from "./routes/admin";
 import analyticsRoutes from "./routes/analytics";
 import cobrancasRoutes from "./routes/cobrancas";
+import contactTagsRoutes from "./routes/contactTags";
 import dripRoutes from "./routes/drips";
 import mercadopagoRoutes from "./routes/mercadopago";
+import quickRepliesRoutes from "./routes/quickReplies";
 import qualificationRoutes from "./routes/qualification";
+import { getMpPublicSettings } from "./services/mercadopagoService";
 import { getChatAI, setChatAI } from "./services/chatAiService";
 import {
   type FallbackSettings,
@@ -92,6 +95,11 @@ import {
   type NumberListValidationResult,
   validateNumberList,
 } from "./services/listValidator";
+import {
+  getChargeWhatsappDeliveryStatusFromAck,
+  normalizeChargeWhatsappAckValue,
+  normalizeChargeWhatsappMessageId,
+} from "./services/cobrancaWhatsappTracking";
 import { setSocketServer } from "./lib/socketEmitter";
 import { logAudit } from "./utils/audit";
 import {
@@ -116,6 +124,144 @@ let appReady = false;
 import { getDB, closeDB } from "./database";
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const chatOpenSessionLocks = new Map<string, Promise<void>>();
+const latestChatRequestBySocket = new Map<string, string>();
+
+function withChatOpenSessionLock(sessionKey: string, task: () => Promise<void> | void): Promise<void> {
+  const previous = chatOpenSessionLocks.get(sessionKey) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => task())
+    .finally(() => {
+      if (chatOpenSessionLocks.get(sessionKey) === next) {
+        chatOpenSessionLocks.delete(sessionKey);
+      }
+    });
+
+  chatOpenSessionLocks.set(sessionKey, next);
+  return next;
+}
+
+function getActiveChatSerializedId(activeChat: any): string | null {
+  const raw =
+    activeChat?.id?._serialized ||
+    activeChat?.id?.serialized ||
+    activeChat?.id ||
+    activeChat?._serialized ||
+    null;
+
+  return raw ? String(raw) : null;
+}
+
+function isRecoverableOpenChatError(message: string): boolean {
+  return (
+    message.includes("Promise was collected") ||
+    message.includes("Execution context was destroyed") ||
+    message.includes("Target closed") ||
+    message.includes("Session closed") ||
+    message.includes("Protocol error") ||
+    message.includes("Timeout (openChat)")
+  );
+}
+
+async function tryGetActiveChatId(client: any): Promise<string | null> {
+  if (typeof client?.getActiveChat !== "function") return null;
+  try {
+    const activeChat = await withTimeout(
+      client.getActiveChat(),
+      Math.min(WPP_TIMEOUT_MS, 6_000),
+      "getActiveChat"
+    );
+    return getActiveChatSerializedId(activeChat);
+  } catch {
+    return null;
+  }
+}
+
+async function ensureOpenChatReady(client: any): Promise<void> {
+  if (typeof client?.isConnected !== "function") return;
+  const isConnected = await withTimeout(
+    client.isConnected(),
+    Math.min(WPP_TIMEOUT_MS, 5_000),
+    "isConnected"
+  );
+  if (isConnected === false) {
+    throw new Error("WhatsApp Web desconectado durante openChat");
+  }
+}
+
+async function openChatWithRecovery(client: any, chatId: string): Promise<void> {
+  let lastError: any;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const activeChatId = await tryGetActiveChatId(client);
+    if (activeChatId === chatId) return;
+
+    try {
+      await ensureOpenChatReady(client);
+      const opened = await withTimeout(client.openChat(chatId), WPP_TIMEOUT_MS, "openChat");
+
+      if (opened === false) {
+        const currentActiveChatId = await tryGetActiveChatId(client);
+        if (currentActiveChatId !== chatId) {
+          throw new Error("openChat retornou false");
+        }
+      }
+
+      return;
+    } catch (error: any) {
+      lastError = error;
+      const message = String(error?.message || error || "");
+      const recoverable = isRecoverableOpenChatError(message);
+
+      if (!recoverable || attempt >= 3) break;
+
+      console.warn(`⚠️ abrir_chat retry (${attempt}) para ${chatId}:`, message);
+
+      try {
+        if (typeof client?.closeChat === "function") {
+          await withTimeout(
+            client.closeChat(),
+            Math.min(WPP_TIMEOUT_MS, 4_000),
+            "closeChat"
+          );
+        }
+      } catch {}
+
+      await sleep(450 * attempt);
+    }
+  }
+
+  throw lastError ?? new Error(`Não foi possível abrir o chat ${chatId}`);
+}
+
+async function loadMessagesForChat(client: any, chatId: string): Promise<any[]> {
+  let openChatError: any = null;
+
+  try {
+    await openChatWithRecovery(client, chatId);
+    await sleep(350);
+  } catch (error: any) {
+    const message = String(error?.message || error || "");
+    if (!isRecoverableOpenChatError(message)) throw error;
+    openChatError = error;
+  }
+
+  try {
+    return await withTimeout(
+      client.getAllMessagesInChat(
+        chatId,
+        true,
+        false
+      ),
+      WPP_TIMEOUT_MS,
+      "getAllMessagesInChat"
+    );
+  } catch (error) {
+    if (openChatError) throw openChatError;
+    throw error;
+  }
+}
 
 type ConnectedSessionRow = {
   user_id: number;
@@ -863,6 +1009,13 @@ const sanitizeIncomingFile = (input: {
   };
 };
 
+function mapAckToPanelStatus(ackValue: unknown): "sent" | "delivered" | "read" {
+  const normalizedStatus = getChargeWhatsappDeliveryStatusFromAck(ackValue);
+  if (normalizedStatus === "READ") return "read";
+  if (normalizedStatus === "DELIVERED") return "delivered";
+  return "sent";
+}
+
 // ===============================
 // 💾 Armazenamento local de arquivos de agendamento
 // ===============================
@@ -1367,30 +1520,65 @@ io.on("connection", (socket) => {
           mimetype,
           filename,
         });
-        await withTimeout(client.sendFile(chatId, safeFile.dataUrl, safeFile.filename, body || ""), WPP_TIMEOUT_MS, "sendFile");
+        const sentFileMessage = await withTimeout(
+          client.sendFile(chatId, safeFile.dataUrl, safeFile.filename, body || ""),
+          WPP_TIMEOUT_MS,
+          "sendFile"
+        );
+        const messageId = normalizeChargeWhatsappMessageId((sentFileMessage as any)?.id);
+        const ackValue = normalizeChargeWhatsappAckValue((sentFileMessage as any)?.ack) ?? 1;
 
-        io.to(socket.id).emit("newMessage", {
+        io.to(`user:${userId}`).emit("newMessage", {
           chatId,
           body: safeFile.base64,
           mimetype: safeFile.mime,
           isMedia: true,
           fromMe: true,
           _isFromMe: true,
+          mediaBase64: safeFile.base64,
+          mediaText: body || "",
+          filename: safeFile.filename,
+          id: messageId,
+          messageId,
+          ack: ackValue,
+          deliveryStatus: mapAckToPanelStatus(ackValue),
           timestamp: Date.now()
         });
+
+        await db.run(
+          `UPDATE users
+           SET onboarding_step = GREATEST(COALESCE(onboarding_step, 0), 4)
+           WHERE id = ?`,
+          [userId]
+        );
+        io.to(`user:${userId}`).emit("onboarding:step", { step: 4 });
         return;
       }
 
       // 💬 ENVIO DE TEXTO
-      await withTimeout(client.sendText(chatId, body), WPP_TIMEOUT_MS, "sendText");
+      const sentTextMessage = await withTimeout(client.sendText(chatId, body), WPP_TIMEOUT_MS, "sendText");
+      const messageId = normalizeChargeWhatsappMessageId((sentTextMessage as any)?.id);
+      const ackValue = normalizeChargeWhatsappAckValue((sentTextMessage as any)?.ack) ?? 1;
 
-      io.to(socket.id).emit("newMessage", {
+      io.to(`user:${userId}`).emit("newMessage", {
         chatId,
         body,
         fromMe: true,
         _isFromMe: true,
+        id: messageId,
+        messageId,
+        ack: ackValue,
+        deliveryStatus: mapAckToPanelStatus(ackValue),
         timestamp: Date.now()
       });
+
+      await db.run(
+        `UPDATE users
+         SET onboarding_step = GREATEST(COALESCE(onboarding_step, 0), 4)
+         WHERE id = ?`,
+        [userId]
+      );
+      io.to(`user:${userId}`).emit("onboarding:step", { step: 4 });
 
     } catch (err) {
       console.error("❌ Erro ao enviar mensagem do admin:", err);
@@ -1593,15 +1781,19 @@ io.on("connection", (socket) => {
    * =========================================================
    */
   socket.on("abrir_chat", async (chatId: string) => {
+    const chatIdClean = chatId?.includes("@") ? chatId : `${chatId}@c.us`;
+    latestChatRequestBySocket.set(socket.id, chatIdClean);
+
     try {
       const userId = socket.data.userId as number | undefined;
       if (!userId || !chatId) {
-      socket.emit("mensagens_chat", { chatId, messages: [] });
-      return;
-    }
-    const chatIdClean = chatId.includes("@") ? chatId : `${chatId}@c.us`;
+        if (latestChatRequestBySocket.get(socket.id) === chatIdClean) {
+          socket.emit("mensagens_chat", { chatId, messages: [] });
+        }
+        return;
+      }
 
-    const db = getDB();
+      const db = getDB();
 
       // 🔎 Buscar sessão conectada
       const session = await db.get(
@@ -1625,78 +1817,73 @@ io.on("connection", (socket) => {
         return;
       }
 
-      // ==================================================
-      // ✅ ABRIR CHAT (SEM loadEarlierMsgs)
-      // ==================================================
-      let messages: any[] = [];
+      await withChatOpenSessionLock(full, async () => {
+        if (latestChatRequestBySocket.get(socket.id) !== chatIdClean) {
+          return;
+        }
 
-      for (let attempt = 1; attempt <= 2; attempt++) {
+        let messages: any[] = [];
+
         try {
-          await withTimeout(client.openChat(chatIdClean), WPP_TIMEOUT_MS, "openChat");
-
-          // ⏳ pequeno delay para WhatsApp carregar mensagens em memória
-          await sleep(500);
-
-          // ==================================================
-          // 📥 BUSCAR MENSAGENS JÁ DISPONÍVEIS
-          // ==================================================
-          messages = await withTimeout(
-            client.getAllMessagesInChat(
-              chatIdClean,
-              true,   // includeMe
-              false   // includeNotifications (OBRIGATÓRIO)
-            ),
-            WPP_TIMEOUT_MS,
-            "getAllMessagesInChat"
-          );
-          break; // sucesso
+          messages = await loadMessagesForChat(client, chatIdClean);
         } catch (e: any) {
           const msg = String(e?.message || e || "");
           if (msg.includes("No LID for user")) {
             try {
               const numberOnly = chatIdClean.replace(/@.*/, "");
-              const status = await withTimeout(client.checkNumberStatus(numberOnly), WPP_TIMEOUT_MS, "checkNumberStatus");
+              const status = await withTimeout(
+                client.checkNumberStatus(numberOnly),
+                WPP_TIMEOUT_MS,
+                "checkNumberStatus"
+              );
               if (!status || status.canReceiveMessage === false) {
-                socket.emit("abrir_chat_error", { chatId: chatIdClean, error: "Número não encontrado no WhatsApp." });
-                socket.emit("mensagens_chat", { chatId: chatIdClean, messages: [] });
+                if (latestChatRequestBySocket.get(socket.id) === chatIdClean) {
+                  socket.emit("abrir_chat_error", {
+                    chatId: chatIdClean,
+                    error: "Número não encontrado no WhatsApp."
+                  });
+                  socket.emit("mensagens_chat", { chatId: chatIdClean, messages: [] });
+                }
                 return;
               }
-            } catch { }
-            socket.emit("abrir_chat_error", { chatId: chatIdClean, error: "Não foi possível abrir o chat (LID ausente). Envie uma mensagem para iniciar a conversa." });
-            socket.emit("mensagens_chat", { chatId: chatIdClean, messages: [] });
+            } catch {}
+
+            if (latestChatRequestBySocket.get(socket.id) === chatIdClean) {
+              socket.emit("abrir_chat_error", {
+                chatId: chatIdClean,
+                error: "Não foi possível abrir o chat (LID ausente). Envie uma mensagem para iniciar a conversa."
+              });
+              socket.emit("mensagens_chat", { chatId: chatIdClean, messages: [] });
+            }
             return;
           }
-          const recoverable =
-            msg.includes("Promise was collected") ||
-            msg.includes("Execution context was destroyed") ||
-            msg.includes("Target closed") ||
-            msg.includes("Session closed");
 
-          if (attempt < 2 && recoverable) {
-            console.warn(`⚠️ abrir_chat retry (${attempt}) para ${chatId}:`, msg);
-            await sleep(700);
-            continue;
-          }
           throw e;
         }
-      }
 
-      const formatted = messages.map((m: any) => ({
-        chatId: chatIdClean,
-        body: m.body || "",
-        mimetype: m.mimetype || null,
-        isMedia: !!m.mimetype,
-        timestamp: (m.timestamp || Date.now()) * 1000,
-        fromMe: m.fromMe === true,
-        _isFromMe: m.fromMe === true
-      }));
+        if (latestChatRequestBySocket.get(socket.id) !== chatIdClean) {
+          return;
+        }
 
-      const limited = formatted.slice(-MAX_CHAT_MESSAGES);
-      socket.emit("mensagens_chat", { chatId, messages: limited });
+        const formatted = messages.map((m: any) => ({
+          chatId: chatIdClean,
+          body: m.body || "",
+          mimetype: m.mimetype || null,
+          isMedia: !!m.mimetype,
+          timestamp: (m.timestamp || Date.now()) * 1000,
+          fromMe: m.fromMe === true,
+          _isFromMe: m.fromMe === true
+        }));
+
+        const limited = formatted.slice(-MAX_CHAT_MESSAGES);
+        socket.emit("mensagens_chat", { chatId, messages: limited });
+      });
 
     } catch (err) {
       console.error("❌ Erro ao abrir chat:", err);
-      socket.emit("mensagens_chat", { chatId, messages: [] });
+      if (latestChatRequestBySocket.get(socket.id) === chatIdClean) {
+        socket.emit("mensagens_chat", { chatId, messages: [] });
+      }
     }
   });
 
@@ -1729,6 +1916,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    latestChatRequestBySocket.delete(socket.id);
     console.log("❌ Socket desconectado:", socket.id);
   });
 });
@@ -1932,26 +2120,82 @@ app.get("/user", authMiddleware, async (req, res) => {
     [user.id]
   );
 
-  const sessions = await db.all(
-    `
-    SELECT session_name, status
-    FROM sessions
-    WHERE user_id = ?
-    ORDER BY (status = 'connected') DESC, created_at DESC, id DESC
-    `,
-    [user.id]
-  );
-
-  const chargeCadenceRules = await listUserChargeCadenceRules(user.id);
+  const [sessions, chargeCadenceRules, mpSettings, planConfig] = await Promise.all([
+    db.all(
+      `
+      SELECT session_name, status
+      FROM sessions
+      WHERE user_id = ?
+      ORDER BY (status = 'connected') DESC, created_at DESC, id DESC
+      `,
+      [user.id]
+    ),
+    listUserChargeCadenceRules(user.id),
+    getMpPublicSettings(user.id),
+    getPlanConfig(user.plan),
+  ]);
 
   res.render("user", {
     user,
     sessions: sessions || [],
     chargeCadenceRules: chargeCadenceRules || [],
+    mpStatus: Boolean(mpSettings?.configured),
+    planConfig,
     payments: payments || [],          // 🔥 SEMPRE define
     lastPaymentAt: lastPayment?.created_at || null,
     now: Date.now()
   });
+});
+
+app.get("/api/user/stats", authMiddleware, async (req, res) => {
+  try {
+    const authUser = (req as any).user;
+    const db = getDB();
+    const user = await db.get<any>(
+      `
+      SELECT id, plan, ia_messages_used
+      FROM users
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [authUser.id]
+    );
+
+    if (!user) {
+      return res.status(404).json({ ok: false, error: "Usuário não encontrado." });
+    }
+
+    const planConfig = await getPlanConfig(user.plan);
+    const iaMessagesUsed = Number(user.ia_messages_used || 0);
+    const iaMessagesLimit = planConfig?.maxIaMessages ?? 0;
+    const percent =
+      iaMessagesLimit === "unlimited"
+        ? 100
+        : Math.max(
+            0,
+            Math.min(
+              100,
+              Math.round((iaMessagesUsed / Math.max(Number(iaMessagesLimit || 0), 1)) * 100)
+            )
+          );
+
+    return res.json({
+      ok: true,
+      plan: {
+        key: user.plan,
+        name: planConfig?.displayName || String(user.plan || "").toUpperCase(),
+      },
+      iaMessagesUsed,
+      iaMessagesLimit,
+      percent,
+    });
+  } catch (err) {
+    console.error("Erro ao carregar estatísticas do usuário:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Não foi possível carregar as estatísticas do plano.",
+    });
+  }
 });
 
 app.post("/user/default-ddi", authMiddleware, async (req, res) => {
@@ -2304,6 +2548,7 @@ app.get("/index.html", (_req, res) => res.redirect("/login"));
 app.get("/chat", authMiddleware, subscriptionGuard, async (req, res) => {
   const user = (req as any).user;
   const db = getDB();
+  let planConfig = null;
 
   let sessionName = String(req.query.session || "").trim();
 
@@ -2326,9 +2571,16 @@ app.get("/chat", authMiddleware, subscriptionGuard, async (req, res) => {
     return res.redirect("/painel");
   }
 
+  try {
+    planConfig = await getPlanConfig(user?.plan);
+  } catch (err) {
+    console.error("Erro ao carregar planConfig na rota /chat:", err);
+  }
+
   return res.render("chat", {
     user,
     sessionName,
+    planConfig,
   });
 });
 
@@ -2612,20 +2864,44 @@ app.get("/api/crm/client/:chatId", authMiddleware, async (req, res) => {
     const user = (req as any).user;
     const db = getDB();
 
-    const phone = chatId.replace("@c.us", "");
+    const phone = chatId.replace(/@.*/, "").replace(/\D/g, "");
 
     const row = await db.get(
-      `SELECT stage FROM crm WHERE user_id = ? AND phone = ?`,
+      `SELECT name, stage, citystate, deal_value, follow_up_date, tags
+         FROM crm
+        WHERE user_id = ? AND phone = ?`,
       [user.id, phone]
     );
 
+    let parsedTags: string[] = [];
+    try {
+      parsedTags = row?.tags ? JSON.parse(row.tags) : [];
+      if (!Array.isArray(parsedTags)) parsedTags = [];
+    } catch {
+      parsedTags = [];
+    }
+
     res.json({
-      pipeline: row?.stage || "Novo"
+      found: Boolean(row),
+      crmName: row?.name || null,
+      pipeline: row?.stage || "Novo",
+      citystate: row?.citystate || null,
+      dealValue: row?.deal_value == null ? null : Number(row.deal_value),
+      followUpDate: row?.follow_up_date == null ? null : Number(row.follow_up_date),
+      tags: parsedTags,
     });
 
   } catch (err) {
     console.error("Erro buscar pipeline:", err);
-    res.json({ pipeline: "Novo" });
+    res.json({
+      found: false,
+      crmName: null,
+      pipeline: "Novo",
+      citystate: null,
+      dealValue: null,
+      followUpDate: null,
+      tags: [],
+    });
   }
 });
 
@@ -3863,6 +4139,8 @@ app.get("/api/agendamentos/list", authMiddleware, async (req, res) => {
 
   const where: string[] = ["user_id = ?"];
   const params: any[] = [user.id];
+  const countWhere: string[] = ["user_id = ?"];
+  const countParams: any[] = [user.id];
 
   if (status !== "all") {
     where.push("status = ?");
@@ -3872,30 +4150,56 @@ app.get("/api/agendamentos/list", authMiddleware, async (req, res) => {
   if (from > 0) {
     where.push("send_at >= ?");
     params.push(from);
+    countWhere.push("send_at >= ?");
+    countParams.push(from);
   }
 
   if (to > 0) {
     where.push("send_at <= ?");
     params.push(to);
+    countWhere.push("send_at <= ?");
+    countParams.push(to);
   }
 
   if (term) {
     where.push("(message LIKE ? OR numbers LIKE ?)");
     params.push(`%${term}%`, `%${term}%`);
+    countWhere.push("(message LIKE ? OR numbers LIKE ?)");
+    countParams.push(`%${term}%`, `%${term}%`);
   }
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const countWhereSql = countWhere.length ? `WHERE ${countWhere.join(" AND ")}` : "";
 
   const totalRow = await db.get<{ total: number }>(
     `SELECT COUNT(*) as total FROM schedules ${whereSql}`,
     params
   );
   const total = totalRow?.total || 0;
+  const countsRows = await db.all<{ status: string; total: number }>(
+    `SELECT status, COUNT(*) as total FROM schedules ${countWhereSql} GROUP BY status`,
+    countParams
+  );
+  const counts = {
+    all: 0,
+    pending: 0,
+    processing: 0,
+    sent: 0,
+    failed: 0,
+  };
+  countsRows.forEach((row) => {
+    const key = String(row?.status || "").toLowerCase() as keyof typeof counts;
+    const qty = Number(row?.total || 0);
+    if (key in counts) {
+      counts[key] = qty;
+    }
+    counts.all += qty;
+  });
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const safePage = Math.min(page, totalPages);
   const offset = (safePage - 1) * pageSize;
 
-  const rows = await db.all(
+  const rows = await db.all<any>(
     `SELECT * FROM schedules
      ${whereSql}
      ORDER BY ${orderBy} ${orderDir}
@@ -3903,7 +4207,63 @@ app.get("/api/agendamentos/list", authMiddleware, async (req, res) => {
     [...params, pageSize, offset]
   );
 
-  res.json({ rows, total, page: safePage, pageSize, totalPages });
+  const scheduleIds = rows.map((row) => Number(row.id)).filter((id) => Number.isFinite(id));
+  let enrichedRows = rows;
+
+  if (scheduleIds.length) {
+    const placeholders = scheduleIds.map(() => "?").join(", ");
+    const latestLogs = await db.all<any>(
+      `
+      SELECT
+        sl.schedule_id,
+        sl.success_count,
+        sl.failure_count,
+        sl.sent_at,
+        (
+          SELECT sli.error
+          FROM schedule_log_items sli
+          WHERE sli.log_id = sl.id AND sli.error IS NOT NULL AND TRIM(sli.error) <> ''
+          ORDER BY sli.id ASC
+          LIMIT 1
+        ) AS last_error
+      FROM schedule_logs sl
+      WHERE sl.user_id = ?
+        AND sl.id IN (
+          SELECT MAX(id)
+          FROM schedule_logs
+          WHERE user_id = ?
+            AND schedule_id IN (${placeholders})
+          GROUP BY schedule_id
+        )
+      `,
+      [user.id, user.id, ...scheduleIds]
+    );
+
+    const logBySchedule = new Map<number, any>();
+    latestLogs.forEach((row) => {
+      logBySchedule.set(Number(row.schedule_id), row);
+    });
+
+    enrichedRows = rows.map((row) => {
+      const latest = logBySchedule.get(Number(row.id));
+      return {
+        ...row,
+        last_log_success_count: latest?.success_count ?? null,
+        last_log_failure_count: latest?.failure_count ?? null,
+        last_log_sent_at: latest?.sent_at ?? null,
+        last_error: latest?.last_error ?? null,
+      };
+    });
+  }
+
+  res.json({
+    rows: enrichedRows,
+    total,
+    page: safePage,
+    pageSize,
+    totalPages,
+    counts,
+  });
 });
 
 // Logs de execução (alerta no painel)
@@ -4154,6 +4514,7 @@ app.post("/api/crm/stage", authMiddleware, subscriptionGuard, async (req, res) =
       });
     }
 
+    io.to(`user:${user.id}`).emit("crm:changed", { type: "stage", id: crmId });
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -4696,6 +5057,64 @@ const toStringOrNull = (value: any, fallback: string | null) => {
   return text;
 };
 
+const buildFallbackPayload = (
+  body: any,
+  current: FallbackSettings
+): FallbackSettings => {
+  const sensitivityRaw = String(body?.fallbackSensitivity || current.fallbackSensitivity).toLowerCase();
+  const fallbackSensitivity = ["low", "medium", "high"].includes(sensitivityRaw)
+    ? (sensitivityRaw as FallbackSettings["fallbackSensitivity"])
+    : current.fallbackSensitivity;
+
+  const payload: FallbackSettings = {
+    enableFallback: toBool(body?.enableFallback, current.enableFallback),
+    fallbackMessage:
+      body?.fallbackMessage === undefined
+        ? current.fallbackMessage
+        : String(body?.fallbackMessage ?? ""),
+    sendTransferMessage: toBool(body?.sendTransferMessage, current.sendTransferMessage),
+    internalNoteOnly: toBool(body?.internalNoteOnly, current.internalNoteOnly),
+    repetitionEnabled: toBool(body?.repetitionEnabled, current.repetitionEnabled),
+    directRequestEnabled: toBool(body?.directRequestEnabled, current.directRequestEnabled),
+    frustrationEnabled: toBool(body?.frustrationEnabled, current.frustrationEnabled),
+    aiUncertaintyEnabled: toBool(body?.aiUncertaintyEnabled, current.aiUncertaintyEnabled),
+    aiTransferEnabled: toBool(body?.aiTransferEnabled, current.aiTransferEnabled),
+    handoverEnabled: toBool(body?.handoverEnabled, current.handoverEnabled),
+    alertEnabled: toBool(body?.alertEnabled, current.alertEnabled),
+    fallbackSensitivity,
+    maxRepetitions: toNumber(body?.maxRepetitions, current.maxRepetitions) ?? current.maxRepetitions,
+    maxFrustration: toNumber(body?.maxFrustration, current.maxFrustration) ?? current.maxFrustration,
+    maxIaFailures: toNumber(body?.maxIaFailures, current.maxIaFailures) ?? current.maxIaFailures,
+    triggerWords: toStringArray(body?.triggerWords, current.triggerWords),
+    frustrationWords: toStringArray(body?.frustrationWords, current.frustrationWords),
+    aiUncertaintyPhrases: toStringArray(body?.aiUncertaintyPhrases, current.aiUncertaintyPhrases),
+    aiTransferPhrases: toStringArray(body?.aiTransferPhrases, current.aiTransferPhrases),
+    humanModeDuration:
+      body?.humanModeDuration === undefined
+        ? current.humanModeDuration
+        : toNumber(body?.humanModeDuration, current.humanModeDuration),
+    notifyPanel: toBool(body?.notifyPanel, current.notifyPanel),
+    notifyWebhook: toBool(body?.notifyWebhook, current.notifyWebhook),
+    webhookUrl: String(body?.webhookUrl ?? current.webhookUrl),
+    alertPhone: toStringOrNull(body?.alertPhone, current.alertPhone || null),
+    alertMessage: toStringOrNull(body?.alertMessage, current.alertMessage || null) ?? current.alertMessage,
+    fallbackCooldownMinutes:
+      body?.fallbackCooldownMinutes === undefined
+        ? current.fallbackCooldownMinutes
+        : toNumber(body?.fallbackCooldownMinutes, current.fallbackCooldownMinutes),
+  };
+
+  if (payload.sendTransferMessage) {
+    payload.internalNoteOnly = false;
+  }
+
+  if (payload.internalNoteOnly) {
+    payload.sendTransferMessage = false;
+  }
+
+  return payload;
+};
+
 app.get("/api/fallback-settings", authMiddleware, async (req, res) => {
   try {
     const user = (req as any).user;
@@ -4759,46 +5178,7 @@ app.post("/api/fallback-settings", authMiddleware, async (req, res) => {
     }
 
     const current = await loadFallbackSettings(user.id, sessionName);
-
-    const sensitivityRaw = String(req.body?.fallbackSensitivity || current.fallbackSensitivity).toLowerCase();
-    const fallbackSensitivity = ["low", "medium", "high"].includes(sensitivityRaw)
-      ? (sensitivityRaw as FallbackSettings["fallbackSensitivity"])
-      : current.fallbackSensitivity;
-
-    const payload: FallbackSettings = {
-      enableFallback: toBool(req.body?.enableFallback, current.enableFallback),
-      fallbackMessage:
-        req.body?.fallbackMessage === undefined
-          ? current.fallbackMessage
-          : String(req.body?.fallbackMessage ?? ""),
-      sendTransferMessage: toBool(req.body?.sendTransferMessage, current.sendTransferMessage),
-      internalNoteOnly: toBool(req.body?.internalNoteOnly, current.internalNoteOnly),
-      fallbackSensitivity,
-      maxRepetitions: toNumber(req.body?.maxRepetitions, current.maxRepetitions) ?? current.maxRepetitions,
-      maxFrustration: toNumber(req.body?.maxFrustration, current.maxFrustration) ?? current.maxFrustration,
-      maxIaFailures: toNumber(req.body?.maxIaFailures, current.maxIaFailures) ?? current.maxIaFailures,
-      triggerWords: toStringArray(req.body?.triggerWords, current.triggerWords),
-      frustrationWords: toStringArray(req.body?.frustrationWords, current.frustrationWords),
-      aiUncertaintyPhrases: toStringArray(req.body?.aiUncertaintyPhrases, current.aiUncertaintyPhrases),
-      aiTransferPhrases: toStringArray(req.body?.aiTransferPhrases, current.aiTransferPhrases),
-      humanModeDuration:
-        req.body?.humanModeDuration === undefined
-          ? current.humanModeDuration
-          : toNumber(req.body?.humanModeDuration, current.humanModeDuration),
-      notifyPanel: toBool(req.body?.notifyPanel, current.notifyPanel),
-      notifyWebhook: toBool(req.body?.notifyWebhook, current.notifyWebhook),
-      webhookUrl: String(req.body?.webhookUrl ?? current.webhookUrl),
-      alertPhone: toStringOrNull(req.body?.alertPhone, current.alertPhone || null),
-      alertMessage: toStringOrNull(req.body?.alertMessage, current.alertMessage || null) ?? current.alertMessage,
-      fallbackCooldownMinutes:
-        req.body?.fallbackCooldownMinutes === undefined
-          ? current.fallbackCooldownMinutes
-          : toNumber(req.body?.fallbackCooldownMinutes, current.fallbackCooldownMinutes),
-    };
-
-    if (payload.internalNoteOnly) {
-      payload.sendTransferMessage = false;
-    }
+    const payload = buildFallbackPayload(req.body, current);
 
     const saved = await saveFallbackSettings(user.id, sessionName, payload);
     resetFallbackCache(user.id, sessionName); // garante recarga futura caso outro processo esteja usando
@@ -4807,6 +5187,29 @@ app.post("/api/fallback-settings", authMiddleware, async (req, res) => {
     return res.json({ ok: true, config: saved });
   } catch (err) {
     console.error("Erro ao salvar fallback-settings:", err);
+    return res.status(500).json({ ok: false, error: "Erro interno" });
+  }
+});
+
+app.patch("/api/fallback-settings", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const sessionName = String(req.body?.sessionName || req.query.sessionName || "").trim();
+
+    if (!sessionName) {
+      return res.status(400).json({ ok: false, error: "sessionName é obrigatório" });
+    }
+
+    const current = await loadFallbackSettings(user.id, sessionName);
+    const payload = buildFallbackPayload(req.body, current);
+
+    const saved = await saveFallbackSettings(user.id, sessionName, payload);
+    resetFallbackCache(user.id, sessionName);
+    await loadFallbackSettings(user.id, sessionName);
+
+    return res.json({ ok: true, config: saved });
+  } catch (err) {
+    console.error("Erro ao atualizar fallback-settings:", err);
     return res.status(500).json({ ok: false, error: "Erro interno" });
   }
 });
@@ -5084,6 +5487,8 @@ app.use("/", authMiddleware, analyticsRoutes);
 app.use("/", authMiddleware, dripRoutes);
 app.use("/", authMiddleware, qualificationRoutes);
 app.use("/", authMiddleware, cobrancasRoutes);
+app.use("/", authMiddleware, quickRepliesRoutes);
+app.use("/", authMiddleware, contactTagsRoutes);
 
 // =======================================
 // 🚪 LOGOUT
@@ -5136,6 +5541,30 @@ app.post("/user/update-prompt", authMiddleware, async (req, res) => {
   await logAudit("prompt_update", user.id, "user", user.id, { length: (prompt || "").length });
 
   res.json({ ok: true });
+});
+
+app.patch("/api/user/onboarding-step", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user as User;
+    const parsedStep = Number(req.body?.step);
+
+    if (!Number.isInteger(parsedStep) || parsedStep < 0 || parsedStep > 4) {
+      return res.status(400).json({ ok: false, error: "step inválido" });
+    }
+
+    const db = getDB();
+    await db.run(
+      `UPDATE users
+       SET onboarding_step = GREATEST(COALESCE(onboarding_step, 0), ?)
+       WHERE id = ?`,
+      [parsedStep, user.id]
+    );
+
+    return res.json({ ok: true, step: parsedStep });
+  } catch (err) {
+    console.error("Erro ao atualizar onboarding_step:", err);
+    return res.status(500).json({ ok: false, error: "Erro ao atualizar onboarding" });
+  }
 });
 
 // Criar Sessão

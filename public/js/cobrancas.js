@@ -535,21 +535,31 @@ function parseDownloadFilename(contentDisposition) {
   return plainMatch && plainMatch[1] ? plainMatch[1] : "";
 }
 
-async function exportarCobrancasCsv() {
+async function exportarCobrancasCsv(options = {}) {
   if (State.exportCsvLoading) return;
 
-  const button = document.getElementById("btnExportarCsv");
+  const exportIds = Array.isArray(options?.ids)
+    ? options.ids
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    : [];
+  const button = options?.buttonId
+    ? document.getElementById(options.buttonId)
+    : document.getElementById("btnExportarCsv");
   State.exportCsvLoading = true;
+  renderBulkActionsBar();
 
   if (button) {
     button.disabled = true;
     if (typeof setButtonLoading === "function") {
-      setButtonLoading(button, true, "Exportando...");
+      setButtonLoading(button, true, options?.loadingLabel || "Exportando...");
     }
   }
 
   try {
-    const qs = buildCobrancasQueryParams();
+    const qs = buildCobrancasQueryParams(
+      exportIds.length ? { ids: exportIds.join(",") } : {}
+    );
     const response = await fetch(`/api/cobrancas/exportar?${qs.toString()}`);
     const contentType = String(response.headers.get("content-type") || "");
 
@@ -582,7 +592,13 @@ async function exportarCobrancasCsv() {
     anchor.remove();
     window.URL.revokeObjectURL(blobUrl);
 
-    showToast("success", "CSV exportado com sucesso!");
+    showToast(
+      "success",
+      options?.successMessage ||
+        (exportIds.length
+          ? `${exportIds.length} cobrança(s) exportada(s) com sucesso!`
+          : "CSV exportado com sucesso!")
+    );
   } catch (error) {
     console.error(error);
     showToast("error", error?.message || "Erro de conexão ao exportar cobranças");
@@ -595,6 +611,8 @@ async function exportarCobrancasCsv() {
       }
       button.disabled = false;
     }
+
+    renderBulkActionsBar();
   }
 }
 
@@ -798,6 +816,12 @@ function getSelectedCharges() {
   );
 }
 
+function getChargePrimaryPaymentLink(charge) {
+  const checkoutUrl = String(charge?.mp_checkout_url || "").trim();
+  const manualLink = String(charge?.link_pagamento || "").trim();
+  return checkoutUrl || manualLink || "";
+}
+
 function pruneSelectedChargeIds() {
   const currentIds = new Set(getCurrentPageChargeIds());
   State.selectedChargeIds = getSelectedChargeIds().filter((id) => currentIds.has(id));
@@ -821,6 +845,9 @@ function getBulkSelectionStats() {
   const payEligible = selected.filter((charge) => isChargeEligibleForBulkAction(charge, "pay"));
   const notifyEligible = selected.filter((charge) => isChargeEligibleForBulkAction(charge, "notify"));
   const cancelEligible = selected.filter((charge) => isChargeEligibleForBulkAction(charge, "cancel"));
+  const linkEligible = selected.filter(
+    (charge) => Boolean(getChargePrimaryPaymentLink(charge)) || canOpenMpCheckout(charge)
+  );
 
   return {
     selected,
@@ -828,6 +855,7 @@ function getBulkSelectionStats() {
     payEligible,
     notifyEligible,
     cancelEligible,
+    linkEligible,
     ignoredCount: selected.length - payEligible.length,
   };
 }
@@ -897,8 +925,9 @@ function setBulkActionButtonState(buttonId, actionKey, iconClass, defaultLabel, 
   const button = document.getElementById(buttonId);
   if (!button) return;
 
-  const isLoading = State.bulkActionLoading === actionKey;
-  const isAnyLoading = Boolean(State.bulkActionLoading);
+  const isLoading =
+    actionKey === "export" ? State.exportCsvLoading : State.bulkActionLoading === actionKey;
+  const isAnyLoading = Boolean(State.bulkActionLoading) || State.exportCsvLoading;
 
   button.disabled = isLoading ? true : isAnyLoading || count <= 0;
   button.innerHTML = isLoading
@@ -932,9 +961,25 @@ function renderBulkActionsBar() {
       "btnBulkNotify",
       "notify",
       "fa-brands fa-whatsapp",
-      "Enviar lembrete",
+      "Cobrar no zap",
       0,
-      "Enviando..."
+      "Cobrando..."
+    );
+    setBulkActionButtonState(
+      "btnBulkLinks",
+      "links",
+      "fa-solid fa-link",
+      "Gerar links",
+      0,
+      "Gerando..."
+    );
+    setBulkActionButtonState(
+      "btnBulkExport",
+      "export",
+      "fa-solid fa-file-export",
+      "Exportar selecionadas",
+      0,
+      "Exportando..."
     );
     setBulkActionButtonState(
       "btnBulkCancel",
@@ -952,14 +997,20 @@ function renderBulkActionsBar() {
   count.textContent = `${total} cobrança(s) selecionada(s)`;
 
   const infoParts = [];
-  if (stats.payEligible.length > 0) {
-    infoParts.push(`${stats.payEligible.length} para pagamento`);
-  }
   if (stats.notifyEligible.length > 0) {
-    infoParts.push(`${stats.notifyEligible.length} para lembrete via WhatsApp`);
+    infoParts.push(`${stats.notifyEligible.length} para cobrar no zap`);
+  }
+  if (stats.linkEligible.length > 0) {
+    infoParts.push(`${stats.linkEligible.length} com link para compartilhar`);
+  }
+  if (stats.total > 0) {
+    infoParts.push(`${stats.total} para exportação`);
   }
   if (stats.cancelEligible.length > 0) {
     infoParts.push(`${stats.cancelEligible.length} para cancelamento`);
+  }
+  if (stats.payEligible.length > 0) {
+    infoParts.push(`${stats.payEligible.length} para marcar como paga`);
   }
   if (stats.ignoredCount > 0) {
     infoParts.push(`${stats.ignoredCount} paga(s) ou cancelada(s) ficam fora do lote`);
@@ -981,9 +1032,25 @@ function renderBulkActionsBar() {
     "btnBulkNotify",
     "notify",
     "fa-brands fa-whatsapp",
-    "Enviar lembrete",
+    "Cobrar no zap",
     stats.notifyEligible.length,
-    "Enviando..."
+    "Cobrando..."
+  );
+  setBulkActionButtonState(
+    "btnBulkLinks",
+    "links",
+    "fa-solid fa-link",
+    "Gerar links",
+    stats.linkEligible.length,
+    "Gerando..."
+  );
+  setBulkActionButtonState(
+    "btnBulkExport",
+    "export",
+    "fa-solid fa-file-export",
+    "Exportar selecionadas",
+    stats.total,
+    "Exportando..."
   );
   setBulkActionButtonState(
     "btnBulkCancel",
@@ -995,7 +1062,7 @@ function renderBulkActionsBar() {
   );
 
   clearButton.innerHTML = `<i class="fa-solid fa-xmark"></i> Limpar seleção`;
-  clearButton.disabled = Boolean(State.bulkActionLoading);
+  clearButton.disabled = Boolean(State.bulkActionLoading) || State.exportCsvLoading;
 }
 
 async function loadCobrancas() {
@@ -2517,31 +2584,16 @@ async function gerarLinkMercadoPago(id, enviarWhatsapp = false, force = false) {
   );
 
   try {
-    const response = await fetch(`/api/cobrancas/${chargeId}/mp-checkout`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        expire_on_due_date: getMpExpireOnDueDateValue(),
-        enviar_whatsapp: Boolean(enviarWhatsapp),
-        force: Boolean(force),
-      }),
+    const { data, charge, link } = await requestChargeCheckoutLink(chargeId, {
+      expireOnDueDate: getMpExpireOnDueDateValue(),
+      enviarWhatsapp: Boolean(enviarWhatsapp),
+      force: Boolean(force),
     });
-    const data = await response.json().catch(() => ({}));
 
-    if (response.status === 412 || data?.needs_configuration) {
-      renderMpCheckoutNeedsConfiguration();
-      return;
-    }
+    renderMpCheckoutActiveState(charge);
 
-    if (!response.ok || !data.ok || !data.cobranca) {
-      throw new Error(data.error || "Erro ao gerar link de pagamento.");
-    }
-
-    syncChargeInState(data.cobranca);
-    renderMpCheckoutActiveState(data.cobranca);
-
-    if (!enviarWhatsapp && data.checkoutUrl) {
-      await copyToClipboard(data.checkoutUrl);
+    if (!enviarWhatsapp && link) {
+      await copyToClipboard(link);
       return;
     }
 
@@ -2553,6 +2605,10 @@ async function gerarLinkMercadoPago(id, enviarWhatsapp = false, force = false) {
     }
   } catch (error) {
     console.error(error);
+    if (error?.needsConfiguration) {
+      renderMpCheckoutNeedsConfiguration();
+      return;
+    }
     showToast("error", error?.message || "Erro ao gerar checkout online");
   } finally {
     setButtonLoading(button, false);
@@ -2616,8 +2672,8 @@ function getBulkActionSuccessMessage(action, successCount) {
 
   if (action === "notify") {
     return successCount === 1
-      ? "1 lembrete enviado via WhatsApp."
-      : `${successCount} lembretes enviados via WhatsApp.`;
+      ? "1 cobrança enviada para o WhatsApp."
+      : `${successCount} cobranças enviadas para o WhatsApp.`;
   }
 
   return successCount === 1
@@ -2627,7 +2683,7 @@ function getBulkActionSuccessMessage(action, successCount) {
 
 function getBulkActionErrorFallback(action) {
   if (action === "pay") return "Erro ao marcar cobranças como pagas";
-  if (action === "notify") return "Erro ao enviar lembretes via WhatsApp";
+  if (action === "notify") return "Erro ao cobrar no WhatsApp";
   return "Erro ao cancelar cobranças";
 }
 
@@ -2717,17 +2773,160 @@ async function bulkEnviarLembretesWhatsApp() {
   const ids = getBulkEligibleChargeIds("notify");
 
   if (!ids.length) {
-    showToast("warn", "Selecione cobranças pendentes ou vencidas para enviar lembretes.");
+    showToast("warn", "Selecione cobranças pendentes ou vencidas para cobrar no zap.");
     return;
   }
 
   const confirmMessage =
-    `Enviar lembrete via WhatsApp para ${ids.length} cobrança(s)?` +
+    `Cobrar ${ids.length} cobrança(s) no WhatsApp?` +
     buildBulkIgnoredSelectionMessage(stats.ignoredCount);
 
   if (!confirm(confirmMessage)) return;
 
   await executeBulkChargeAction("notify", "/api/cobrancas/lote/notificar", { ids });
+}
+
+async function requestChargeCheckoutLink(id, options = {}) {
+  const chargeId = Number(id);
+  if (!Number.isFinite(chargeId) || chargeId <= 0) {
+    throw new Error("Cobrança inválida para gerar link.");
+  }
+
+  const response = await fetch(`/api/cobrancas/${chargeId}/mp-checkout`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      expire_on_due_date: options?.expireOnDueDate !== false,
+      enviar_whatsapp: Boolean(options?.enviarWhatsapp),
+      force: Boolean(options?.force),
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+
+  if (response.status === 412 || data?.needs_configuration) {
+    const error = new Error(
+      data?.error || "Configure o Mercado Pago na sua conta antes de gerar links."
+    );
+    error.needsConfiguration = true;
+    throw error;
+  }
+
+  if (!response.ok || !data?.ok || !data?.cobranca) {
+    throw new Error(data?.error || "Erro ao gerar link de pagamento.");
+  }
+
+  syncChargeInState(data.cobranca);
+  return {
+    data,
+    charge: data.cobranca,
+    link: String(data.checkoutUrl || data.cobranca?.mp_checkout_url || "").trim(),
+  };
+}
+
+async function bulkGerarLinksCobrancasSelecionadas() {
+  if (State.bulkActionLoading || State.exportCsvLoading) return;
+
+  const charges = getBulkSelectionStats().linkEligible;
+  if (!charges.length) {
+    showToast(
+      "warn",
+      "Selecione cobranças com link disponível ou pendentes para gerar checkout."
+    );
+    return;
+  }
+
+  const button = document.getElementById("btnBulkLinks");
+  const collectedLinks = [];
+  const failures = [];
+
+  State.bulkActionLoading = "links";
+  renderBulkActionsBar();
+
+  try {
+    for (let index = 0; index < charges.length; index += 1) {
+      const charge = charges[index];
+      const currentLink = getChargePrimaryPaymentLink(charge);
+
+      if (button && typeof setButtonLoading === "function") {
+        setButtonLoading(button, true, `Gerando ${index + 1}/${charges.length}...`);
+      }
+
+      try {
+        if (currentLink) {
+          collectedLinks.push(currentLink);
+          continue;
+        }
+
+        if (!canOpenMpCheckout(charge)) {
+          throw new Error("Link indisponível para essa cobrança.");
+        }
+
+        const result = await requestChargeCheckoutLink(Number(charge.id), {
+          expireOnDueDate: true,
+        });
+
+        if (!result.link) {
+          throw new Error("O checkout foi criado, mas nenhum link foi retornado.");
+        }
+
+        collectedLinks.push(result.link);
+      } catch (error) {
+        failures.push({
+          id: Number(charge.id),
+          cliente: charge?.cliente_nome || `Cobrança ${Number(charge.id)}`,
+          error: error?.message || "Erro ao gerar link.",
+        });
+      }
+    }
+
+    const uniqueLinks = Array.from(
+      new Set(
+        collectedLinks
+          .map((link) => String(link || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (!uniqueLinks.length) {
+      throw new Error(
+        failures[0]?.error || "Nenhum link disponível para as cobranças selecionadas."
+      );
+    }
+
+    await copyToClipboard(uniqueLinks.join("\n"), { silent: true });
+    renderCobrancasTable();
+    syncSelectedChargesUi();
+
+    if (failures.length > 0) {
+      showToast(
+        "warn",
+        `${uniqueLinks.length} link(s) copiado(s). ${failures.length} cobrança(s) falharam. Primeira falha: ${failures[0].error}`
+      );
+      return;
+    }
+
+    showToast("success", `${uniqueLinks.length} link(s) copiado(s) para a área de transferência!`);
+  } catch (error) {
+    console.error(error);
+    showToast("error", error?.message || "Erro ao gerar links em lote");
+  } finally {
+    State.bulkActionLoading = "";
+    renderBulkActionsBar();
+  }
+}
+
+async function bulkExportarCobrancasSelecionadas() {
+  const ids = getSelectedChargeIds();
+  if (!ids.length) {
+    showToast("warn", "Selecione cobranças para exportar.");
+    return;
+  }
+
+  await exportarCobrancasCsv({
+    ids,
+    buttonId: "btnBulkExport",
+    loadingLabel: "Exportando...",
+  });
 }
 
 async function bulkCancelarCobrancasSelecionadas() {
@@ -2749,6 +2948,22 @@ async function bulkCancelarCobrancasSelecionadas() {
     ids,
     enviar_whatsapp: false,
   });
+}
+
+function bulkCobrarWhatsapp() {
+  return bulkEnviarLembretesWhatsApp();
+}
+
+function bulkGerarLinks() {
+  return bulkGerarLinksCobrancasSelecionadas();
+}
+
+function bulkExportar() {
+  return bulkExportarCobrancasSelecionadas();
+}
+
+function bulkCancelar() {
+  return bulkCancelarCobrancasSelecionadas();
 }
 
 async function loadRecorrencias() {
@@ -3638,7 +3853,7 @@ function formatCycle(cycle) {
   return map[cycle] || cycle;
 }
 
-async function copyToClipboard(text) {
+async function copyToClipboard(text, options = {}) {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -3650,10 +3865,15 @@ async function copyToClipboard(text) {
       document.execCommand("copy");
       temp.remove();
     }
-    showToast("success", "Copiado!");
+    if (!options?.silent) {
+      showToast("success", options?.successMessage || "Copiado!");
+    }
   } catch (err) {
     console.error(err);
-    showToast("error", "Erro ao copiar");
+    if (options?.silent) {
+      throw err;
+    }
+    showToast("error", options?.errorMessage || "Erro ao copiar");
   }
 }
 

@@ -26,6 +26,54 @@ let searchQuery = "";    // termo de busca atual
 let pendingHumanDurationMs = null; // duração selecionada ao clicar Atender
 let searchMatches = [];  // índices das mensagens com match
 let searchCurrent = 0;   // match focado atualmente // { base64, filename, mimetype }
+const pendingChatLoads = new Set();
+const chatBootstrap = window.CHAT_BOOTSTRAP || {};
+let chatUserUsage = normalizeUserUsage(chatBootstrap.user || {});
+let lastUsageRefreshAt = 0;
+let quickReplies = [];
+let quickReplyMatches = [];
+let quickReplyActiveIndex = 0;
+let quickReplyLoadingPromise = null;
+const DRAFT_STORAGE_KEY = `zapconnect:chat-drafts:${window.USER_ID || "anon"}`;
+let draftStore = loadDraftStore();
+const CONTACT_TAG_PRESETS = [
+    { label: "Quente", tone: "hot" },
+    { label: "Morno", tone: "warm" },
+    { label: "Frio", tone: "cold" },
+    { label: "VIP", tone: "vip" },
+    { label: "Suporte", tone: "support" },
+];
+window.CONTACT_TAGS = window.CONTACT_TAGS || {};
+let activeContactTagFilter = "";
+let contactTagLoadingPromise = null;
+let onboardingCompletionPromise = null;
+let onboardingAlreadyCompleted = Number(chatBootstrap?.user?.onboarding_step || 0) >= 4;
+
+async function markChatOnboardingComplete() {
+    if (onboardingAlreadyCompleted || onboardingCompletionPromise) return onboardingCompletionPromise;
+
+    onboardingCompletionPromise = fetch("/api/user/onboarding-step", {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ step: 4 })
+    })
+        .then(res => {
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            onboardingAlreadyCompleted = true;
+            if (chatBootstrap?.user) {
+                chatBootstrap.user.onboarding_step = 4;
+            }
+        })
+        .catch(err => {
+            console.warn("Falha ao sincronizar onboarding do chat:", err);
+        })
+        .finally(() => {
+            onboardingCompletionPromise = null;
+        });
+
+    return onboardingCompletionPromise;
+}
 
 /* ==========================================================
    🧱 ELEMENTOS DOM
@@ -34,14 +82,43 @@ const chatTitle = document.getElementById("chatTitle");
 const humanButtons = document.getElementById("humanButtons");
 const tagHuman = document.getElementById("tagHuman");
 const searchBox = document.getElementById("searchBox");
+const chatTagFilters = document.getElementById("chatTagFilters");
 const btnHumanOn       = document.getElementById("btnHumanOn");
 const humanDuration    = document.getElementById("humanDuration");
 const btnHumanOff = document.getElementById("btnHumanOff");
 const humanAlert = document.getElementById("humanAlert");
-const pipelineStatus = document.getElementById("pipelineStatus");
+const chatContextBar = document.getElementById("chatContextBar");
+const contextCrmPill = document.getElementById("contextCrmPill");
+const contextStagePill = document.getElementById("contextStagePill");
+const contextAiPill = document.getElementById("contextAiPill");
+const contextHintMeta = document.getElementById("contextHintMeta");
+const contextUsageMeta = document.getElementById("contextUsageMeta");
+const btnContactTags = document.getElementById("btnContactTags");
+const contactTagDropdown = document.getElementById("contactTagDropdown");
+const contactTagDropdownTitle = document.getElementById("contactTagDropdownTitle");
+const contactTagDropdownList = document.getElementById("contactTagDropdownList");
+const contactTagDropdownHint = document.getElementById("contactTagDropdownHint");
 
 const inputMsg = document.getElementById("inputMsg");
 const btnSend = document.getElementById("btnSend");
+const draftBanner = document.getElementById("draftBanner");
+const draftBannerText = document.getElementById("draftBannerText");
+const btnDraftDiscard = document.getElementById("draftDiscard");
+const quickReplyDropdown = document.getElementById("quickReplyDropdown");
+const quickReplyDropdownTitle = document.getElementById("quickReplyDropdownTitle");
+const quickReplyList = document.getElementById("quickReplyList");
+const quickReplyEmpty = document.getElementById("quickReplyEmpty");
+const btnQuickReplyManage = document.getElementById("btnQuickReplyManage");
+const btnQuickReplyCreateEmpty = document.getElementById("btnQuickReplyCreateEmpty");
+const quickReplyModal = document.getElementById("quickReplyModal");
+const btnQuickReplyClose = document.getElementById("btnQuickReplyClose");
+const quickReplyForm = document.getElementById("quickReplyForm");
+const quickReplyShortcut = document.getElementById("quickReplyShortcut");
+const quickReplyTitle = document.getElementById("quickReplyTitle");
+const quickReplyContent = document.getElementById("quickReplyContent");
+const btnQuickReplySave = document.getElementById("btnQuickReplySave");
+const quickReplyManagerList = document.getElementById("quickReplyManagerList");
+const quickReplyCount = document.getElementById("quickReplyCount");
 
 const btnAiToggle  = document.getElementById("btnAiToggle");
 const btnClearAi   = document.getElementById("btnClearAi");
@@ -90,8 +167,408 @@ function resizeInput() {
   inputMsg.style.overflowY = inputMsg.scrollHeight > maxHeight ? "auto" : "hidden";
 }
 inputMsg?.addEventListener("input", resizeInput);
+inputMsg?.addEventListener("input", handleQuickReplyInput);
+inputMsg?.addEventListener("input", persistCurrentDraftInput);
 // reset ao carregar
 resizeInput();
+
+function loadDraftStore() {
+  try {
+    const raw = window.localStorage?.getItem(DRAFT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistDraftStore() {
+  try {
+    const entries = Object.entries(draftStore || {}).filter(([, value]) => String(value || "").trim());
+    if (!entries.length) {
+      window.localStorage?.removeItem(DRAFT_STORAGE_KEY);
+      return;
+    }
+
+    window.localStorage?.setItem(DRAFT_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Mantém o chat funcional mesmo se o navegador bloquear storage
+  }
+}
+
+function normalizeDraftText(value) {
+  return String(value || "").replace(/\r\n/g, "\n");
+}
+
+function getDraftPreviewText(value, maxLength = 72) {
+  const compact = normalizeDraftText(value).replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}…` : compact;
+}
+
+function getDraftForChat(chatId) {
+  if (!chatId) return "";
+  return normalizeDraftText(draftStore?.[chatId] || "");
+}
+
+function setDraftForChat(chatId, value) {
+  if (!chatId) return false;
+
+  const normalized = normalizeDraftText(value);
+  const previous = getDraftForChat(chatId);
+  if (!normalized.trim()) {
+    if (!previous && !Object.prototype.hasOwnProperty.call(draftStore, chatId)) {
+      return false;
+    }
+    delete draftStore[chatId];
+    persistDraftStore();
+    return true;
+  }
+
+  if (previous === normalized) return false;
+  draftStore[chatId] = normalized;
+  persistDraftStore();
+  return true;
+}
+
+function refreshChatListView() {
+  renderChatList(searchBox?.value || "");
+}
+
+function saveComposerDraft(chatId) {
+  if (!chatId || !inputMsg) return false;
+  return setDraftForChat(chatId, inputMsg.value);
+}
+
+function showDraftBanner(chatId) {
+  if (!draftBanner || !draftBannerText) return;
+  const chatName = chats?.[chatId]?.name || "este contato";
+  draftBannerText.textContent = `Retomamos seu rascunho com ${chatName}. Revise antes de enviar.`;
+  draftBanner.hidden = false;
+  draftBanner.classList.add("is-visible");
+}
+
+function hideDraftBanner() {
+  if (!draftBanner) return;
+  draftBanner.classList.remove("is-visible");
+  draftBanner.hidden = true;
+}
+
+function restoreDraftForChat(chatId) {
+  if (!inputMsg) return false;
+
+  const draft = getDraftForChat(chatId);
+  inputMsg.value = draft;
+  resizeInput();
+  handleQuickReplyInput();
+
+  if (!draft.trim()) {
+    hideDraftBanner();
+    return false;
+  }
+
+  showDraftBanner(chatId);
+  return true;
+}
+
+function discardCurrentDraft() {
+  if (!currentChat || !inputMsg) return;
+  setDraftForChat(currentChat, "");
+  inputMsg.value = "";
+  hideQuickReplyDropdown();
+  hideDraftBanner();
+  resizeInput();
+  refreshChatListView();
+  inputMsg.focus();
+}
+
+function persistCurrentDraftInput() {
+  if (!currentChat || !inputMsg) return;
+  setDraftForChat(currentChat, inputMsg.value);
+  if (!String(inputMsg.value || "").trim()) {
+    hideDraftBanner();
+    return;
+  }
+
+  if (draftBanner && !draftBanner.hidden) {
+    hideDraftBanner();
+  }
+}
+
+function normalizeQuickReplyShortcut(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\s+/g, "-")
+    .toLowerCase();
+}
+
+function extractQuickReplyQuery(value) {
+  const raw = String(value || "");
+  if (!raw.startsWith("/")) return null;
+  return normalizeQuickReplyShortcut(raw.slice(1).split(/\s+/)[0] || "");
+}
+
+function isQuickReplyDropdownOpen() {
+  return Boolean(quickReplyDropdown && !quickReplyDropdown.hidden);
+}
+
+function hideQuickReplyDropdown() {
+  quickReplyMatches = [];
+  quickReplyActiveIndex = 0;
+  if (quickReplyDropdown) quickReplyDropdown.hidden = true;
+}
+
+function showQuickReplyDropdown() {
+  if (quickReplyDropdown) quickReplyDropdown.hidden = false;
+}
+
+function buildQuickReplyPreview(content) {
+  const text = String(content || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > 96 ? `${text.slice(0, 96)}…` : text;
+}
+
+function getQuickReplyFilteredList(query) {
+  const normalized = normalizeQuickReplyShortcut(query);
+  const list = Array.isArray(quickReplies) ? [...quickReplies] : [];
+
+  return list
+    .filter(reply => {
+      if (!normalized) return true;
+      const shortcut = normalizeQuickReplyShortcut(reply.shortcut);
+      const title = String(reply.title || "").toLowerCase();
+      return shortcut.includes(normalized) || title.includes(normalized);
+    })
+    .sort((a, b) => {
+      const aShortcut = normalizeQuickReplyShortcut(a.shortcut);
+      const bShortcut = normalizeQuickReplyShortcut(b.shortcut);
+      const aStarts = normalized ? aShortcut.startsWith(normalized) : false;
+      const bStarts = normalized ? bShortcut.startsWith(normalized) : false;
+      if (aStarts !== bStarts) return aStarts ? -1 : 1;
+      return aShortcut.localeCompare(bShortcut, "pt-BR");
+    });
+}
+
+function renderQuickReplyDropdown(query = "") {
+  if (!quickReplyDropdown || !quickReplyList || !quickReplyEmpty || !quickReplyDropdownTitle) {
+    return;
+  }
+
+  const normalized = normalizeQuickReplyShortcut(query);
+  quickReplyMatches = getQuickReplyFilteredList(normalized);
+  if (quickReplyMatches.length === 0) {
+    quickReplyActiveIndex = 0;
+  } else if (quickReplyActiveIndex >= quickReplyMatches.length) {
+    quickReplyActiveIndex = 0;
+  }
+
+  quickReplyDropdownTitle.textContent = normalized
+    ? `Atalhos para "/${normalized}"`
+    : 'Digite "/" e comece a filtrar seus atalhos';
+
+  quickReplyList.innerHTML = "";
+
+  if (!quickReplies.length && quickReplyLoadingPromise) {
+    quickReplyEmpty.hidden = false;
+    quickReplyEmpty.querySelector("strong").textContent = "Carregando atalhos salvos";
+    quickReplyEmpty.querySelector("p").textContent =
+      "Estamos buscando suas respostas rápidas para filtrar em tempo real.";
+    showQuickReplyDropdown();
+    return;
+  }
+
+  if (!quickReplies.length && !quickReplyLoadingPromise) {
+    quickReplyEmpty.hidden = false;
+    quickReplyEmpty.querySelector("strong").textContent = "Você ainda não salvou respostas rápidas";
+    quickReplyEmpty.querySelector("p").textContent =
+      "Crie atalhos como /preco, /checkout ou /prazo para reutilizar respostas em um clique.";
+    showQuickReplyDropdown();
+    return;
+  }
+
+  if (!quickReplyMatches.length) {
+    quickReplyEmpty.hidden = false;
+    quickReplyEmpty.querySelector("strong").textContent = "Nenhum atalho encontrado";
+    quickReplyEmpty.querySelector("p").textContent =
+      normalized
+        ? `Não encontrei atalhos para "/${normalized}". Você pode criar um novo agora.`
+        : "Digite após a barra para filtrar seus atalhos salvos.";
+    showQuickReplyDropdown();
+    return;
+  }
+
+  quickReplyEmpty.hidden = true;
+
+  quickReplyMatches.forEach((reply, index) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `quick-reply-item${index === quickReplyActiveIndex ? " is-active" : ""}`;
+    item.dataset.replyId = String(reply.id);
+    item.innerHTML = `
+      <div class="quick-reply-item-top">
+        <span class="quick-reply-shortcut">/${escapeHtml(reply.shortcut)}</span>
+        <strong class="quick-reply-title">${escapeHtml(reply.title)}</strong>
+      </div>
+      <div class="quick-reply-preview">${escapeHtml(buildQuickReplyPreview(reply.content))}</div>
+    `;
+    item.addEventListener("mouseenter", () => {
+      quickReplyActiveIndex = index;
+      renderQuickReplyDropdown(normalized);
+    });
+    item.addEventListener("click", () => {
+      applyQuickReply(reply);
+    });
+    quickReplyList.appendChild(item);
+  });
+
+  showQuickReplyDropdown();
+}
+
+function handleQuickReplyInput() {
+  if (!inputMsg) return;
+
+  const raw = String(inputMsg.value || "");
+  if (!raw.startsWith("/")) {
+    hideQuickReplyDropdown();
+    return;
+  }
+
+  const query = extractQuickReplyQuery(raw);
+  if (query === null) {
+    hideQuickReplyDropdown();
+    return;
+  }
+
+  if (!quickReplies.length && !quickReplyLoadingPromise) {
+    loadQuickReplies();
+  }
+
+  renderQuickReplyDropdown(query);
+}
+
+function moveQuickReplySelection(direction) {
+  if (!quickReplyMatches.length) return;
+  quickReplyActiveIndex =
+    (quickReplyActiveIndex + direction + quickReplyMatches.length) % quickReplyMatches.length;
+  renderQuickReplyDropdown(extractQuickReplyQuery(inputMsg?.value || "") || "");
+}
+
+function applyQuickReply(reply) {
+  if (!reply || !inputMsg) return;
+  inputMsg.value = String(reply.content || "");
+  hideQuickReplyDropdown();
+  persistCurrentDraftInput();
+  hideDraftBanner();
+  resizeInput();
+  inputMsg.focus();
+  inputMsg.setSelectionRange(inputMsg.value.length, inputMsg.value.length);
+}
+
+function openQuickReplyModal(prefillShortcut = "") {
+  hideQuickReplyDropdown();
+  if (!quickReplyModal) return;
+  quickReplyModal.hidden = false;
+  quickReplyModal.classList.add("open");
+
+  const normalizedPrefill = normalizeQuickReplyShortcut(prefillShortcut);
+  if (quickReplyShortcut && normalizedPrefill) {
+    quickReplyShortcut.value = normalizedPrefill;
+  }
+
+  renderQuickReplyManagerList();
+  loadQuickReplies();
+  setTimeout(() => {
+    if (quickReplyShortcut && !quickReplyShortcut.value) quickReplyShortcut.focus();
+    else if (quickReplyTitle && !quickReplyTitle.value) quickReplyTitle.focus();
+  }, 30);
+}
+
+function closeQuickReplyModal() {
+  if (!quickReplyModal) return;
+  quickReplyModal.classList.remove("open");
+  quickReplyModal.hidden = true;
+}
+
+function formatQuickReplyCount(total) {
+  return `${total} ${total === 1 ? "atalho" : "atalhos"}`;
+}
+
+function renderQuickReplyManagerList() {
+  if (!quickReplyManagerList || !quickReplyCount) return;
+
+  quickReplyCount.textContent = formatQuickReplyCount(quickReplies.length);
+
+  if (!quickReplies.length) {
+    quickReplyManagerList.innerHTML = `
+      <div class="quick-reply-manager-empty">
+        <strong>Nenhuma resposta salva ainda</strong>
+        <p>Comece criando os atalhos mais repetidos do seu atendimento, como preço, link de pagamento ou prazo.</p>
+      </div>
+    `;
+    return;
+  }
+
+  quickReplyManagerList.innerHTML = quickReplies
+    .map(reply => `
+      <article class="quick-reply-manager-item" data-reply-id="${reply.id}">
+        <div class="quick-reply-manager-copy">
+          <div class="quick-reply-manager-head">
+            <span class="quick-reply-shortcut">/${escapeHtml(reply.shortcut)}</span>
+            <strong>${escapeHtml(reply.title)}</strong>
+          </div>
+          <p>${escapeHtml(buildQuickReplyPreview(reply.content))}</p>
+        </div>
+        <div class="quick-reply-manager-actions">
+          <button type="button" class="quick-reply-use-btn" data-action="use" data-id="${reply.id}">Usar</button>
+          <button type="button" class="quick-reply-delete-btn" data-action="delete" data-id="${reply.id}">Excluir</button>
+        </div>
+      </article>
+    `)
+    .join("");
+}
+
+async function loadQuickReplies() {
+  if (quickReplyLoadingPromise) return quickReplyLoadingPromise;
+
+  quickReplyLoadingPromise = fetch("/api/quick-replies", {
+    credentials: "include",
+  })
+    .then(async res => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || "Não foi possível carregar as respostas rápidas.");
+      }
+      quickReplies = Array.isArray(data?.replies) ? data.replies : [];
+      renderQuickReplyManagerList();
+      handleQuickReplyInput();
+      return quickReplies;
+    })
+    .catch(err => {
+      console.error("Quick replies - load error:", err);
+      quickReplies = [];
+      renderQuickReplyManagerList();
+      handleQuickReplyInput();
+      return [];
+    })
+    .finally(() => {
+      quickReplyLoadingPromise = null;
+    });
+
+  return quickReplyLoadingPromise;
+}
+
+function resetQuickReplyForm() {
+  if (quickReplyForm) quickReplyForm.reset();
+}
+
+function setQuickReplySaveLoading(isLoading) {
+  if (!btnQuickReplySave) return;
+  btnQuickReplySave.disabled = isLoading;
+  btnQuickReplySave.innerHTML = isLoading
+    ? `<i class="fa-solid fa-spinner fa-spin"></i> Salvando...`
+    : `<i class="fa-solid fa-floppy-disk"></i> Salvar resposta`;
+}
 
 /* ==========================================================
    🏷️ TRATAMENTO DO NOME DO CONTATO
@@ -186,6 +663,211 @@ function escapeHtml(text) {
         .replace(/'/g, "&#039;");
 }
 
+function normalizeUserUsage(user) {
+    const LIMITS = { free: 500, starter: 500, pro: null };
+    const plan = String(user?.plan || "free");
+    const rawLimit = user?.planConfig?.maxIaMessages;
+    const normalizedRawLimit = String(rawLimit ?? "").trim().toLowerCase();
+    const numericLimit = Number(rawLimit);
+    const fallbackLimit = Object.prototype.hasOwnProperty.call(LIMITS, plan)
+        ? LIMITS[plan]
+        : null;
+    const limit = normalizedRawLimit === "unlimited"
+        ? null
+        : Number.isFinite(numericLimit) && numericLimit >= 0
+            ? numericLimit
+            : fallbackLimit;
+    const used = Number(user?.ia_messages_used) || 0;
+
+    return {
+        used,
+        limit,
+        plan,
+        planLabel: String(user?.planConfig?.displayName || plan || "Plano"),
+    };
+}
+
+function getUsageRatio() {
+    if (chatUserUsage.limit === null || chatUserUsage.limit <= 0) return 0;
+    return Math.min(1, chatUserUsage.used / chatUserUsage.limit);
+}
+
+function buildUsageLabel() {
+    if (chatUserUsage.limit === null) {
+        return `${chatUserUsage.used} / ilimitado no mês`;
+    }
+
+    return `${chatUserUsage.used} / ${chatUserUsage.limit} IA no mês`;
+}
+
+async function refreshUserUsage(force = false) {
+    const now = Date.now();
+    if (!force && now - lastUsageRefreshAt < 60_000) return;
+
+    lastUsageRefreshAt = now;
+
+    try {
+        const res = await fetch("/auth/me", { credentials: "include" });
+        if (!res.ok) return;
+        const payload = await res.json();
+        chatUserUsage = normalizeUserUsage({
+            ...(payload?.user || {}),
+            planConfig: payload?.planConfig || null,
+        });
+
+        if (currentChat) {
+            renderChatContext(currentChat);
+        }
+    } catch {
+        // Mantém o snapshot atual se o refresh falhar
+    }
+}
+
+function getStagePillMarkup(stage) {
+    const stageName = String(stage || "Novo");
+    const safeStage = escapeHtml(stageName);
+    const stageClass = stageName.replace(/\s+/g, "");
+    return `<span class="pipeline-dot pipeline-${stageClass}"></span>${safeStage}`;
+}
+
+function formatCurrencyValue(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return "";
+    return numeric.toLocaleString("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+        maximumFractionDigits: 0,
+    });
+}
+
+function formatFollowUpDate(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return "";
+    return new Date(numeric).toLocaleDateString("pt-BR");
+}
+
+function renderChatContext(chatId) {
+    if (!chatContextBar || !contextCrmPill || !contextStagePill || !contextAiPill || !contextHintMeta || !contextUsageMeta) return;
+
+    const chat = chats[chatId];
+    if (!chat) {
+        chatContextBar.classList.add("is-idle");
+        contextCrmPill.textContent = "CRM: selecione uma conversa";
+        contextCrmPill.className = "context-pill context-crm";
+        contextStagePill.className = "context-pill context-stage";
+        contextStagePill.innerHTML = getStagePillMarkup("Novo");
+        contextAiPill.textContent = "IA ON";
+        contextAiPill.className = "context-pill context-ai context-ai-on";
+        contextHintMeta.textContent = "O contexto do contato aparece aqui sem sair do chat.";
+        contextUsageMeta.textContent = buildUsageLabel();
+        contextUsageMeta.className = "context-meta context-usage";
+        return;
+    }
+
+    chatContextBar.classList.remove("is-idle");
+
+    const isGroup = String(chatId).endsWith("@g.us");
+    const crmName = String(chat.crmName || chat.name || "Contato").trim();
+    const crmFound = chat.crmFound === true;
+    const aiOn = chat.ai !== false;
+    const stage = isGroup
+        ? "Grupo"
+        : crmFound
+            ? String(chat.pipeline || "Novo")
+            : "Sem CRM";
+    const citystate = String(chat.citystate || "").trim();
+    const dealValue = formatCurrencyValue(chat.dealValue);
+    const followUpDate = formatFollowUpDate(chat.followUpDate);
+    const tags = getContactTagsForChat(chatId);
+    const usageRatio = getUsageRatio();
+
+    contextCrmPill.textContent = isGroup
+        ? `Grupo: ${crmName}`
+        : crmFound
+            ? `CRM: ${crmName}`
+            : `Sem CRM: ${crmName}`;
+    contextCrmPill.className = `context-pill context-crm ${crmFound ? "context-linked" : "context-unlinked"}`;
+
+    contextStagePill.className = "context-pill context-stage";
+    contextStagePill.innerHTML = getStagePillMarkup(stage);
+
+    contextAiPill.textContent = aiOn ? "IA ON" : "IA OFF";
+    contextAiPill.className = `context-pill context-ai ${aiOn ? "context-ai-on" : "context-ai-off"}`;
+
+    const hintParts = [];
+    if (isGroup) {
+        hintParts.push("Conversa em grupo");
+    } else if (crmFound) {
+        hintParts.push("Contato vinculado ao CRM");
+    } else {
+        hintParts.push("Contato ainda não cadastrado no CRM");
+    }
+    if (citystate) hintParts.push(citystate);
+    if (dealValue) hintParts.push(`Negócio ${dealValue}`);
+    if (followUpDate) hintParts.push(`Follow-up ${followUpDate}`);
+    if (tags.length) {
+        const summary = tags.slice(0, 2).join(", ");
+        hintParts.push(tags.length > 2 ? `Tags: ${summary} +${tags.length - 2}` : `Tags: ${summary}`);
+    }
+
+    contextHintMeta.textContent = hintParts.join(" • ");
+    contextUsageMeta.textContent = buildUsageLabel();
+    contextUsageMeta.className = "context-meta context-usage";
+    if (chatUserUsage.limit !== null) {
+        if (usageRatio >= 0.9) {
+            contextUsageMeta.classList.add("usage-danger");
+        } else if (usageRatio >= 0.7) {
+            contextUsageMeta.classList.add("usage-warning");
+        } else {
+            contextUsageMeta.classList.add("usage-ok");
+        }
+    } else {
+        contextUsageMeta.classList.add("usage-unlimited");
+    }
+}
+
+async function loadChatContext(chatId) {
+    if (!chatId || !chats[chatId]) return;
+
+    renderChatContext(chatId);
+    refreshUserUsage();
+
+    if (String(chatId).endsWith("@g.us")) {
+        chats[chatId].crmFound = false;
+        chats[chatId].crmName = chats[chatId].name;
+        chats[chatId].pipeline = "Grupo";
+        chats[chatId].tags = [];
+        updateContactTagButtonState();
+        renderChatContext(chatId);
+        return;
+    }
+
+    try {
+        const res = await fetch(`/api/crm/client/${encodeURIComponent(chatId)}`);
+        if (!res.ok) throw new Error("Falha ao carregar contexto CRM");
+        const data = await res.json();
+
+        chats[chatId].crmFound = data?.found === true;
+        chats[chatId].crmName = data?.crmName || chats[chatId].name;
+        chats[chatId].pipeline = data?.pipeline || "Novo";
+        chats[chatId].citystate = data?.citystate || "";
+        chats[chatId].dealValue = data?.dealValue ?? null;
+        chats[chatId].followUpDate = data?.followUpDate ?? null;
+        if (Array.isArray(data?.tags)) {
+            setContactTagsForChat(chatId, data.tags);
+        }
+    } catch {
+        chats[chatId].crmFound = false;
+        chats[chatId].crmName = chats[chatId].name;
+        chats[chatId].pipeline = chats[chatId].pipeline || "Novo";
+    }
+
+    if (currentChat === chatId) {
+        updateContactTagButtonState();
+        renderChatContext(chatId);
+    }
+}
+
 function formatNoteDate(ts) {
     const d = new Date(Number(ts) || Date.now());
     return d.toLocaleString();
@@ -204,10 +886,18 @@ function ensureChat(chatId, name) {
             msgs: [],
             pic: null,
             pipeline: "Novo",
+            crmFound: false,
+            crmName: name || chatId.replace("@c.us", ""),
+            citystate: "",
+            dealValue: null,
+            followUpDate: null,
+            tags: [],
             lastMsg: null,  // { body, fromMe, timestamp, isMedia, mimetype }
             unread: 0       // contador de mensagens não lidas
         };
     }
+
+    chats[chatId].tags = getContactTagsForChat(chatId);
 }
 
 function appendInternalSystemNote(note) {
@@ -276,16 +966,327 @@ function fmtLastTime(ts) {
     return d.getDate().toString().padStart(2, "0") + "/" + (d.getMonth() + 1).toString().padStart(2, "0");
 }
 
+function normalizeContactPhone(raw) {
+    return String(raw || "")
+        .trim()
+        .replace(/@.*/, "")
+        .replace(/\D/g, "");
+}
+
+function normalizeTagKey(tag) {
+    return String(tag || "")
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+}
+
+function getContactTagPreset(tag) {
+    const key = normalizeTagKey(tag);
+    return CONTACT_TAG_PRESETS.find((item) => normalizeTagKey(item.label) === key) || null;
+}
+
+function sortContactTags(tags) {
+    const list = Array.isArray(tags) ? tags : [];
+    const unique = [];
+    const seen = new Set();
+
+    list.forEach((tag) => {
+        const clean = String(tag || "").trim();
+        const key = normalizeTagKey(clean);
+        if (!clean || seen.has(key)) return;
+        seen.add(key);
+        unique.push(clean);
+    });
+
+    return unique.sort((a, b) => {
+        const presetIndexA = CONTACT_TAG_PRESETS.findIndex((item) => normalizeTagKey(item.label) === normalizeTagKey(a));
+        const presetIndexB = CONTACT_TAG_PRESETS.findIndex((item) => normalizeTagKey(item.label) === normalizeTagKey(b));
+        const normalizedPresetA = presetIndexA === -1 ? Number.MAX_SAFE_INTEGER : presetIndexA;
+        const normalizedPresetB = presetIndexB === -1 ? Number.MAX_SAFE_INTEGER : presetIndexB;
+        if (normalizedPresetA !== normalizedPresetB) return normalizedPresetA - normalizedPresetB;
+        return a.localeCompare(b, "pt-BR");
+    });
+}
+
+function getContactTagsForChat(chatId) {
+    const phone = normalizeContactPhone(chatId);
+    if (!phone) return [];
+    return sortContactTags(window.CONTACT_TAGS?.[phone] || []);
+}
+
+function setContactTagsForChat(chatId, tags) {
+    const phone = normalizeContactPhone(chatId);
+    if (!phone) return [];
+
+    const normalizedTags = sortContactTags(tags);
+    window.CONTACT_TAGS[phone] = normalizedTags;
+
+    Object.keys(chats).forEach((id) => {
+        if (normalizeContactPhone(id) === phone && chats[id]) {
+            chats[id].tags = [...normalizedTags];
+        }
+    });
+
+    return normalizedTags;
+}
+
+function collectAvailableContactTags() {
+    const entries = Object.values(window.CONTACT_TAGS || {}).flatMap((list) => Array.isArray(list) ? list : []);
+    return sortContactTags(entries);
+}
+
+function buildContactTagChip(tag, options = {}) {
+    const preset = getContactTagPreset(tag);
+    const tone = preset?.tone || "custom";
+    const activeClass = options.active ? " is-active" : "";
+    const compactClass = options.compact ? " tag-chip-compact" : "";
+    return `<span class="tag-chip tag-chip-${tone}${activeClass}${compactClass}">${escapeHtml(tag)}</span>`;
+}
+
+function renderChatTagFilters() {
+    if (!chatTagFilters) return;
+
+    const availableTags = collectAvailableContactTags();
+    if (!availableTags.length) {
+        activeContactTagFilter = "";
+        chatTagFilters.innerHTML = `<div class="chat-tag-filters-empty">Sem tags ainda</div>`;
+        return;
+    }
+
+    const allButtonClass = activeContactTagFilter ? "chat-tag-filter" : "chat-tag-filter is-active";
+    const buttons = availableTags.map((tag) => {
+        const isActive = normalizeTagKey(activeContactTagFilter) === normalizeTagKey(tag);
+        const preset = getContactTagPreset(tag);
+        const toneClass = preset ? ` chat-tag-filter-${preset.tone}` : " chat-tag-filter-custom";
+        return `
+          <button
+            type="button"
+            class="chat-tag-filter${toneClass}${isActive ? " is-active" : ""}"
+            data-filter-tag="${escapeHtml(tag)}"
+          >${escapeHtml(tag)}</button>
+        `;
+    }).join("");
+
+    chatTagFilters.innerHTML = `
+      <button type="button" class="${allButtonClass}" data-filter-tag="">Todos</button>
+      ${buttons}
+    `;
+}
+
+function updateContactTagButtonState() {
+    if (!btnContactTags) return;
+
+    const chatId = currentChat;
+    const isGroup = chatId ? /@g\.us$/i.test(chatId) : false;
+    const tags = chatId ? getContactTagsForChat(chatId) : [];
+    const disabled = !chatId || isGroup;
+
+    btnContactTags.disabled = disabled;
+    btnContactTags.classList.toggle("has-tags", tags.length > 0);
+    if (disabled) {
+        btnContactTags.classList.remove("active");
+    }
+
+    const labelEl = btnContactTags.querySelector(".btn-tag-text");
+    if (labelEl) {
+        labelEl.textContent = tags.length > 0 ? `Tags (${tags.length})` : "Tags";
+    }
+}
+
+function isContactTagDropdownOpen() {
+    return Boolean(contactTagDropdown && !contactTagDropdown.hidden);
+}
+
+function hideContactTagDropdown() {
+    if (contactTagDropdown) contactTagDropdown.hidden = true;
+    btnContactTags?.classList.remove("active");
+}
+
+function renderContactTagDropdown() {
+    if (!contactTagDropdownTitle || !contactTagDropdownList || !contactTagDropdownHint) return;
+
+    if (!currentChat || !chats[currentChat]) {
+        contactTagDropdownTitle.textContent = "Selecione um contato";
+        contactTagDropdownList.innerHTML = "";
+        contactTagDropdownHint.textContent = "Abra uma conversa para classificar o contato.";
+        return;
+    }
+
+    if (/@g\.us$/i.test(currentChat)) {
+        contactTagDropdownTitle.textContent = chats[currentChat].name || "Grupo";
+        contactTagDropdownList.innerHTML = "";
+        contactTagDropdownHint.textContent = "Tags rápidas ficam disponíveis apenas para contatos individuais.";
+        return;
+    }
+
+    const activeTags = getContactTagsForChat(currentChat);
+    const allOptions = sortContactTags([
+        ...CONTACT_TAG_PRESETS.map((item) => item.label),
+        ...activeTags,
+    ]);
+
+    contactTagDropdownTitle.textContent = chats[currentChat].name || "Contato";
+    contactTagDropdownList.innerHTML = allOptions.map((tag) => {
+        const active = activeTags.some((item) => normalizeTagKey(item) === normalizeTagKey(tag));
+        const preset = getContactTagPreset(tag);
+        const toneClass = preset ? ` contact-tag-option-${preset.tone}` : " contact-tag-option-custom";
+        return `
+          <button
+            type="button"
+            class="contact-tag-option${toneClass}${active ? " is-active" : ""}"
+            data-contact-tag="${escapeHtml(tag)}"
+            aria-pressed="${active ? "true" : "false"}"
+          >
+            <span>${escapeHtml(tag)}</span>
+            <i class="fa-solid ${active ? "fa-check" : "fa-plus"}"></i>
+          </button>
+        `;
+    }).join("");
+
+    contactTagDropdownHint.textContent = activeTags.length
+        ? "Clique em uma tag ativa para remover. As alterações refletem na lista imediatamente."
+        : "Marque o contato para destacar prioridade na sidebar e filtrar mais rápido.";
+}
+
+function toggleContactTagDropdown(forceOpen) {
+    if (!contactTagDropdown || !btnContactTags || btnContactTags.disabled) return;
+
+    const shouldOpen = typeof forceOpen === "boolean"
+        ? forceOpen
+        : contactTagDropdown.hidden;
+
+    if (!shouldOpen) {
+        hideContactTagDropdown();
+        return;
+    }
+
+    renderContactTagDropdown();
+    contactTagDropdown.hidden = false;
+    btnContactTags.classList.add("active");
+}
+
+async function loadContactTags(force = false) {
+    if (!force && contactTagLoadingPromise) {
+        return contactTagLoadingPromise;
+    }
+
+    contactTagLoadingPromise = (async () => {
+        try {
+            const res = await fetch("/api/contact-tags", {
+                credentials: "include",
+            });
+            if (!res.ok) throw new Error("Falha ao carregar tags");
+            const data = await res.json();
+            window.CONTACT_TAGS = data?.tagsByPhone || {};
+
+            Object.keys(chats).forEach((chatId) => {
+                chats[chatId].tags = getContactTagsForChat(chatId);
+            });
+
+            const available = collectAvailableContactTags();
+            if (activeContactTagFilter && !available.some((tag) => normalizeTagKey(tag) === normalizeTagKey(activeContactTagFilter))) {
+                activeContactTagFilter = "";
+            }
+
+            renderChatTagFilters();
+            renderChatList(searchBox?.value || "");
+            updateContactTagButtonState();
+            if (isContactTagDropdownOpen()) {
+                renderContactTagDropdown();
+            }
+        } catch (err) {
+            console.warn("Não foi possível carregar tags dos contatos:", err);
+            renderChatTagFilters();
+        } finally {
+            contactTagLoadingPromise = null;
+        }
+    })();
+
+    return contactTagLoadingPromise;
+}
+
+async function toggleCurrentContactTag(tag) {
+    if (!currentChat || !chats[currentChat] || /@g\.us$/i.test(currentChat)) return;
+
+    const phone = normalizeContactPhone(currentChat);
+    if (!phone) return;
+
+    const currentTags = getContactTagsForChat(currentChat);
+    const isActive = currentTags.some((item) => normalizeTagKey(item) === normalizeTagKey(tag));
+    const method = isActive ? "DELETE" : "POST";
+
+    const res = await fetch(`/api/contact-tags/${encodeURIComponent(phone)}`, {
+        method,
+        credentials: "include",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            tag,
+            chatId: currentChat,
+            name: chats[currentChat]?.name || phone,
+        }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || "Não foi possível atualizar a tag do contato.");
+    }
+
+    const tags = setContactTagsForChat(currentChat, data?.tags || []);
+    renderChatTagFilters();
+    renderChatList(searchBox?.value || "");
+    updateContactTagButtonState();
+    renderContactTagDropdown();
+    if (currentChat) {
+        renderChatContext(currentChat);
+    }
+    return tags;
+}
+
+function handleContactTagsChanged(payload) {
+    const phone = normalizeContactPhone(payload?.phone || payload?.chatId);
+    if (!phone) return;
+
+    const chatId = payload?.chatId || `${phone}@c.us`;
+    setContactTagsForChat(chatId, payload?.tags || []);
+
+    const available = collectAvailableContactTags();
+    if (activeContactTagFilter && !available.some((tag) => normalizeTagKey(tag) === normalizeTagKey(activeContactTagFilter))) {
+        activeContactTagFilter = "";
+    }
+
+    renderChatTagFilters();
+    renderChatList(searchBox?.value || "");
+    updateContactTagButtonState();
+
+    if (currentChat && normalizeContactPhone(currentChat) === phone) {
+        renderChatContext(currentChat);
+        if (isContactTagDropdownOpen()) {
+            renderContactTagDropdown();
+        }
+    }
+}
+
 /* ==========================================================
    🎨 RENDERIZAR LISTA DE CHATS
    ========================================================== */
 function renderChatList(filter = "") {
     const cont = document.getElementById("chatlist");
     cont.innerHTML = "";
+    const nameFilter = String(filter || "").toLowerCase();
+    const activeTagKey = normalizeTagKey(activeContactTagFilter);
 
     Object.keys(chats).forEach(id => {
         const chatName = String(chats[id].name || "");
-        if (filter && !chatName.toLowerCase().includes(filter.toLowerCase())) return;
+        if (nameFilter && !chatName.toLowerCase().includes(nameFilter)) return;
+
+        const contactTags = getContactTagsForChat(id);
+        chats[id].tags = contactTags;
+        if (activeTagKey && !contactTags.some((tag) => normalizeTagKey(tag) === activeTagKey)) {
+            return;
+        }
 
         const div = document.createElement("div");
         div.className =
@@ -297,7 +1298,10 @@ function renderChatList(filter = "") {
         div.dataset.chatId = id;
         div.onclick = () => selectChat(id);
 
-        const preview = getLastMsgPreview(chats[id]);
+        const chatDraft = id === currentChat && inputMsg ? inputMsg.value : getDraftForChat(id);
+        const draftPreview = getDraftPreviewText(chatDraft);
+        const hasDraft = Boolean(draftPreview);
+        const preview = hasDraft ? draftPreview : getLastMsgPreview(chats[id]);
         const lastTime = fmtLastTime(chats[id].lastMsg?.timestamp);
         const unread = chats[id].unread || 0;
         const avatar = buildAvatarHtml(chats[id]);
@@ -305,6 +1309,14 @@ function renderChatList(filter = "") {
         const safePreview = escapeHtml(preview);
         const safeLastTime = escapeHtml(lastTime);
         const safeUnread = unread > 99 ? "99+" : String(unread);
+        const tagsMarkup = contactTags.length
+            ? `
+              <div class="c-tags">
+                ${contactTags.slice(0, 2).map((tag) => buildContactTagChip(tag, { compact: true })).join("")}
+                ${contactTags.length > 2 ? `<span class="chat-tag-more">+${contactTags.length - 2}</span>` : ""}
+              </div>
+            `
+            : "";
 
         div.innerHTML = `
             ${avatar}
@@ -314,9 +1326,10 @@ function renderChatList(filter = "") {
                     <div class="chat-time">${safeLastTime}</div>
                 </div>
                 <div class="chat-preview-row">
-                    <div class="chat-preview">${safePreview}</div>
+                    <div class="chat-preview${hasDraft ? " draft-preview" : ""}">${hasDraft ? `<span class="draft-preview-label">Rascunho:</span> ${safePreview}` : safePreview}</div>
                     ${unread > 0 ? `<div class="chat-unread">${safeUnread}</div>` : ""}
                 </div>
+                ${tagsMarkup}
             </div>
         `;
         cont.appendChild(div);
@@ -327,18 +1340,29 @@ function renderChatList(filter = "") {
    📌 SELECIONAR CHAT + RECARREGAR MODO HUMANO + TIMER
    ========================================================== */
 async function selectChat(chatId) {
+  const previousChat = currentChat;
+  const isSameChat = previousChat === chatId;
+  if (previousChat && !isSameChat) {
+    saveComposerDraft(previousChat);
+  }
+
+  hideQuickReplyDropdown();
+  hideContactTagDropdown();
   currentChat = chatId;
 
   // Fechar sidebar no mobile ao selecionar chat
   closeSidebar();
 
   // Solicita mensagens ao servidor
-  socket.emit("abrir_chat", chatId);
+  if (!pendingChatLoads.has(chatId)) {
+    pendingChatLoads.add(chatId);
+    socket.emit("abrir_chat", chatId);
+  }
 
     // Zerar contador de não lidas ao abrir o chat
     if (chats[chatId]) {
         chats[chatId].unread = 0;
-        renderChatList();
+        refreshChatListView();
     }
 
     // Parar piscar título ao abrir o chat
@@ -358,6 +1382,7 @@ async function selectChat(chatId) {
 
     // Nome no topo
     chatTitle.textContent = chats[chatId].name;
+    updateContactTagButtonState();
 
     // Mostrar controles
     humanButtons.style.display = "flex";
@@ -391,6 +1416,7 @@ async function selectChat(chatId) {
 
     // Atualiza UI da IA
     updateAiUi(chatId);
+    renderChatContext(chatId);
 
     // Notas internas (se painel estiver aberto)
     if (notesVisible) {
@@ -399,25 +1425,188 @@ async function selectChat(chatId) {
 
     // Renderizar mensagens
     renderMessages(chatId);
-
-    // Pipeline/CRM
-    try {
-        const res = await fetch(`/api/crm/client/${chatId}`);
-        const data = await res.json();
-        const stage = data.pipeline || "Novo";
-        chats[chatId].pipeline = stage;
-
-        pipelineStatus.innerHTML = `
-            <span class="pipeline-dot pipeline-${stage.replace(/\s+/g, '')}"></span>
-            ${stage}
-        `;
-    } catch {
-        pipelineStatus.innerHTML = "";
+    if (!isSameChat) {
+        restoreDraftForChat(chatId);
     }
+
+    // Pipeline/CRM + uso IA no contexto integrado
+    await loadChatContext(chatId);
 
     // Notas internas
     await loadNotes(chatId);
 }
+
+btnQuickReplyManage?.addEventListener("click", () => {
+  openQuickReplyModal(extractQuickReplyQuery(inputMsg?.value || ""));
+});
+
+btnQuickReplyCreateEmpty?.addEventListener("click", () => {
+  openQuickReplyModal(extractQuickReplyQuery(inputMsg?.value || ""));
+});
+
+btnQuickReplyClose?.addEventListener("click", closeQuickReplyModal);
+
+quickReplyModal?.addEventListener("click", event => {
+  const target = event.target;
+  if (target instanceof HTMLElement && target.hasAttribute("data-quick-reply-close")) {
+    closeQuickReplyModal();
+  }
+});
+
+quickReplyManagerList?.addEventListener("click", async event => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const actionButton = target.closest("[data-action]");
+  if (!(actionButton instanceof HTMLElement)) return;
+
+  const replyId = Number(actionButton.dataset.id || 0);
+  const reply = quickReplies.find(item => Number(item.id) === replyId);
+  if (!reply) return;
+
+  const action = String(actionButton.dataset.action || "");
+  if (action === "use") {
+    applyQuickReply(reply);
+    closeQuickReplyModal();
+    return;
+  }
+
+  if (action === "delete") {
+    const confirmed = window.confirm(`Excluir o atalho /${reply.shortcut}?`);
+    if (!confirmed) return;
+
+    actionButton.setAttribute("disabled", "disabled");
+
+    try {
+      const res = await fetch(`/api/quick-replies/${reply.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || "Não foi possível excluir a resposta rápida.");
+      }
+
+      quickReplies = quickReplies.filter(item => Number(item.id) !== reply.id);
+      renderQuickReplyManagerList();
+      handleQuickReplyInput();
+    } catch (err) {
+      console.error("Quick replies - delete error:", err);
+      alert(err?.message || "Não foi possível excluir a resposta rápida.");
+      actionButton.removeAttribute("disabled");
+    }
+  }
+});
+
+quickReplyForm?.addEventListener("submit", async event => {
+  event.preventDefault();
+
+  const payload = {
+    shortcut: quickReplyShortcut?.value || "",
+    title: quickReplyTitle?.value || "",
+    content: quickReplyContent?.value || "",
+  };
+
+  setQuickReplySaveLoading(true);
+
+  try {
+    const res = await fetch("/api/quick-replies", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      credentials: "include",
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || "Não foi possível salvar a resposta rápida.");
+    }
+
+    resetQuickReplyForm();
+    await loadQuickReplies();
+    if (quickReplyShortcut) quickReplyShortcut.focus();
+  } catch (err) {
+    console.error("Quick replies - save error:", err);
+    alert(err?.message || "Não foi possível salvar a resposta rápida.");
+  } finally {
+    setQuickReplySaveLoading(false);
+  }
+});
+
+btnContactTags?.addEventListener("click", event => {
+  event.stopPropagation();
+  toggleContactTagDropdown();
+});
+
+contactTagDropdownList?.addEventListener("click", async event => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const option = target.closest("[data-contact-tag]");
+  if (!(option instanceof HTMLElement)) return;
+
+  const tag = String(option.dataset.contactTag || "").trim();
+  if (!tag) return;
+
+  option.setAttribute("disabled", "disabled");
+  try {
+    await toggleCurrentContactTag(tag);
+  } catch (err) {
+    console.error("Contact tags - toggle error:", err);
+    alert(err?.message || "Não foi possível atualizar a tag do contato.");
+  } finally {
+    option.removeAttribute("disabled");
+  }
+});
+
+chatTagFilters?.addEventListener("click", event => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const button = target.closest("[data-filter-tag]");
+  if (!(button instanceof HTMLElement)) return;
+
+  const nextTag = String(button.dataset.filterTag || "").trim();
+  const isSameTag = normalizeTagKey(nextTag) === normalizeTagKey(activeContactTagFilter);
+  activeContactTagFilter = isSameTag ? "" : nextTag;
+  renderChatTagFilters();
+  renderChatList(searchBox?.value || "");
+});
+
+chatTagFilters?.addEventListener("dblclick", () => {
+  if (!activeContactTagFilter) return;
+  activeContactTagFilter = "";
+  renderChatTagFilters();
+  renderChatList(searchBox?.value || "");
+});
+
+document.addEventListener("click", event => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const insideFooter = Boolean(target.closest(".chat-footer"));
+  const insideModal = Boolean(target.closest(".quick-reply-modal-card"));
+  const insideContactTagDropdown = Boolean(target.closest(".contact-tag-dropdown"));
+  const insideContactTagButton = Boolean(target.closest("#btnContactTags"));
+
+  if (!insideFooter && !insideModal) {
+    hideQuickReplyDropdown();
+  }
+
+  if (!insideContactTagDropdown && !insideContactTagButton) {
+    hideContactTagDropdown();
+  }
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && quickReplyModal?.classList.contains("open")) {
+    closeQuickReplyModal();
+  }
+
+  if (event.key === "Escape" && isContactTagDropdownOpen()) {
+    hideContactTagDropdown();
+  }
+});
 
 /* ==========================================================
    💬 RENDERIZAR MENSAGENS + MIDIAS
@@ -425,6 +1614,106 @@ async function selectChat(chatId) {
 function fmtTime(ts) {
     const d = new Date(ts);
     return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+}
+
+const MESSAGE_STATUS_ORDER = {
+    sent: 1,
+    delivered: 2,
+    read: 3,
+};
+
+function normalizeMessageId(value) {
+    const direct =
+        typeof value === "string"
+            ? value
+            : value?._serialized ||
+              value?.id?._serialized ||
+              value?.id ||
+              value?.messageId ||
+              value?.msgId ||
+              null;
+
+    const text = String(direct || "").trim();
+    return text || null;
+}
+
+function normalizeMessageStatus(value) {
+    const text = String(value || "").trim().toLowerCase();
+    if (text === "read") return "read";
+    if (text === "delivered") return "delivered";
+    if (text === "sent") return "sent";
+    return null;
+}
+
+function resolveOutgoingMessageStatus(msg) {
+    const explicit = normalizeMessageStatus(msg?.deliveryStatus || msg?.status);
+    if (explicit) return explicit;
+
+    const ack = Number(msg?.ack);
+    if (Number.isFinite(ack)) {
+        if (ack >= 3) return "read";
+        if (ack === 2) return "delivered";
+        if (ack >= 1) return "sent";
+    }
+
+    return null;
+}
+
+function shouldUpgradeMessageStatus(currentStatus, nextStatus) {
+    const currentOrder = MESSAGE_STATUS_ORDER[normalizeMessageStatus(currentStatus)] || 0;
+    const nextOrder = MESSAGE_STATUS_ORDER[normalizeMessageStatus(nextStatus)] || 0;
+    return nextOrder > currentOrder;
+}
+
+function buildMessageStatusText(status) {
+    return status === "sent" ? "✓" : "✓✓";
+}
+
+function buildMessageStatusClass(status) {
+    if (status === "read") return "msg-status msg-read";
+    if (status === "delivered") return "msg-status msg-delivered";
+    return "msg-status";
+}
+
+function updateMessageStatusInMemory(chatId, msgId, status) {
+    const normalizedId = normalizeMessageId(msgId);
+    const normalizedStatus = normalizeMessageStatus(status);
+    if (!chatId || !normalizedId || !normalizedStatus || !Array.isArray(chats[chatId]?.msgs)) return false;
+
+    let updated = false;
+    chats[chatId].msgs.forEach((msg) => {
+        const currentId = normalizeMessageId(msg?.messageId || msg?.id || msg?.msgId);
+        if (currentId !== normalizedId) return;
+
+        const currentStatus = resolveOutgoingMessageStatus(msg);
+        if (!shouldUpgradeMessageStatus(currentStatus, normalizedStatus)) return;
+
+        msg.messageId = normalizedId;
+        msg.id = normalizedId;
+        msg.deliveryStatus = normalizedStatus;
+        msg.status = normalizedStatus;
+        msg.ack = normalizedStatus === "read" ? 3 : normalizedStatus === "delivered" ? 2 : 1;
+        updated = true;
+    });
+
+    return updated;
+}
+
+function updateMessageStatusInDom(chatId, msgId, status) {
+    if (currentChat !== chatId) return;
+
+    const normalizedId = normalizeMessageId(msgId);
+    const normalizedStatus = normalizeMessageStatus(status);
+    if (!normalizedId || !normalizedStatus) return;
+
+    document.querySelectorAll(".msg-status").forEach((node) => {
+        if (!(node instanceof HTMLElement)) return;
+        if (node.dataset.msgid !== normalizedId) return;
+
+        node.dataset.status = normalizedStatus;
+        node.className = buildMessageStatusClass(normalizedStatus);
+        node.textContent = buildMessageStatusText(normalizedStatus);
+    });
 }
 
 function fmtDateLabel(ts) {
@@ -575,7 +1864,23 @@ function renderMessages(chatId) {
         if (appendDefaultMeta) {
             const meta = document.createElement("div");
             meta.className = "meta";
-            meta.textContent = fmtTime(msg.timestamp);
+            const time = document.createElement("span");
+            time.textContent = fmtTime(msg.timestamp);
+            meta.appendChild(time);
+
+            if (!isSystem && fromMe) {
+                const status = resolveOutgoingMessageStatus(msg) || "sent";
+                const messageId = normalizeMessageId(msg?.messageId || msg?.id || msg?.msgId);
+                const statusNode = document.createElement("span");
+                statusNode.className = buildMessageStatusClass(status);
+                statusNode.textContent = buildMessageStatusText(status);
+                statusNode.dataset.status = status;
+                if (messageId) {
+                    statusNode.dataset.msgid = messageId;
+                }
+                meta.appendChild(statusNode);
+            }
+
             bubble.appendChild(meta);
         }
 
@@ -770,12 +2075,41 @@ btnSend.addEventListener("click", () => {
         socket.emit("admin_send_message", { chatId: currentChat, body: txt });
     }
 
+    setDraftForChat(currentChat, "");
+    hideDraftBanner();
     inputMsg.value = "";
+    hideQuickReplyDropdown();
     resizeInput();
+    refreshChatListView();
     setTimeout(() => renderMessages(currentChat), 40);
 });
 
+btnDraftDiscard?.addEventListener("click", discardCurrentDraft);
+window.addEventListener("beforeunload", () => {
+    if (currentChat) {
+        saveComposerDraft(currentChat);
+    }
+});
+
 inputMsg.addEventListener("keydown", e => {
+    if (e.key === "Escape" && isQuickReplyDropdownOpen()) {
+        e.preventDefault();
+        hideQuickReplyDropdown();
+        return;
+    }
+
+    if (isQuickReplyDropdownOpen() && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+        e.preventDefault();
+        moveQuickReplySelection(e.key === "ArrowDown" ? 1 : -1);
+        return;
+    }
+
+    if (isQuickReplyDropdownOpen() && (e.key === "Enter" || e.key === "Tab") && quickReplyMatches.length) {
+        e.preventDefault();
+        applyQuickReply(quickReplyMatches[quickReplyActiveIndex] || quickReplyMatches[0]);
+        return;
+    }
+
     if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         btnSend.click();
@@ -859,6 +2193,9 @@ function updateAiUi(chatId) {
     tagAiOff.style.display = aiOn ? "none" : "inline-block";
     // Mostra botão de reset só quando a IA está ativa
     btnClearAi.style.display = aiOn ? "inline-flex" : "none";
+    if (currentChat === chatId) {
+        renderChatContext(chatId);
+    }
 }
 
 btnAiToggle.addEventListener("click", () => {
@@ -874,6 +2211,8 @@ btnAiToggle.addEventListener("click", () => {
    🛰️ SOCKET EVENTOS
    ========================================================== */
 socket.emit("listar_chats");
+loadQuickReplies();
+loadContactTags();
 
 // Abrir chat direto se vier ?contact= na URL (ex: vindo do CRM)
 const contactParam = new URLSearchParams(window.location.search).get("contact");
@@ -890,13 +2229,6 @@ socket.on("lista_chats", lista => {
         }
     });
     renderChatList();
-
-    // Prefetch mensagens de todos os chats (lazy, mas antes do clique)
-    const ids = lista.map(c => c.id?._serialized || c.id).filter(Boolean);
-    ids.forEach((id, idx) => {
-      // espaça requisições para não sobrecarregar o browser do WPP
-      setTimeout(() => socket.emit("abrir_chat", id), idx * 250);
-    });
 
     // Abrir chat do contato vindo do CRM automaticamente
     if (contactParam) {
@@ -923,8 +2255,18 @@ socket.on("mensagens_chat", payload => {
     const chatId = payload?.chatId;
     const msgs = payload?.messages || [];
     if (!chatId) return;
+    pendingChatLoads.delete(chatId);
     ensureChat(chatId);
-    chats[chatId].msgs = msgs;
+    chats[chatId].msgs = msgs.map((msg) => {
+        const messageId = normalizeMessageId(msg?.messageId || msg?.id || msg?.msgId);
+        const deliveryStatus = resolveOutgoingMessageStatus(msg);
+        return {
+            ...msg,
+            messageId: messageId || msg?.messageId || null,
+            id: messageId || msg?.id || null,
+            deliveryStatus: deliveryStatus || msg?.deliveryStatus || null,
+        };
+    });
 
     // Atualizar preview com a última mensagem do histórico
     if (msgs && msgs.length > 0) {
@@ -947,6 +2289,14 @@ socket.on("mensagens_chat", payload => {
     }
 });
 
+socket.on("abrir_chat_error", payload => {
+    const chatId = payload?.chatId;
+    if (chatId) {
+        pendingChatLoads.delete(chatId);
+    }
+    console.warn("Falha ao abrir chat:", payload);
+});
+
 socket.on("profilePic", data => {
     if (!data.chatId) return;
     ensureChat(data.chatId);
@@ -962,6 +2312,11 @@ socket.on("newMessage", msg => {
     msg.isMedia = msg.isMedia || !!msg.mimetype;
     msg.timestamp = msg.timestamp || Date.now();
     msg._isFromMe = resolveIsFromMe(msg) || msg.fromBot === true;
+    msg.messageId = normalizeMessageId(msg?.messageId || msg?.id || msg?.msgId);
+    if (msg.messageId) {
+        msg.id = msg.messageId;
+    }
+    msg.deliveryStatus = resolveOutgoingMessageStatus(msg) || msg.deliveryStatus || null;
     chats[msg.chatId].msgs.push(msg);
 
     // Atualizar preview da última mensagem
@@ -972,6 +2327,10 @@ socket.on("newMessage", msg => {
         isMedia: msg.isMedia,
         mimetype: msg.mimetype || ""
     };
+
+    if (msg._isFromMe) {
+        void markChatOnboardingComplete();
+    }
 
     // Incrementar não lidas + notificar se chat não está aberto
     if (currentChat !== msg.chatId && !msg._isFromMe) {
@@ -1029,8 +2388,31 @@ socket.on("system_note", data => {
 socket.on("chat_ai_state", ({ chatId, state }) => {
     if (!chats[chatId]) return;
     chats[chatId].ai = state;
-    if (currentChat === chatId) updateAiUi(chatId);
+    if (currentChat === chatId) {
+        updateAiUi(chatId);
+        renderChatContext(chatId);
+    }
     renderChatList();
+});
+
+socket.on("onboarding:step", ({ step }) => {
+    if (Number(step) >= 4) {
+        onboardingAlreadyCompleted = true;
+        if (chatBootstrap?.user) {
+            chatBootstrap.user.onboarding_step = 4;
+        }
+    }
+});
+
+socket.on("contact-tags:changed", payload => {
+    handleContactTagsChanged(payload);
+});
+
+socket.on("crm:changed", () => {
+    loadContactTags(true);
+    if (currentChat) {
+        loadChatContext(currentChat);
+    }
 });
 
 
@@ -1048,13 +2430,15 @@ function showTyping(chatId) {
     const box = document.getElementById("messages");
     const row = document.createElement("div");
     row.className = "msg-row from-bot";
-    row.id = "typing-indicator";
+    row.id = "typingBubble";
+    row.dataset.typingIndicator = "true";
 
     row.innerHTML = `
-        <div class="msg-bubble typing-bubble">
+        <div class="msg-bubble typing-bubble typing-indicator">
             <div class="typing-dots">
                 <span></span><span></span><span></span>
             </div>
+            <span class="typing-label">Bot processando...</span>
         </div>
     `;
 
@@ -1070,8 +2454,9 @@ function hideTyping() {
         clearTimeout(typingTimerCleanup);
         typingTimerCleanup = null;
     }
-    const el = document.getElementById("typing-indicator");
-    if (el) el.remove();
+    document.querySelectorAll("#typingBubble, #typing-indicator, [data-typing-indicator='true']").forEach((el) => {
+        el.remove();
+    });
 }
 
 socket.on("typing:start", ({ chatId }) => {
@@ -1080,6 +2465,20 @@ socket.on("typing:start", ({ chatId }) => {
 
 socket.on("typing:stop", ({ chatId }) => {
     if (currentChat === chatId) hideTyping();
+});
+
+socket.on("bot:typing", ({ chatId }) => {
+    showTyping(chatId);
+});
+
+socket.on("bot:typed", ({ chatId }) => {
+    if (currentChat === chatId) hideTyping();
+});
+
+socket.on("msg:status", ({ chatId, msgId, status }) => {
+    if (!chatId || !msgId || !status) return;
+    updateMessageStatusInMemory(chatId, msgId, status);
+    updateMessageStatusInDom(chatId, msgId, status);
 });
 
 

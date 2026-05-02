@@ -4,113 +4,37 @@
   <meta charset="UTF-8" />
   <title>Analytics &bull; ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" href="/img/favinco.png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
+  <%- include("partials/app-head-core") %>
   <link rel="stylesheet" href="/css/analytics.css" />
+  <link rel="stylesheet" href="/css/app-shell.css" />
+  <script src="/js/app-shell.js" defer></script>
 </head>
-<body>
+<body class="has-app-sidebar">
+  <%- include("partials/app-sidebar", { activePage: "analytics" }) %>
   <div class="page-shell">
     <div class="page-glow page-glow-a"></div>
     <div class="page-glow page-glow-b"></div>
 
-    <header class="hero">
-      <div class="hero-copy">
-        <a href="/painel" class="hero-back">
-          <i class="fa-solid fa-arrow-left"></i>
-          Voltar ao painel
-        </a>
-
-        <h1>Entenda o que a IA resolve, onde ela trava e quando o volume sobe.</h1>
-        <p>
-          Acompanhe os temas mais recorrentes, a satisfa&ccedil;&atilde;o estimada, os
-          hor&aacute;rios de pico e os pontos em que o bot precisa de refor&ccedil;o.
-        </p>
-
-        <div class="hero-highlights">
-          <article class="hero-highlight">
-            <span>Relat&oacute;rio em foco</span>
-            <strong id="hero-selected-date">Sem relat&oacute;rio</strong>
-            <small id="hero-selected-window">&Uacute;ltimas 24h</small>
-          </article>
-
-          <article class="hero-highlight">
-            <span>Hist&oacute;rico carregado</span>
-            <strong id="hero-report-count">0</strong>
-            <small id="hero-report-foot">relat&oacute;rios no per&iacute;odo</small>
-          </article>
-
-          <article class="hero-highlight">
-            <span>Acesso do plano</span>
-            <strong id="hero-plan-access"><%= analyticsAccess.plan.toUpperCase() %></strong>
-            <small id="hero-plan-foot">Configurando acesso</small>
-          </article>
-        </div>
-      </div>
-
-      <div class="hero-panel">
-        <div class="hero-panel-top">
-          <div class="plan-chip">
-            <span>Plano atual</span>
-            <strong id="plan-name"><%= analyticsAccess.plan.toUpperCase() %></strong>
-          </div>
-
-          <div class="capability-pills">
-            <span class="status-pill" id="history-cap-pill">Hist&oacute;rico</span>
-            <span class="status-pill" id="pdf-cap-pill">PDF</span>
-          </div>
-        </div>
-
-        <div class="control-surface">
-          <label class="field">
-            <span>Per&iacute;odo</span>
-            <select id="days-select">
-              <option value="7">&Uacute;ltimos 7 dias</option>
-              <option value="30">&Uacute;ltimos 30 dias</option>
-              <option value="90">&Uacute;ltimos 90 dias</option>
-            </select>
-          </label>
-
-          <div class="hero-actions">
-            <button id="refresh-btn" class="btn btn-primary" type="button">
-              <i class="fa-solid fa-sparkles"></i>
-              Atualizar agora
-            </button>
-            <button id="export-btn" class="btn btn-secondary" type="button">
-              <i class="fa-solid fa-file-pdf"></i>
-              Exportar PDF
-            </button>
-          </div>
-        </div>
-
-        <div class="meta-grid">
-          <article class="meta-card">
-            <span>Janela analisada</span>
-            <strong id="meta-window">&Uacute;ltimas 24h</strong>
-          </article>
-          <article class="meta-card">
-            <span>Mensagens estimadas</span>
-            <strong id="meta-messages">0</strong>
-          </article>
-          <article class="meta-card">
-            <span>Motor usado</span>
-            <strong id="meta-model">Aguardando</strong>
-          </article>
-          <article class="meta-card">
-            <span>Atualizado em</span>
-            <strong id="meta-generated-at">--</strong>
-          </article>
-        </div>
-
-        <div id="upgrade-banner" class="upgrade-banner">
-          <div>
-            <strong>Plano Pro libera exporta&ccedil;&atilde;o PDF e hist&oacute;rico completo.</strong>
-            <p>Nos planos b&aacute;sicos, o painel mostra apenas os &uacute;ltimos 7 dias.</p>
-          </div>
-          <a href="/checkout" class="btn btn-inline">Fazer upgrade</a>
-        </div>
+    <header class="analytics-topbar">
+      <a href="/painel" class="btn-back">
+        <i class="fa-solid fa-arrow-left"></i>
+        Painel
+      </a>
+      <h1 class="analytics-title">Analytics</h1>
+      <div class="analytics-controls">
+        <select id="days-select" aria-label="Per&iacute;odo do relat&oacute;rio">
+          <option value="7">7 dias</option>
+          <option value="30">30 dias</option>
+          <option value="90">90 dias</option>
+        </select>
+        <button id="refresh-btn" class="btn btn-primary" type="button">
+          <i class="fa-solid fa-sparkles"></i>
+          Atualizar
+        </button>
+        <button id="export-btn" class="btn btn-secondary" type="button">
+          <i class="fa-solid fa-file-pdf"></i>
+          PDF
+        </button>
       </div>
     </header>
 
@@ -159,6 +83,18 @@
         </div>
       </article>
     </section>
+
+    <section class="insights-strip" id="insightsStrip">
+      <div class="empty-state">Carregando insights acion&aacute;veis...</div>
+    </section>
+
+    <div id="upgrade-banner" class="upgrade-banner hidden">
+      <div>
+        <strong>Plano Pro libera exporta&ccedil;&atilde;o PDF e hist&oacute;rico completo.</strong>
+        <p>Nos planos b&aacute;sicos, o painel mostra apenas os &uacute;ltimos 7 dias.</p>
+      </div>
+      <a href="/checkout" class="btn btn-inline">Fazer upgrade</a>
+    </div>
 
     <main class="content-grid">
       <section class="card summary-card span-two">

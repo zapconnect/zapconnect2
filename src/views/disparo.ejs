@@ -1,24 +1,19 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
   <title>Disparo em Massa • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- Font Awesome -->
-  <link
-    rel="stylesheet"
-    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
-    crossorigin="anonymous"
-    referrerpolicy="no-referrer"
-  />
-  <link rel="icon" href="/img/favinco.png" />
+  <%- include("partials/app-head-core") %>
   <link rel="stylesheet" href="/css/disparo.css">
+  <link rel="stylesheet" href="/css/app-shell.css">
+  <script src="/js/app-shell.js" defer></script>
 </head>
 
-<body data-default-ddi="<%= user.default_ddi || '55' %>">
+<body class="has-app-sidebar" data-default-ddi="<%= user.default_ddi || '55' %>">
+  <%- include("partials/app-sidebar", { activePage: "disparo" }) %>
 
-  <!-- HEADER -->
   <header class="topbar">
     <div class="brand">
       <i class="fa-solid fa-bullhorn"></i>
@@ -31,79 +26,402 @@
     </a>
   </header>
 
-  <!-- CONTEÚDO -->
   <main class="wrap">
+    <section class="wizard-shell">
+      <div class="wizard-hero">
+        <div class="wizard-hero-copy">
+          <span class="eyebrow">Agora com revisão guiada</span>
+          <h2>Novo disparo em 3 etapas</h2>
+          <p>
+            Separe contatos, mensagem e confirmação final para revisar a campanha
+            antes do primeiro envio sair.
+          </p>
+        </div>
 
-    <section class="card">
-
-      <!-- NÚMEROS -->
-      <div class="field">
-        <label>
-          <i class="fa-solid fa-phone"></i>
-          Números (um por linha)
-        </label>
-
-        <textarea
-          id="numbers"
-          placeholder="<%= user.default_ddi || '55' %> (31) 99999-9999&#10;<%= user.default_ddi || '55' %> (11) 98888-8888"
-        ></textarea>
-
-        <small>O campo aplica máscara automática e inicia cada linha com DDI <%= user.default_ddi || '55' %>.</small>
+        <div class="wizard-hero-status">
+          <span class="hero-badge">Antes: envio imediato</span>
+          <strong>Depois: revisão consciente antes do disparo</strong>
+          <p id="heroStepSummary">Etapa 1/3 — comece pela lista de contatos.</p>
+          <div class="hero-pills">
+            <span id="heroContactsPill">0 contatos prontos</span>
+            <span id="heroMediaPill">Sem mídia anexada</span>
+          </div>
+        </div>
       </div>
 
-      <!-- MENSAGEM -->
-      <div class="field">
-        <label>
-          <i class="fa-solid fa-message"></i>
-          Mensagem
-        </label>
+      <div class="wizard-steps" aria-label="Etapas do disparo">
+        <button type="button" class="wizard-step is-active" data-step-target="1">
+          <span class="wizard-step-index">1</span>
+          <span class="wizard-step-copy">
+            <strong>Contatos</strong>
+            <small>Monte e valide a lista</small>
+          </span>
+        </button>
 
-        <textarea
-          id="message"
-          placeholder="Digite a mensagem que será enviada"
-        ></textarea>
+        <button type="button" class="wizard-step" data-step-target="2">
+          <span class="wizard-step-index">2</span>
+          <span class="wizard-step-copy">
+            <strong>Mensagem</strong>
+            <small>Escreva e revise o preview</small>
+          </span>
+        </button>
+
+        <button type="button" class="wizard-step" data-step-target="3">
+          <span class="wizard-step-index">3</span>
+          <span class="wizard-step-copy">
+            <strong>Confirmar</strong>
+            <small>Cheque resumo, risco e envio</small>
+          </span>
+        </button>
       </div>
 
-      <!-- MÍDIA -->
-      <div class="field">
-        <label>
-          <i class="fa-solid fa-paperclip"></i>
-          Mídia (opcional)
-        </label>
+      <div class="wizard-grid">
+        <section class="wizard-main">
+          <div class="wizard-panel is-active" data-step-panel="1">
+            <div class="panel-head">
+              <span class="eyebrow">Etapa 1</span>
+              <h3>Selecione os contatos do disparo</h3>
+              <p>
+                Cole os números um por linha. O campo aplica a máscara e mantém o DDI
+                <%= user.default_ddi || '55' %> por padrão.
+              </p>
+            </div>
 
-        <input type="file" id="file" />
+            <div class="field">
+              <label for="numbers">
+                <i class="fa-solid fa-phone"></i>
+                Números (um por linha)
+              </label>
+
+              <textarea
+                id="numbers"
+                placeholder="<%= user.default_ddi || '55' %> (31) 99999-9999&#10;<%= user.default_ddi || '55' %> (11) 98888-8888"
+              ></textarea>
+
+              <small>
+                Cada linha válida entra no disparo. Linhas fora do padrão serão exibidas
+                para revisão antes do envio.
+              </small>
+            </div>
+
+            <div class="contacts-metrics">
+              <article class="metric-card">
+                <span>Linhas detectadas</span>
+                <strong id="metricTotalLines">0</strong>
+              </article>
+
+              <article class="metric-card metric-card-good">
+                <span>Contatos válidos</span>
+                <strong id="metricValidLines">0</strong>
+              </article>
+
+              <article class="metric-card metric-card-warn">
+                <span>Serão ignorados</span>
+                <strong id="metricInvalidLines">0</strong>
+              </article>
+            </div>
+
+            <div id="invalidNumbersBox" class="invalid-box" hidden>
+              <div class="invalid-box-head">
+                <strong>Linhas fora do padrão</strong>
+                <span>Revise antes de continuar</span>
+              </div>
+              <div id="invalidNumbersList" class="pill-row"></div>
+            </div>
+          </div>
+
+          <div class="wizard-panel" data-step-panel="2">
+            <div class="panel-head">
+              <span class="eyebrow">Etapa 2</span>
+              <h3>Escreva a mensagem e veja o preview</h3>
+              <p>
+                Revise como o contato verá o texto antes do envio. Esta etapa substitui o
+                disparo imediato por uma checagem visual.
+              </p>
+            </div>
+
+            <div class="field">
+              <label for="message">
+                <i class="fa-solid fa-message"></i>
+                Mensagem
+              </label>
+
+              <textarea
+                id="message"
+                placeholder="Digite a mensagem que será enviada"
+              ></textarea>
+
+              <small>
+                Use <code>{{numero}}</code>, <code>{{data}}</code> e <code>{{hora}}</code>.
+                Variáveis sem dados reais nesta lista aparecem no preview como exemplo visual.
+              </small>
+            </div>
+
+            <div class="field">
+              <label for="file">
+                <i class="fa-solid fa-paperclip"></i>
+                Mídia (opcional)
+              </label>
+
+              <label class="media-picker" for="file" id="filePicker">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
+                <span id="filePickerLabel">Clique para anexar imagem, PDF, vídeo ou áudio</span>
+              </label>
+
+              <input type="file" id="file" hidden />
+              <div id="fileMeta" class="media-meta">Nenhuma mídia anexada.</div>
+            </div>
+
+            <div class="preview-card">
+              <div class="preview-card-head">
+                <span>Preview (como o contato verá)</span>
+                <span class="preview-stage">Etapa 2/3</span>
+              </div>
+
+              <div class="preview-card-body">
+                <div class="preview-label-row">
+                  <span id="previewContactLabel" class="preview-label">João Silva</span>
+                  <span id="previewContactsCount" class="preview-count">0 contatos selecionados</span>
+                </div>
+
+                <div id="previewBubble" class="preview-bubble">
+                  Sua mensagem aparecerá aqui.
+                </div>
+
+                <p id="previewHelp" class="preview-help">
+                  Avance quando o texto estiver pronto para revisão final.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div class="wizard-panel" data-step-panel="3">
+            <div class="panel-head">
+              <span class="eyebrow">Etapa 3</span>
+              <h3>Confirme antes de iniciar o disparo</h3>
+              <p>
+                Confira o volume, o intervalo estimado e os avisos da validação. O envio só
+                começa depois deste botão final.
+              </p>
+            </div>
+
+            <div class="confirm-summary-card">
+              <div class="confirm-summary-head">
+                <strong id="confirmSelectedCount">0 contatos selecionados</strong>
+                <span class="confirm-step-tag">Etapa 3/3 — pronto para enviar</span>
+              </div>
+
+              <div class="confirm-grid">
+                <div class="confirm-item">
+                  <span>Lista válida</span>
+                  <strong id="confirmValidCount">0</strong>
+                </div>
+
+                <div class="confirm-item">
+                  <span>Ignorados</span>
+                  <strong id="confirmInvalidCount">0</strong>
+                </div>
+
+                <div class="confirm-item">
+                  <span>Mídia</span>
+                  <strong id="confirmMediaState">Sem anexo</strong>
+                </div>
+
+                <div class="confirm-item">
+                  <span>Intervalo estimado</span>
+                  <strong id="confirmEta">0s</strong>
+                </div>
+
+                <div class="confirm-item">
+                  <span>Sessão usada</span>
+                  <strong id="confirmSession">A validar</strong>
+                </div>
+
+                <div class="confirm-item">
+                  <span>Status da revisão</span>
+                  <strong id="confirmRiskState">Pendente</strong>
+                </div>
+              </div>
+            </div>
+
+            <div class="confirm-preview-card">
+              <div class="preview-label-row">
+                <span id="confirmPreviewLabel" class="preview-label">João Silva</span>
+                <span class="preview-count">Mensagem final</span>
+              </div>
+              <div id="confirmPreviewBubble" class="preview-bubble">
+                Sua mensagem aparecerá aqui.
+              </div>
+            </div>
+
+            <div id="confirmWarnings" class="confirm-alerts" hidden></div>
+          </div>
+        </section>
+
+        <aside class="wizard-sidebar">
+          <article class="summary-card">
+            <div class="summary-card-head">
+              <span class="eyebrow">Resumo do disparo</span>
+              <strong id="sidebarStepTitle">Etapa 1/3</strong>
+            </div>
+
+            <div class="summary-list">
+              <div class="summary-item">
+                <span>Contatos válidos</span>
+                <strong id="summaryValidCount">0</strong>
+              </div>
+
+              <div class="summary-item">
+                <span>Linhas ignoradas</span>
+                <strong id="summaryInvalidCount">0</strong>
+              </div>
+
+              <div class="summary-item">
+                <span>Mensagem</span>
+                <strong id="summaryMessageState">Vazia</strong>
+              </div>
+
+              <div class="summary-item">
+                <span>Mídia</span>
+                <strong id="summaryMediaState">Não anexada</strong>
+              </div>
+
+              <div class="summary-item">
+                <span>Intervalo estimado</span>
+                <strong id="summaryEta">0s</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="summary-card">
+            <div class="summary-card-head">
+              <span class="eyebrow">Checklist visual</span>
+              <strong id="sidebarStepHint">Próximo: mensagem</strong>
+            </div>
+
+            <div class="mini-checklist">
+              <div class="mini-check">
+                <i class="fa-solid fa-list-check"></i>
+                <span>Revise a lista antes de avançar.</span>
+              </div>
+              <div class="mini-check">
+                <i class="fa-solid fa-eye"></i>
+                <span>Confira o preview com variáveis renderizadas.</span>
+              </div>
+              <div class="mini-check">
+                <i class="fa-solid fa-shield-heart"></i>
+                <span>Confirme o envio só quando o resumo estiver correto.</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="summary-card risk-card" id="riskCard">
+            <div class="summary-card-head">
+              <span class="eyebrow">Validação da campanha</span>
+              <strong id="riskCardTitle">Aguardando revisão</strong>
+            </div>
+            <p id="riskCardText" class="risk-card-text">
+              Ao avançar para a etapa final, a sessão ativa e a qualidade da lista serão validadas.
+            </p>
+          </article>
+        </aside>
       </div>
 
-      <!-- BOTÕES -->
-      <div class="btn-group">
-        <button id="btnStart" class="btn-primary">
+      <div class="wizard-actions">
+        <button id="btnPrevStep" class="btn-secondary" type="button">
+          <i class="fa-solid fa-arrow-left"></i>
+          Voltar
+        </button>
+
+        <button id="btnNextStep" class="btn-primary" type="button">
+          <i class="fa-solid fa-arrow-right"></i>
+          Avançar para mensagem
+        </button>
+
+        <button id="btnStart" class="btn-primary btn-confirm" type="button" hidden>
           <i class="fa-solid fa-rocket"></i>
-          Iniciar Disparo
-        </button>
-        <button id="btnPause" class="btn-secondary" disabled>
-          <i class="fa-solid fa-circle-pause"></i>
-          Pausar
-        </button>
-        <button id="btnCancel" class="btn-danger" disabled>
-          <i class="fa-solid fa-circle-xmark"></i>
-          Cancelar
+          Confirmar e iniciar disparo
         </button>
       </div>
 
-      <!-- PROGRESSO -->
-      <div id="progress" class="progress"></div>
+      <section class="runtime-card">
+        <div class="runtime-card-head">
+          <div>
+            <span class="eyebrow">Execução</span>
+            <strong>Acompanhe o andamento do disparo</strong>
+          </div>
+        </div>
 
+        <div id="progressPanel" class="disp-progress-panel" hidden>
+          <div class="disp-prog-header">
+            <div class="disp-prog-copy">
+              <span id="dispTitle" class="disp-title">0 / 0 processados</span>
+              <span id="dispStatusText" class="disp-status-text">
+                O painel aparece quando o disparo começar.
+              </span>
+            </div>
+
+            <div class="disp-prog-meta">
+              <span id="dispEta" class="disp-eta">ETA --:--</span>
+              <span id="dispStatusBadge" class="disp-badge is-idle">Pronto</span>
+            </div>
+          </div>
+
+          <div class="disp-bar-wrap">
+            <div id="dispBar" class="disp-bar" style="width: 0%"></div>
+          </div>
+
+          <div class="disp-stats-grid">
+            <div class="dstat">
+              <span id="dispSent" class="dstat-val ok">0</span>
+              <span>Enviados</span>
+            </div>
+            <div class="dstat">
+              <span id="dispFailed" class="dstat-val fail">0</span>
+              <span>Falhas</span>
+            </div>
+            <div class="dstat">
+              <span id="dispSkipped" class="dstat-val skip">0</span>
+              <span>Pulados</span>
+            </div>
+            <div class="dstat">
+              <span id="dispRemaining" class="dstat-val">0</span>
+              <span>Restantes</span>
+            </div>
+          </div>
+
+          <div class="disp-actions">
+            <button id="btnPause" class="btn-secondary" disabled type="button">
+              <i class="fa-solid fa-circle-pause"></i>
+              Pausar
+            </button>
+
+            <button id="btnCancel" class="btn-danger" disabled type="button">
+              <i class="fa-solid fa-circle-xmark"></i>
+              Cancelar
+            </button>
+
+            <button id="btnExportLog" class="btn-secondary btn-export-log" disabled type="button">
+              <i class="fa-solid fa-file-arrow-down"></i>
+              Exportar log
+            </button>
+          </div>
+
+          <div class="disp-log-head">
+            <span>Log ao vivo</span>
+            <span id="dispLogMeta">0 linha(s)</span>
+          </div>
+          <div id="dispLog" class="disp-log" aria-live="polite"></div>
+        </div>
+      </section>
     </section>
-
   </main>
 
-  <!-- FOOTER -->
   <footer>
     © 2026 ZapConnect — Todos os direitos reservados.<br>
     Desenvolvido por <a href="https://www.instagram.com/vini__n10?igsh=NzF4am94bjhmdHJ6" target="_blank">Vinicius Souza</a>
   </footer>
 
-  <!-- JS -->
   <script src="/js/loading-utils.js"></script>
   <script src="/js/toast.js"></script>
   <script src="/js/disparo.js"></script>

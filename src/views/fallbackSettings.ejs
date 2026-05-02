@@ -1,104 +1,341 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
   <title>Fallback Automático • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" href="/img/favinco.png" />
+  <%- include("partials/app-head-core") %>
   <link rel="stylesheet" href="/css/index.css">
   <link rel="stylesheet" href="/css/fallbackSettings.css">
+  <link rel="stylesheet" href="/css/app-shell.css">
+  <script src="/js/app-shell.js" defer></script>
 </head>
-<body>
+<body class="has-app-sidebar">
+  <%- include("partials/app-sidebar", { activePage: "fallback-settings" }) %>
+
   <div class="fallback-page">
     <header class="page-header">
-      <div>
-        <h1>Fallback automático para atendimento humano</h1>
-        <p>Escolha se o fallback só registra uma nota interna no painel ou se também envia texto para o contato.</p>
+      <div class="page-copy">
+        <span class="page-kicker">Fallback IA → Humano</span>
+        <h1>Regras organizadas por categoria com toggle individual</h1>
+        <p>
+          Separe claramente o que detecta frustração do que acontece depois do disparo.
+          Cada regra pode ser ligada, desligada e ajustada sem depender de um salvamento manual.
+        </p>
       </div>
+
       <div class="header-actions">
-        <button class="btn-ghost small" onclick="window.location.href='/painel'">
-          ← Voltar
+        <button class="btn-ghost small" type="button" onclick="window.location.href='/painel'">
+          <i class="fa-solid fa-arrow-left"></i>
+          Voltar
         </button>
-        <div class="pill info" id="pill-src">Fonte: —</div>
+        <button class="btn-ghost small" type="button" id="btnResetSession">
+          <i class="fa-solid fa-rotate-left"></i>
+          Restaurar padrão
+        </button>
       </div>
     </header>
 
+    <div class="top-status-row">
+      <div class="pill info" id="pill-src">Fonte: —</div>
+      <div class="pill neutral" id="pill-save-state">Aguardando sessão</div>
+    </div>
+
     <div id="status-box" class="status" style="display:none;"></div>
 
-    <section class="card">
-      <label>Session name</label>
-      <select id="sessionName">
-        <option value="" disabled selected>Carregando sessões...</option>
-      </select>
-      <small class="muted">Seleciona automaticamente a primeira sessão disponível.</small>
-    </section>
+    <section class="card control-card">
+      <div class="control-grid">
+        <div class="control-block control-block-wide">
+          <label for="sessionName">Sessão</label>
+          <select id="sessionName">
+            <option value="" disabled selected>Carregando sessões...</option>
+          </select>
+          <small class="muted">
+            A primeira sessão disponível é carregada automaticamente. Ao trocar de sessão, as alterações pendentes são salvas antes da mudança.
+          </small>
+        </div>
 
-    <section class="grid">
-      <div class="card">
-        <div class="card-title">Transferência para humano</div>
-        <label class="switch-line">
-          <input id="internalNoteOnly" type="checkbox" checked>
-          <span>Registrar só nota interna no painel</span>
-        </label>
-        <small class="muted">Recomendado para evitar mensagens automáticas de sistema no WhatsApp do contato.</small>
-
-        <label class="switch-line">
-          <input id="sendTransferMessage" type="checkbox">
-          <span>Também enviar mensagem para o contato</span>
-        </label>
-
-        <label>Mensagem opcional enviada ao ativar atendimento humano</label>
-        <textarea id="fallbackMessage" placeholder="Vou encaminhar você para um atendente humano, aguarde um momento."></textarea>
-        <small class="muted">Se o envio ao contato estiver desligado ou a mensagem ficar vazia, a transferência será interna.</small>
-      </div>
-
-      <div class="card">
-        <div class="card-title">Tempo do modo humano</div>
-        <label>Duração (minutos) — 0 para ilimitado</label>
-        <input id="humanModeDuration" type="number" min="0" value="15">
-
-        <label>Cooldown entre fallbacks (minutos)</label>
-        <input id="fallbackCooldownMinutes" type="number" min="0" value="5">
-        <small class="muted">Evita reativar o fallback no mesmo chat durante o intervalo definido.</small>
-      </div>
-
-      <div class="card">
-        <div class="card-title">Mensagem da IA pedindo transferência</div>
-        <label>Texto que aciona a transferência</label>
-        <textarea id="aiTransferPhrases" placeholder="transferindo..."></textarea>
-        <small class="muted">Use uma linha por variação; qualquer linha acionará o fallback.</small>
-      </div>
-
-      <div class="card">
-        <div class="card-title">Alerta em outro WhatsApp</div>
-        <label>Número do WhatsApp para alerta (com DDI/DD)</label>
-        <input id="alertPhone" type="text" placeholder="5511999999999">
-
-        <label>Mensagem do alerta</label>
-        <textarea id="alertMessage" placeholder="Alerta: assuma a conversa {chatId} da sessão {sessionName}."></textarea>
-        <small class="muted">Deixe vazio para não enviar alerta. Use {chatId} e {sessionName} como variáveis.</small>
+        <div class="control-block control-toggle-block">
+          <span class="control-label">Fallback global</span>
+          <label class="rule-toggle rule-toggle-lg">
+            <input type="checkbox" id="enableFallback">
+            <span class="toggle-track"></span>
+          </label>
+          <small class="muted">
+            Desligado: nenhuma regra dispara fallback, mas você ainda pode preparar os parâmetros.
+          </small>
+        </div>
       </div>
     </section>
 
-    <div class="actions">
-      <button class="btn-primary" id="btnSave">Salvar configuração</button>
-      <button class="btn-ghost" id="btnLoad">Carregar</button>
-      <button class="btn-ghost" id="btnReset">Resetar para padrão</button>
+    <div class="fallback-shell" id="fallbackShell">
+      <section class="fallback-section">
+        <div class="fallback-section-header">
+          <div>
+            <span class="section-title"><i class="fa-solid fa-magnifying-glass"></i> Detecção de frustração</span>
+            <span class="section-hint">Quando o fallback é acionado</span>
+          </div>
+          <span class="section-badge" id="detectRulesBadge">0 regras ativas</span>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="directRequestEnabled">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Pedido direto por humano</span>
+              <span class="rule-desc">Detecta quando o contato pede atendimento humano de forma explícita.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="directRequestEnabled">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params">
+            <div class="field-group field-group-full">
+              <label for="triggerWords">Palavras-chave</label>
+              <textarea id="triggerWords" placeholder="humano&#10;atendente&#10;falar com alguém"></textarea>
+              <small class="muted">Uma linha por termo. Qualquer termo encontrado pode disparar o fallback.</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="repetitionEnabled">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Repetição de mensagens</span>
+              <span class="rule-desc">Dispara quando o mesmo texto é repetido várias vezes em sequência.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="repetitionEnabled">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params">
+            <div class="field-group">
+              <label for="maxRepetitions">Limite de repetições</label>
+              <input id="maxRepetitions" type="number" min="1" max="10" />
+            </div>
+          </div>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="frustrationEnabled">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Palavras de frustração</span>
+              <span class="rule-desc">Monitora sinais de irritação, reclamação e mensagens que indicam desgaste.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="frustrationEnabled">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params rule-params-grid">
+            <div class="field-group field-group-full">
+              <label for="frustrationWords">Vocabulário monitorado</label>
+              <textarea id="frustrationWords" placeholder="não funciona&#10;de novo&#10;frustrado"></textarea>
+              <small class="muted">Áudios longos e documentos sem contexto também entram nessa mesma trilha de detecção.</small>
+            </div>
+
+            <div class="field-group">
+              <label for="maxFrustration">Pontuação para disparo</label>
+              <input id="maxFrustration" type="number" min="1" max="10" />
+            </div>
+
+            <div class="field-group">
+              <label for="fallbackSensitivity">Sensibilidade</label>
+              <select id="fallbackSensitivity">
+                <option value="low">Baixa</option>
+                <option value="medium">Média</option>
+                <option value="high">Alta</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="aiUncertaintyEnabled">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">IA sem confiança ou falhando</span>
+              <span class="rule-desc">Acompanha respostas inseguras e erros técnicos repetidos da IA.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="aiUncertaintyEnabled">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params rule-params-grid">
+            <div class="field-group field-group-full">
+              <label for="aiUncertaintyPhrases">Frases de incerteza</label>
+              <textarea id="aiUncertaintyPhrases" placeholder="não tenho certeza&#10;não entendi&#10;pode repetir"></textarea>
+              <small class="muted">Quando a IA usar essas frases com frequência, a conversa pode ser desviada para humano.</small>
+            </div>
+
+            <div class="field-group">
+              <label for="maxIaFailures">Falhas consecutivas</label>
+              <input id="maxIaFailures" type="number" min="1" max="10" />
+            </div>
+          </div>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="aiTransferEnabled">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Frases de transferência emitidas pela IA</span>
+              <span class="rule-desc">Confirma o fallback quando a própria IA sinaliza que vai transferir a conversa.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="aiTransferEnabled">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params">
+            <div class="field-group field-group-full">
+              <label for="aiTransferPhrases">Frases monitoradas</label>
+              <textarea id="aiTransferPhrases" placeholder="transferindo...&#10;vou encaminhar você para um humano"></textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="fallback-section">
+        <div class="fallback-section-header">
+          <div>
+            <span class="section-title"><i class="fa-solid fa-bolt"></i> Ação do fallback</span>
+            <span class="section-hint">O que acontece quando o fallback é acionado</span>
+          </div>
+          <span class="section-badge" id="actionRulesBadge">0 regras ativas</span>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="sendTransferMessage">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Enviar mensagem de desculpas</span>
+              <span class="rule-desc">Se ligado, o contato recebe uma mensagem antes do fallback concluir a ação seguinte.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="sendTransferMessage">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params">
+            <div class="field-group field-group-full">
+              <label for="fallbackMessage">Mensagem enviada ao contato</label>
+              <textarea id="fallbackMessage" placeholder="Não entendi bem. Vou encaminhar você para um atendente."></textarea>
+              <small class="muted">Desligado: o fallback pode seguir silenciosamente, mantendo apenas ações internas.</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="handoverEnabled">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Transferir para humano automaticamente</span>
+              <span class="rule-desc">Ativa o modo humano e pausa a IA pelo tempo definido abaixo.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="handoverEnabled">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params rule-params-grid">
+            <div class="field-group">
+              <label for="humanModeDuration">Duração do modo humano (min)</label>
+              <input id="humanModeDuration" type="number" min="0" />
+              <small class="muted">Use 0 para manter sem expiração automática.</small>
+            </div>
+
+            <div class="field-group">
+              <label for="fallbackCooldownMinutes">Cooldown entre fallbacks (min)</label>
+              <input id="fallbackCooldownMinutes" type="number" min="0" />
+              <small class="muted">Use 0 para permitir novo fallback sem espera.</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="notifyPanel">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Registrar nota interna no painel</span>
+              <span class="rule-desc">Anexa uma nota de sistema no chat com o motivo que disparou o fallback.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="notifyPanel">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="alertEnabled">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Enviar alerta em outro WhatsApp</span>
+              <span class="rule-desc">Notifica um número específico quando a conversa exige intervenção humana.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="alertEnabled">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params rule-params-grid">
+            <div class="field-group">
+              <label for="alertPhone">Número do alerta</label>
+              <input id="alertPhone" type="text" placeholder="5511999999999" />
+            </div>
+
+            <div class="field-group field-group-full">
+              <label for="alertMessage">Mensagem do alerta</label>
+              <textarea id="alertMessage" placeholder="Alerta: assuma a conversa {chatId} da sessão {sessionName}."></textarea>
+              <small class="muted">Use <code>{chatId}</code> e <code>{sessionName}</code> como variáveis.</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="fallback-rule-card" data-rule="notifyWebhook">
+          <div class="rule-header">
+            <div class="rule-info">
+              <span class="rule-name">Acionar webhook externo</span>
+              <span class="rule-desc">Envia um evento para outro sistema sempre que o fallback dispara.</span>
+            </div>
+            <label class="rule-toggle">
+              <input type="checkbox" id="notifyWebhook">
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+
+          <div class="rule-params">
+            <div class="field-group field-group-full">
+              <label for="webhookUrl">URL do webhook</label>
+              <input id="webhookUrl" type="text" placeholder="https://seu-endpoint.exemplo/fallback" />
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
 
     <section class="card list-card">
       <div class="list-header">
         <div>
-          <div class="card-title">Configurações salvas</div>
-          <small class="muted">Clique em editar para carregar, ou excluir para remover.</small>
+          <div class="card-title">Configurações salvas por sessão</div>
+          <small class="muted">Use “Editar” para carregar outra sessão ou “Excluir” para remover a configuração persistida.</small>
         </div>
-        <button class="btn-ghost small" id="btnRefreshList">Atualizar lista</button>
+        <button class="btn-ghost small" type="button" id="btnRefreshList">
+          <i class="fa-solid fa-rotate"></i>
+          Atualizar lista
+        </button>
       </div>
+
       <div class="table">
         <div class="table-head">
           <span>Sessão</span>
+          <span>Fallback</span>
           <span>Webhook</span>
-          <span>Alerta</span>
           <span>Atualizado</span>
           <span>Ações</span>
         </div>
@@ -108,7 +345,6 @@
   </div>
 
   <div id="userdata" data-user='<%- JSON.stringify(user || {}) %>'></div>
-  <script src="/js/loading-utils.js"></script>
   <script src="/js/fallbackSettings.js"></script>
 </body>
 </html>

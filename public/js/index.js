@@ -9,6 +9,19 @@ const API = window.APP_CONFIG?.API_URL || window.location.origin;
 let qrTimer = null;
 let currentUser = null;
 let lastScheduleLogId = 0;
+const PROMPT_TOKEN_RATIO = 3.8;
+const PROMPT_BUFFER_TOKENS = 500;
+const PROMPT_OUTPUT_MULTIPLIER = 5;
+const PROMPT_PRICE_PER_TOKEN_BRL = 0.000001;
+const PROMPT_MIN_CHARS = 60;
+const PROMPT_WARN_TOKENS = 800;
+const PROMPT_MAX_CHARS = 4000;
+const ONBOARDING_DISMISS_KEY = "zap_onboarding_dismissed";
+const PROMPT_LANGUAGE_REGEX = /\bportugu[eê]s\b|\bpt-br\b|\bpt br\b|\bidioma\b/i;
+const PROMPT_BOUNDARY_REGEX = /\b(n[aã]o|nunca|jamais|somente|apenas|evite|proibido|sem)\b/i;
+const PROMPT_HANDOFF_REGEX = /\b(humano|atendente|suporte|encaminh|transfer)\w*/i;
+const PROMPT_CONFLICT_REGEX =
+    /<\/?(system|assistant|developer|tool|instructions?)>|\b(ignore|desconsidere|esque[çc]a)\b.{0,80}\b(instru[cç][aã]o|prompt|regra|sistema)\b/i;
 
 // ===============================
 // 🔌 SOCKET.IO
@@ -23,6 +36,7 @@ const socket = io(API, {
 // 🚀 INIT
 // ===============================
 window.onload = () => {
+    initOnboardingChecklist();
     loadUser();
     loadStats();
     startScheduleLogWatcher();
@@ -56,12 +70,16 @@ async function loadUser() {
     if (!res.ok) return location.href = "/login";
 
     const { user, planConfig } = await res.json();
-    currentUser = { ...user, planConfig: planConfig || null };
+    currentUser = { ...user, prompt: user?.prompt || "", planConfig: planConfig || null };
+    window.HAS_PROMPT = typeof currentUser.prompt === "string" && currentUser.prompt.trim().length > 10;
+    window.USER_ONBOARDING_STEP = Number(currentUser.onboarding_step || 0);
+    window.FIRST_MSG_SENT = window.USER_ONBOARDING_STEP >= 4;
 
     document.getElementById("user-id").innerText = currentUser.id;
     document.getElementById("user-name").innerText = currentUser.name;
     document.getElementById("user-prompt").value = currentUser.prompt;
-    updateCharCount(); // Atualizar contador ao carregar
+    updatePromptMeta(); // Atualizar meta do prompt ao carregar
+    renderOnboardingChecklist();
 
     // Renderizar indicador de uso de IA
     renderIaUsage(currentUser);
@@ -75,21 +93,156 @@ async function loadUser() {
     listSessions();
 }
 
+function hideOnboardingChecklist() {
+    const checklist = document.getElementById("onboarding-checklist");
+    if (!checklist) return;
+    checklist.hidden = true;
+    checklist.style.display = "none";
+}
+
+function showOnboardingChecklist() {
+    const checklist = document.getElementById("onboarding-checklist");
+    if (!checklist) return;
+    checklist.hidden = false;
+    checklist.style.display = "";
+}
+
+function getOnboardingStepValue() {
+    const value = Number(currentUser?.onboarding_step ?? window.USER_ONBOARDING_STEP ?? 0);
+    return Number.isFinite(value) ? value : 0;
+}
+
+function getOnboardingSessionCount() {
+    if (Array.isArray(window._cachedSessions)) {
+        return window._cachedSessions.length;
+    }
+    const fallback = Number(window.SESSIONS_COUNT || 0);
+    return Number.isFinite(fallback) ? fallback : 0;
+}
+
+function hasSavedPrompt() {
+    if (typeof currentUser?.prompt === "string") {
+        return currentUser.prompt.trim().length > 10;
+    }
+    return Boolean(window.HAS_PROMPT);
+}
+
+function getOnboardingState() {
+    const onboardingStep = getOnboardingStepValue();
+    const sessionCount = getOnboardingSessionCount();
+    const promptReady = hasSavedPrompt();
+    const firstMessageSent = onboardingStep >= 4 || Boolean(window.FIRST_MSG_SENT);
+    const steps = [
+        { done: true },
+        { done: sessionCount > 0 },
+        { done: promptReady },
+        { done: firstMessageSent }
+    ];
+    const completedCount = steps.filter(step => step.done).length;
+    const nextPendingIndex = steps.findIndex(step => !step.done);
+
+    return {
+        onboardingStep,
+        sessionCount,
+        completedCount,
+        nextPendingIndex,
+        shouldShow: sessionCount === 0 || onboardingStep < 4,
+        steps
+    };
+}
+
+function renderOnboardingChecklist() {
+    const checklist = document.getElementById("onboarding-checklist");
+    if (!checklist) return;
+
+    if (localStorage.getItem(ONBOARDING_DISMISS_KEY) === "1") {
+        hideOnboardingChecklist();
+        return;
+    }
+
+    const state = getOnboardingState();
+    if (!state.shouldShow) {
+        hideOnboardingChecklist();
+        return;
+    }
+
+    showOnboardingChecklist();
+
+    const progressLabel = document.getElementById("onboarding-progress-label");
+    const progressHint = document.getElementById("onboarding-progress-hint");
+    const progressBar = document.getElementById("onboarding-bar");
+    const progressPct = Math.max(10, Math.round((state.completedCount / 4) * 100));
+
+    if (progressLabel) {
+        progressLabel.textContent = `${state.completedCount} de 4 concluidos`;
+    }
+
+    if (progressHint) {
+        progressHint.textContent = state.completedCount >= 4
+            ? "Tudo pronto para operar."
+            : state.nextPendingIndex >= 0
+                ? `Proximo foco: passo ${state.nextPendingIndex + 1}.`
+                : "Checklist em andamento";
+    }
+
+    if (progressBar) {
+        progressBar.style.width = `${progressPct}%`;
+    }
+
+    document.querySelectorAll("#onboarding-steps .onboarding-step-card").forEach(card => {
+        const index = Number(card.getAttribute("data-step-index") || 0) - 1;
+        const step = state.steps[index];
+        if (!step) return;
+
+        card.classList.remove("step-done", "step-active", "step-pending");
+
+        let statusText = "Pendente";
+        let statusClass = "step-pending";
+
+        if (step.done) {
+            statusText = "Concluido";
+            statusClass = "step-done";
+        } else if (index === state.nextPendingIndex) {
+            statusText = "Em andamento";
+            statusClass = "step-active";
+        }
+
+        card.classList.add(statusClass);
+        const statusEl = card.querySelector("[data-step-status]");
+        if (statusEl) {
+            statusEl.textContent = statusText;
+        }
+    });
+}
+
+function initOnboardingChecklist() {
+    const checklist = document.getElementById("onboarding-checklist");
+    if (!checklist) return;
+
+    const dismissButton = document.getElementById("onboarding-dismiss");
+    if (dismissButton && !dismissButton.dataset.bound) {
+        dismissButton.dataset.bound = "1";
+        dismissButton.addEventListener("click", () => {
+            localStorage.setItem(ONBOARDING_DISMISS_KEY, "1");
+            hideOnboardingChecklist();
+        });
+    }
+
+    renderOnboardingChecklist();
+}
+
 // ===============================
 // 🤖 INDICADOR DE USO DA IA
 // ===============================
-function renderIaUsage(user) {
+function getPlanLabel(user) {
+    const rawLabel = String(user?.planConfig?.displayName || user?.plan || "Starter").trim();
+    return rawLabel || "Starter";
+}
+
+function resolveIaLimit(user) {
     const LIMITS = { free: 500, starter: 500, pro: null };
-
-    const wrap      = document.getElementById("ia-usage-wrap");
-    const countEl   = document.getElementById("ia-usage-count");
-    const barEl     = document.getElementById("ia-progress-bar");
-    const remaining = document.getElementById("ia-usage-remaining");
-
-    if (!wrap) return;
-
     const used = Number(user.ia_messages_used) || 0;
-    const plan = user.plan || "free";
+    const plan = String(user?.plan || "free").trim().toLowerCase();
     const rawLimit = user?.planConfig?.maxIaMessages;
     const normalizedRawLimit = String(rawLimit ?? "").trim().toLowerCase();
     const fallbackLimit = Object.prototype.hasOwnProperty.call(LIMITS, plan)
@@ -102,38 +255,292 @@ function renderIaUsage(user) {
             ? numericLimit
             : fallbackLimit;
 
+    return { used, limit };
+}
+
+function getUsageBarClass(pct, unlimited = false) {
+    if (unlimited) return "bar-unlimited";
+    if (pct >= 90) return "bar-danger";
+    if (pct >= 70) return "bar-warning";
+    return "bar-ok";
+}
+
+function getResetInfo(resetAt) {
+    const resetValue = Number(resetAt);
+    if (!Number.isFinite(resetValue) || resetValue <= 0) {
+        return {
+            short: "Ciclo mensal comeca no primeiro envio",
+            summary: "ciclo mensal ainda nao iniciado",
+        };
+    }
+
+    const now = Date.now();
+    const diff = resetValue - now;
+    const dateLabel = new Date(resetValue).toLocaleDateString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+    });
+
+    if (diff <= 0) {
+        return {
+            short: `Renova hoje (${dateLabel})`,
+            summary: "renova hoje",
+        };
+    }
+
+    const days = Math.ceil(diff / (24 * 60 * 60 * 1000));
+    if (days <= 1) {
+        return {
+            short: `Renova amanha (${dateLabel})`,
+            summary: "renova amanha",
+        };
+    }
+
+    return {
+        short: `Renova em ${days} dias (${dateLabel})`,
+        summary: `renova em ${days} dias`,
+    };
+}
+
+function renderIaUsage(user) {
+    const wrap = document.getElementById("ia-usage-wrap");
+    const card = document.getElementById("plan-usage-card");
+    const countEl = document.getElementById("ia-usage-count");
+    const barEl = document.getElementById("ia-progress-bar");
+    const remaining = document.getElementById("ia-usage-remaining");
+    const renewalEl = document.getElementById("ia-usage-renewal");
+    const planPill = document.getElementById("plan-usage-pill");
+    const planLink = document.getElementById("plan-usage-link");
+    const summaryEl = document.getElementById("plan-usage-summary");
+    const statValue = document.getElementById("stat-ia");
+    const statMeta = document.getElementById("stat-ia-meta");
+
+    if (!wrap || !countEl || !barEl || !remaining || !renewalEl) return;
+
+    const planLabel = getPlanLabel(user);
+    const { used, limit } = resolveIaLimit(user);
+
+    if (card) card.style.display = "block";
+    if (planPill) planPill.textContent = `Plano ${planLabel}`;
+    if (planLink) {
+        planLink.textContent = limit === null ? "Gerenciar plano" : "Fazer upgrade";
+    }
+
     wrap.style.display = "block";
+    remaining.style.color = "";
+    renewalEl.style.color = "";
 
     if (limit === null) {
-        const planLabel = String(user?.planConfig?.displayName || plan || "Pro");
-        countEl.textContent   = used + " / ilimitado";
-        barEl.style.width     = "100%";
-        barEl.className       = "ia-progress-bar bar-unlimited";
-        remaining.textContent = `Plano ${planLabel} - mensagens ilimitadas`;
+        countEl.textContent = `${used} / ilimitado`;
+        barEl.style.width = "100%";
+        barEl.className = `ia-progress-bar ${getUsageBarClass(100, true)}`;
+        remaining.textContent = "IA ilimitada liberada neste plano";
+        renewalEl.textContent = "Sem bloqueio mensal de mensagens";
+
+        if (summaryEl) {
+            summaryEl.textContent = `Plano ${planLabel} com IA ilimitada e acompanhamento das sessoes ativas.`;
+        }
+        if (statValue) statValue.textContent = String(used);
+        if (statMeta) statMeta.textContent = `Plano ${planLabel} - ilimitado`;
         return;
     }
 
-    const pct  = Math.min(100, Math.round((used / limit) * 100));
+    const safeLimit = limit > 0 ? limit : 1;
+    const pct = Math.min(100, Math.round((used / safeLimit) * 100));
     const left = Math.max(0, limit - used);
+    const resetInfo = getResetInfo(user?.ia_messages_reset_at);
+    const barClass = getUsageBarClass(pct);
 
     countEl.textContent = `${used} / ${limit}`;
-    barEl.style.width   = pct + "%";
-
-    barEl.className = "ia-progress-bar " +
-        (pct >= 90 ? "bar-danger" : pct >= 70 ? "bar-warning" : "bar-ok");
+    barEl.style.width = `${pct}%`;
+    barEl.className = `ia-progress-bar ${barClass}`;
 
     remaining.textContent = left > 0
-        ? `${left} mensagens restantes este mes`
-        : "Limite atingido - faca upgrade para continuar";
+        ? `${pct}% usado - ${left} restante(s)`
+        : "Limite mensal atingido";
+    renewalEl.textContent = resetInfo.short;
 
-    if (left === 0) remaining.style.color = "#e54848";
+    if (left === 0) {
+        remaining.style.color = "#fca5a5";
+        renewalEl.style.color = "#f2c94c";
+    } else if (pct >= 90) {
+        remaining.style.color = "#f2c94c";
+    }
+
+    if (summaryEl) {
+        summaryEl.textContent = `${pct}% da franquia de IA usada, ${resetInfo.summary}.`;
+    }
+    if (statValue) statValue.textContent = `${used} / ${limit}`;
+    if (statMeta) statMeta.textContent = `${pct}% usado - ${resetInfo.summary}`;
 }
 
+function renderSessionUsage(sessions = []) {
+    if (!currentUser) return;
+
+    const wrap = document.getElementById("session-usage-wrap");
+    const countEl = document.getElementById("session-usage-count");
+    const barEl = document.getElementById("session-progress-bar");
+    const remaining = document.getElementById("session-usage-remaining");
+    const statusEl = document.getElementById("session-usage-status");
+
+    if (!wrap || !countEl || !barEl || !remaining || !statusEl) return;
+
+    const limitRaw = Number(currentUser?.planConfig?.maxSessions);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 1;
+    const used = Array.isArray(sessions) ? sessions.length : 0;
+    const connected = Array.isArray(sessions)
+        ? sessions.filter((session) => session?.status === "connected").length
+        : 0;
+    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+    const left = Math.max(0, limit - used);
+
+    wrap.style.display = "block";
+    countEl.textContent = `${used} / ${limit}`;
+    barEl.style.width = `${pct}%`;
+    barEl.className = `ia-progress-bar ${getUsageBarClass(pct)}`;
+
+    remaining.textContent = left > 0
+        ? `${left} vaga(s) restante(s)`
+        : "Limite de sessoes atingido";
+
+    if (!used) {
+        statusEl.textContent = "Nenhuma sessao criada ainda";
+    } else if (!connected) {
+        statusEl.textContent = "Nenhuma sessao conectada agora";
+    } else {
+        statusEl.textContent = `${connected} conectada(s) agora`;
+    }
+
+    remaining.style.color = left === 0 ? "#fca5a5" : "";
+}
+
+function formatPromptInteger(value) {
+    return new Intl.NumberFormat("pt-BR").format(Math.max(0, Math.round(Number(value) || 0)));
+}
+
+function formatPromptCurrency(value) {
+    return `R$${Number(value || 0).toFixed(4).replace(".", ",")}`;
+}
+
+function resolvePromptMetaFeedback(text, chars, tokens) {
+    const trimmed = text.trim();
+
+    if (!trimmed) {
+        return {
+            tone: "warn",
+            status: "Prompt vazio - o bot respondera sem instrucao.",
+            tip: "Explique papel, objetivo, idioma, tom de voz e quando a IA deve encaminhar para um humano."
+        };
+    }
+
+    if (PROMPT_CONFLICT_REGEX.test(text)) {
+        return {
+            tone: "warn",
+            status: "Possiveis instrucoes conflitantes detectadas.",
+            tip: "Evite colar trechos com tags como <system> ou ordens para ignorar regras anteriores."
+        };
+    }
+
+    if (chars < PROMPT_MIN_CHARS) {
+        return {
+            tone: "warn",
+            status: "Prompt curto - faltam contexto e regras para o bot.",
+            tip: "Inclua o papel da IA, o que ela vende, o tom de resposta e quais informacoes nunca devem ser inventadas."
+        };
+    }
+
+    if (chars > PROMPT_MAX_CHARS) {
+        return {
+            tone: "warn",
+            status: "Prompt acima do limite pratico - parte do texto pode ser cortada.",
+            tip: `O backend trabalha melhor com ate ${formatPromptInteger(PROMPT_MAX_CHARS)} caracteres. Remova repeticoes e consolide regras parecidas.`
+        };
+    }
+
+    if (tokens > PROMPT_WARN_TOKENS) {
+        return {
+            tone: "warn",
+            status: "Prompt longo - pode aumentar custo e reduzir o foco das respostas.",
+            tip: "Resuma exemplos extensos, elimine regras duplicadas e mantenha so o que realmente muda a resposta do bot."
+        };
+    }
+
+    if (!PROMPT_LANGUAGE_REGEX.test(text)) {
+        return {
+            tone: "tip",
+            status: "Dica: especifique o idioma de resposta.",
+            tip: 'Ex.: "Responda sempre em portugues do Brasil, com tom cordial e objetivo."'
+        };
+    }
+
+    if (!PROMPT_BOUNDARY_REGEX.test(text)) {
+        return {
+            tone: "tip",
+            status: "Dica: adicione limites do que o bot pode responder.",
+            tip: 'Ex.: "Nao invente prazos, valores, estoque ou descontos sem confirmacao explicita."'
+        };
+    }
+
+    if (!PROMPT_HANDOFF_REGEX.test(text)) {
+        return {
+            tone: "tip",
+            status: "Dica: defina quando escalar para atendimento humano.",
+            tip: 'Ex.: "Se houver reclamacao, cancelamento ou pedido fora do catalogo, transfira para um atendente humano."'
+        };
+    }
+
+    return {
+        tone: "ok",
+        status: "Prompt valido para uso.",
+        tip: ""
+    };
+}
+
+function updatePromptMeta() {
+    const textarea = document.getElementById("user-prompt");
+    const charsEl = document.getElementById("prompt-chars");
+    const tokensEl = document.getElementById("token-count");
+    const costEl = document.getElementById("cost-per-msg");
+    const statusEl = document.getElementById("prompt-status");
+    const tipEl = document.getElementById("prompt-tip");
+
+    if (!textarea || !charsEl || !tokensEl || !costEl || !statusEl || !tipEl) return;
+
+    const text = String(textarea.value || "");
+    const chars = text.length;
+    const tokens = Math.max(0, Math.round(chars / PROMPT_TOKEN_RATIO));
+    const costPerMsg =
+        (tokens + PROMPT_BUFFER_TOKENS) * PROMPT_PRICE_PER_TOKEN_BRL * PROMPT_OUTPUT_MULTIPLIER;
+    const feedback = resolvePromptMetaFeedback(text, chars, tokens);
+
+    charsEl.textContent = formatPromptInteger(chars);
+    tokensEl.textContent = `~${formatPromptInteger(tokens)}`;
+    costEl.textContent = formatPromptCurrency(costPerMsg);
+
+    statusEl.textContent = feedback.status;
+    statusEl.className = `prompt-status ${feedback.tone}`;
+
+    if (feedback.tip) {
+        tipEl.textContent = feedback.tip;
+        tipEl.hidden = false;
+    } else {
+        tipEl.textContent = "";
+        tipEl.hidden = true;
+    }
+}
+
+function updateCharCount() {
+    updatePromptMeta();
+}
 
 // ===============================
 // ✍️ CONTADOR DE CARACTERES DO PROMPT
 // ===============================
-function updateCharCount() {
+function updateCharCountLegacy() {
+    updatePromptMeta();
+}
+/*
+    return updatePromptMeta();
     const textarea = document.getElementById("user-prompt");
     const countEl  = document.getElementById("prompt-count");
     const hintEl   = document.getElementById("prompt-hint");
@@ -168,6 +575,7 @@ function updateCharCount() {
 // ===============================
 // 🌙 HORÁRIO DE SILÊNCIO
 // ===============================
+*/
 function renderSilenceConfig(user) {
     const toggle  = document.getElementById("silence-toggle");
     const config  = document.getElementById("silence-config");
@@ -254,13 +662,26 @@ async function loadStats() {
         set("stat-sessions",     data.sessionsAtivas);
         set("stat-clientes",     data.totalClientes);
         set("stat-agendamentos", data.agendamentos);
-        set("stat-ia",           data.iaUsado);
+        if (!currentUser) {
+            set("stat-ia", data.iaUsado);
+        } else {
+            renderIaUsage(currentUser);
+        }
 
     } catch (err) {
         console.warn("Erro ao carregar stats:", err);
         // Mostrar 0 em caso de erro
-        ["stat-sessions","stat-clientes","stat-agendamentos","stat-ia"]
+        const ids = currentUser
+            ? ["stat-sessions", "stat-clientes", "stat-agendamentos"]
+            : ["stat-sessions", "stat-clientes", "stat-agendamentos", "stat-ia"];
+        ids
             .forEach(id => { const el = document.getElementById(id); if (el) el.textContent = "0"; });
+        const statMeta = document.getElementById("stat-ia-meta");
+        if (currentUser) {
+            renderIaUsage(currentUser);
+        } else if (statMeta) {
+            statMeta.textContent = "Nao foi possivel carregar o limite";
+        }
     } finally {
         setStatSkeleton(false);
     }
@@ -303,6 +724,12 @@ async function updatePrompt() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt })
     });
+
+    if (currentUser) {
+        currentUser.prompt = prompt;
+    }
+    window.HAS_PROMPT = String(prompt || "").trim().length > 10;
+    renderOnboardingChecklist();
 
     notify("Prompt atualizado com sucesso", "success");
 }
@@ -354,6 +781,9 @@ async function listSessions() {
 
     // Cache global para goToChat verificar
     window._cachedSessions = sessions || [];
+    window.SESSIONS_COUNT = window._cachedSessions.length;
+    renderSessionUsage(window._cachedSessions);
+    renderOnboardingChecklist();
 
     const box = document.getElementById("sessions-list");
     box.innerHTML = "";
@@ -554,6 +984,20 @@ socket.on("sessions:changed", ({ userId }) => {
     if (!currentUser) return;
     if (String(userId) !== String(currentUser.id)) return;
     listSessions().catch(() => {});
+});
+
+socket.on("onboarding:step", ({ step }) => {
+    const nextStep = Number(step || 0);
+    if (!Number.isFinite(nextStep) || nextStep <= 0) return;
+
+    window.USER_ONBOARDING_STEP = Math.max(Number(window.USER_ONBOARDING_STEP || 0), nextStep);
+    window.FIRST_MSG_SENT = Number(window.USER_ONBOARDING_STEP || 0) >= 4;
+
+    if (currentUser) {
+        currentUser.onboarding_step = Number(window.USER_ONBOARDING_STEP || 0);
+    }
+
+    renderOnboardingChecklist();
 });
 
 socket.on("session:circuitOpen", ({ userId, sessionName, attempts }) => {

@@ -1,0 +1,147 @@
+<%
+  const currentPage = typeof activePage === "string" ? activePage : "";
+  const currentUserName = user && user.name ? String(user.name).trim() : "Operador";
+  const displayName = currentUserName.split(" ")[0] || currentUserName;
+  const planName = String((user && user.plan) || "free").toUpperCase();
+  const mobilePrimaryIds = ["chat", "crm", "disparo"];
+  const isMobileMoreActive = !mobilePrimaryIds.includes(currentPage);
+  const navGroups = [
+    {
+      label: "Principal",
+      items: [
+        { id: "painel", label: "Painel", href: "/painel", icon: "fa-solid fa-house", dotClass: "dot-violet" },
+        { id: "chat", label: "Chats", href: "/chat", icon: "fa-solid fa-comments", dotClass: "dot-mint", chatLink: true },
+        { id: "crm", label: "CRM", href: "/crm", icon: "fa-solid fa-address-book", dotClass: "dot-blue" },
+        { id: "analytics", label: "Analytics", href: "/analytics", icon: "fa-solid fa-chart-line", dotClass: "dot-amber" },
+      ],
+    },
+    {
+      label: "Envios",
+      items: [
+        { id: "disparo", label: "Disparo", href: "/disparo", icon: "fa-solid fa-bullhorn", dotClass: "dot-rose" },
+        { id: "agendamentos", label: "Agendamentos", href: "/agendamentos", icon: "fa-solid fa-calendar-check", dotClass: "dot-gold" },
+        { id: "drips", label: "Drip", href: "/drips", icon: "fa-solid fa-timeline", dotClass: "dot-purple" },
+        { id: "cobrancas", label: "Cobranças", href: "/cobrancas", icon: "fa-solid fa-file-invoice-dollar", dotClass: "dot-orange" },
+      ],
+    },
+    {
+      label: "Configurações",
+      items: [
+        { id: "qualificacao", label: "Qualificação", href: "/qualificacao", icon: "fa-solid fa-user-check", dotClass: "dot-teal" },
+        { id: "fallback-settings", label: "Fallback", href: "/fallback-settings", icon: "fa-solid fa-person-circle-question", dotClass: "dot-coral" },
+        { id: "sessions", label: "Sessões", href: "/painel#sessions-list", icon: "fa-solid fa-mobile-screen-button", dotClass: "dot-green" },
+        { id: "user", label: "Conta", href: "/user", icon: "fa-solid fa-user-gear", dotClass: "dot-sky" },
+      ],
+    },
+  ];
+%>
+
+<button class="app-shell-toggle" type="button" aria-label="Abrir navegação" aria-expanded="false" data-app-shell-toggle>
+  <i class="fa-solid fa-bars"></i>
+</button>
+
+<div class="app-shell-backdrop" data-app-shell-close></div>
+
+<aside class="app-shell-sidebar" id="app-shell-sidebar" aria-label="Navegação principal">
+  <div class="app-shell-brand-row">
+    <a href="/painel" class="app-shell-brand-link">
+      <img src="/img/logo3.png" alt="ZapConnect" class="app-shell-brand-logo">
+      <div>
+        <strong>ZapConnect</strong>
+        <span>Navegação do app</span>
+      </div>
+    </a>
+
+    <button class="app-shell-close" type="button" aria-label="Fechar navegação" data-app-shell-close>
+      <i class="fa-solid fa-xmark"></i>
+    </button>
+  </div>
+
+  <button
+    class="app-shell-collapse"
+    type="button"
+    aria-label="Recolher barra lateral"
+    aria-pressed="false"
+    title="Recolher barra lateral"
+    data-app-shell-label="Recolher menu"
+    data-app-shell-collapse
+  >
+    <i class="fa-solid fa-angles-left" data-app-shell-collapse-icon></i>
+    <span class="app-shell-collapse-copy" data-app-shell-collapse-copy>Recolher menu</span>
+  </button>
+
+  <div class="app-shell-intro">
+    <span class="app-shell-intro-label">Sempre à mão</span>
+    <strong>Olá, <%= displayName %></strong>
+    <p>Plano <%= planName %>. Troque de módulo sem voltar ao painel.</p>
+  </div>
+
+  <% navGroups.forEach((group) => { %>
+    <section class="app-shell-group">
+      <h2 class="app-shell-group-label"><%= group.label %></h2>
+
+      <div class="app-shell-link-list">
+        <% group.items.forEach((item) => { const isActive = currentPage === item.id; %>
+          <a
+            href="<%= item.href %>"
+            class="app-shell-link <%= isActive ? 'is-active' : '' %>"
+            title="<%= item.label %>"
+            data-app-shell-label="<%= item.label %>"
+            <% if (isActive) { %>aria-current="page"<% } %>
+            <% if (item.chatLink) { %>data-app-shell-chat-link="true"<% } %>
+          >
+            <span class="app-shell-link-dot <%= item.dotClass %>" aria-hidden="true"></span>
+            <span class="app-shell-link-icon"><i class="<%= item.icon %>"></i></span>
+            <span class="app-shell-link-copy"><%= item.label %></span>
+          </a>
+        <% }) %>
+      </div>
+    </section>
+  <% }) %>
+
+  <div class="app-shell-footer">
+    <strong>Fluxo contínuo</strong>
+    <p>Principal, Envios e Configurações agora ficam fixos em qualquer rota.</p>
+  </div>
+</aside>
+
+<nav class="app-shell-mobile-tabs" aria-label="Navegacao principal mobile">
+  <a
+    href="/chat"
+    class="app-shell-mobile-tab <%= currentPage === 'chat' ? 'is-active' : '' %>"
+    <% if (currentPage === "chat") { %>aria-current="page"<% } %>
+    data-app-shell-chat-link="true"
+  >
+    <i class="fa-solid fa-comments"></i>
+    <span>Chats</span>
+  </a>
+
+  <a
+    href="/crm"
+    class="app-shell-mobile-tab <%= currentPage === 'crm' ? 'is-active' : '' %>"
+    <% if (currentPage === "crm") { %>aria-current="page"<% } %>
+  >
+    <i class="fa-solid fa-address-book"></i>
+    <span>CRM</span>
+  </a>
+
+  <a
+    href="/disparo"
+    class="app-shell-mobile-tab <%= currentPage === 'disparo' ? 'is-active' : '' %>"
+    <% if (currentPage === "disparo") { %>aria-current="page"<% } %>
+  >
+    <i class="fa-solid fa-bullhorn"></i>
+    <span>Disparo</span>
+  </a>
+
+  <button
+    type="button"
+    class="app-shell-mobile-tab app-shell-mobile-tab-button <%= isMobileMoreActive ? 'is-active' : '' %>"
+    data-app-shell-toggle
+    aria-expanded="false"
+    aria-label="Abrir mais destinos"
+  >
+    <i class="fa-solid fa-ellipsis"></i>
+    <span>Mais</span>
+  </button>
+</nav>

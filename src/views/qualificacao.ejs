@@ -4,14 +4,13 @@
   <meta charset="UTF-8" />
   <title>Qualificacao de Leads &bull; ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" href="/img/favinco.png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous">
+  <%- include("partials/app-head-core") %>
   <link rel="stylesheet" href="/css/qualification.css" />
+  <link rel="stylesheet" href="/css/app-shell.css" />
+  <script src="/js/app-shell.js" defer></script>
 </head>
-<body>
+<body class="has-app-sidebar">
+  <%- include("partials/app-sidebar", { activePage: "qualificacao" }) %>
   <div class="page-shell">
     <div class="page-glow page-glow-a"></div>
     <div class="page-glow page-glow-b"></div>
@@ -254,7 +253,9 @@
           </button>
         </div>
 
+        <div id="score-calibration" class="score-calibration"></div>
         <div id="steps-container" class="steps-list"></div>
+        <div id="score-simulator" class="score-simulator"></div>
 
         <div class="editor-actions">
           <span id="editor-status" class="editor-status">Pronto para criar um novo questionario.</span>

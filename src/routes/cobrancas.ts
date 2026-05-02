@@ -56,7 +56,13 @@ function getErrorStatus(error: unknown) {
 }
 
 function parseIdList(values: any) {
-  const list = Array.isArray(values) ? values : [];
+  const list = Array.isArray(values)
+    ? values
+    : typeof values === "string"
+      ? values.split(",")
+      : values == null
+        ? []
+        : [values];
   return Array.from(
     new Set(
       list.map((value) => parseId(value)).filter((id) => Number.isFinite(id) && id > 0)
@@ -70,6 +76,7 @@ function getChargeListFilters(req: any) {
     search: String(req.query.search || "").trim(),
     from: String(req.query.from || "").trim(),
     to: String(req.query.to || "").trim(),
+    ids: parseIdList(req.query.ids),
     cliente_id: parseId(req.query.cliente_id) || undefined,
     recorrencia_id: parseId(req.query.recorrencia_id) || undefined,
   };

@@ -170,6 +170,11 @@ export async function initDB() {
 
   // Migração: adicionar follow_up_date se não existir
   try {
+    await pool.query("ALTER TABLE users ADD COLUMN onboarding_step INT DEFAULT 0");
+    console.log("âœ… Coluna onboarding_step adicionada em users");
+  } catch { }
+
+  try {
     await pool.query(
       "ALTER TABLE crm ADD COLUMN follow_up_date BIGINT DEFAULT NULL"
     );
@@ -227,6 +232,25 @@ export async function initDB() {
     // já existe
   }
 
+  try {
+    await pool.query(
+      `CREATE TABLE IF NOT EXISTS quick_replies (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        shortcut VARCHAR(50) NOT NULL,
+        title VARCHAR(100) NOT NULL,
+        content TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_user (user_id),
+        UNIQUE KEY uniq_user_shortcut (user_id, shortcut),
+        CONSTRAINT fk_quick_replies_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )`
+    );
+    console.log("✅ Tabela quick_replies pronta");
+  } catch (err) {
+    console.error("⚠️ Não foi possível garantir a tabela quick_replies:", err);
+  }
+
   // ===============================
   // 🔧 CRIAÇÃO DAS TABELAS (MARIA DB SAFE)
   // ===============================
@@ -253,6 +277,7 @@ export async function initDB() {
       ia_messages_reset_at BIGINT,
       ia_silence_start INT DEFAULT NULL,
       ia_silence_end INT DEFAULT NULL,
+      onboarding_step INT DEFAULT 0,
       timezone_offset INT DEFAULT -180,
       default_ddi VARCHAR(4) DEFAULT '55',
       default_session_name VARCHAR(255) DEFAULT NULL,
@@ -771,6 +796,13 @@ export async function initDB() {
       fallback_message TEXT,
       send_transfer_message BOOLEAN DEFAULT FALSE,
       internal_note_only BOOLEAN DEFAULT TRUE,
+      repetition_enabled BOOLEAN DEFAULT TRUE,
+      direct_request_enabled BOOLEAN DEFAULT TRUE,
+      frustration_enabled BOOLEAN DEFAULT TRUE,
+      ai_uncertainty_enabled BOOLEAN DEFAULT TRUE,
+      ai_transfer_enabled BOOLEAN DEFAULT TRUE,
+      handover_enabled BOOLEAN DEFAULT TRUE,
+      alert_enabled BOOLEAN DEFAULT FALSE,
 
       fallback_sensitivity VARCHAR(10),
 
@@ -1041,6 +1073,13 @@ export async function initDB() {
     `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS fallback_cooldown_minutes INT`,
     `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS send_transfer_message BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS internal_note_only BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS repetition_enabled BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS direct_request_enabled BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS frustration_enabled BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS ai_uncertainty_enabled BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS ai_transfer_enabled BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS handover_enabled BOOLEAN DEFAULT TRUE`,
+    `ALTER TABLE fallback_settings ADD COLUMN IF NOT EXISTS alert_enabled BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS conditions JSON`,
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS triggers JSON`,
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS priority INT DEFAULT 0`,
@@ -1055,6 +1094,7 @@ export async function initDB() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day6_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_last_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_onboarding_done TINYINT DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_step INT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS default_ddi VARCHAR(4) DEFAULT '55'`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS default_session_name VARCHAR(255) DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_type VARCHAR(30) DEFAULT 'PIX'`,

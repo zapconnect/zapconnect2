@@ -5,22 +5,21 @@
   <meta charset="UTF-8" />
   <title>Painel • ZapConnect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <!-- Font Awesome -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
-    crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <link rel="icon" href="/img/favinco.png" />
+  <%- include("partials/app-head-core") %>
 
   <!-- Boxicons -->
   <link href="https://unpkg.com/boxicons@2.1.4/css/boxicons.min.css" rel="stylesheet">
 
   <link rel="stylesheet" href="/css/index.css">
   <link rel="stylesheet" href="/css/painel.css">
+  <link rel="stylesheet" href="/css/app-shell.css">
+  <script src="/js/app-shell.js" defer></script>
 
   <script src="/socket.io/socket.io.js"></script>
 </head>
 
-<body>
+<body class="has-app-sidebar">
+  <%- include("partials/app-sidebar", { activePage: "painel" }) %>
 
   <!-- ============================
 🔝 HEADER
@@ -47,6 +46,76 @@
 📦 CONTEÚDO
 ============================= -->
   <main class="container">
+    <% const onboardingStepValue = Number(user?.onboarding_step || 0); %>
+    <% const shouldShowOnboarding = (sessions?.length || 0) === 0 || onboardingStepValue < 4; %>
+
+    <% if (shouldShowOnboarding) { %>
+      <section class="onboarding-checklist" id="onboarding-checklist" aria-labelledby="onboarding-title">
+        <div class="onboarding-header">
+          <div>
+            <span class="tag">Primeiros passos</span>
+            <h2 class="onboarding-title" id="onboarding-title">Ative o ZapConnect em 4 passos</h2>
+            <p>Seu painel já está pronto. Agora conecte um WhatsApp, ajuste a IA e valide com uma primeira conversa real.</p>
+          </div>
+
+          <div class="onboarding-header-actions">
+            <div class="onboarding-progress-copy">
+              <strong id="onboarding-progress-label">1 de 4 concluídos</strong>
+              <span id="onboarding-progress-hint">Checklist inicial</span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm onboarding-dismiss" id="onboarding-dismiss">
+              Dispensar
+            </button>
+          </div>
+        </div>
+
+        <div class="onboarding-progress-bar" aria-hidden="true">
+          <div class="onboarding-bar" id="onboarding-bar"></div>
+        </div>
+
+        <div class="onboarding-steps" id="onboarding-steps">
+          <article class="onboarding-step-card step-done" data-step-index="1">
+            <div class="onboarding-step-top">
+              <span class="onboarding-step-badge">Passo 1</span>
+              <span class="onboarding-step-state" data-step-status>Concluído</span>
+            </div>
+            <h3>Criar conta</h3>
+            <p>Seu acesso já foi criado. A partir daqui, o objetivo é colocar a operação para rodar.</p>
+            <a href="/user" class="onboarding-step-link">Ver conta</a>
+          </article>
+
+          <article class="onboarding-step-card step-pending" data-step-index="2">
+            <div class="onboarding-step-top">
+              <span class="onboarding-step-badge">Passo 2</span>
+              <span class="onboarding-step-state" data-step-status>Pendente</span>
+            </div>
+            <h3>Conectar WhatsApp</h3>
+            <p>Crie sua primeira sessão, escaneie o QR Code e deixe o canal pronto para responder clientes.</p>
+            <a href="/painel#sessions-list" class="onboarding-step-link">Ir para sessões</a>
+          </article>
+
+          <article class="onboarding-step-card step-pending" data-step-index="3">
+            <div class="onboarding-step-top">
+              <span class="onboarding-step-badge">Passo 3</span>
+              <span class="onboarding-step-state" data-step-status>Pendente</span>
+            </div>
+            <h3>Configurar prompt da IA</h3>
+            <p>Defina tom, regras e limites para a IA responder do seu jeito antes de atender automaticamente.</p>
+            <a href="/painel#prompt" class="onboarding-step-link">Abrir prompt</a>
+          </article>
+
+          <article class="onboarding-step-card step-pending" data-step-index="4">
+            <div class="onboarding-step-top">
+              <span class="onboarding-step-badge">Passo 4</span>
+              <span class="onboarding-step-state" data-step-status>Pendente</span>
+            </div>
+            <h3>Enviar mensagem de teste</h3>
+            <p>Abra um chat e envie a primeira mensagem manual para validar a sessão conectada e encerrar o onboarding.</p>
+            <a href="/chat" class="onboarding-step-link">Testar no chat</a>
+          </article>
+        </div>
+      </section>
+    <% } %>
 
     <!-- ============================
     📊 MÉTRICAS
@@ -90,15 +159,63 @@
         <div class="stat-body">
           <div class="stat-value" id="stat-ia">—</div>
           <div class="stat-label">Mensagens IA no mês</div>
+          <div class="stat-meta" id="stat-ia-meta">Carregando limite...</div>
         </div>
       </div>
 
     </div>
 
+    <section class="card plan-usage-card" id="plan-usage-card" style="display:none;">
+      <div class="plan-usage-head">
+        <div class="plan-usage-copy">
+          <span class="plan-usage-kicker">Uso do plano</span>
+          <h2><i class="fa-solid fa-gauge-high"></i> Limites do mes</h2>
+          <p id="plan-usage-summary">
+            Acompanhe o consumo da IA e das sessoes antes de atingir o limite.
+          </p>
+        </div>
+
+        <div class="plan-usage-actions">
+          <span class="plan-usage-pill" id="plan-usage-pill">Plano -</span>
+          <a href="/checkout" class="btn btn-accent btn-sm" id="plan-usage-link">Ver planos</a>
+        </div>
+      </div>
+
+      <div class="plan-usage-grid">
+        <div class="ia-usage-wrap" id="ia-usage-wrap">
+          <div class="ia-usage-header">
+            <span class="ia-usage-label">Mensagens IA</span>
+            <span class="ia-usage-count" id="ia-usage-count">—</span>
+          </div>
+          <div class="ia-progress-track">
+            <div class="ia-progress-bar" id="ia-progress-bar"></div>
+          </div>
+          <div class="ia-usage-footer">
+            <span id="ia-usage-remaining"></span>
+            <span id="ia-usage-renewal"></span>
+          </div>
+        </div>
+
+        <div class="ia-usage-wrap" id="session-usage-wrap">
+          <div class="ia-usage-header">
+            <span class="ia-usage-label">Sessoes WhatsApp</span>
+            <span class="ia-usage-count" id="session-usage-count">—</span>
+          </div>
+          <div class="ia-progress-track">
+            <div class="ia-progress-bar" id="session-progress-bar"></div>
+          </div>
+          <div class="ia-usage-footer">
+            <span id="session-usage-remaining"></span>
+            <span id="session-usage-status"></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <div class="grid">
 
       <!-- 👤 Usuário -->
-      <section class="card">
+      <section class="card" id="prompt">
         <h2><i class="fa-solid fa-user"></i> Usuário</h2>
 
         <p><b>ID:</b> <span id="user-id"></span></p>
@@ -107,11 +224,28 @@
         <label class="label">Prompt da IA</label>
         <textarea id="user-prompt" class="textarea"
           placeholder="Defina como a IA deve responder aos clientes..."
-          oninput="updateCharCount()"></textarea>
+          oninput="updatePromptMeta()"></textarea>
 
-        <div class="prompt-meta">
-          <span id="prompt-count" class="prompt-count">0 caracteres</span>
-          <span id="prompt-hint" class="prompt-hint"></span>
+        <div class="prompt-meta-v2">
+          <div class="prompt-stats">
+            <div class="prompt-stat">
+              <span id="token-count" class="stat-val">~0</span>
+              <span class="stat-lbl">tokens est.</span>
+            </div>
+            <div class="prompt-stat">
+              <span id="cost-per-msg" class="stat-val">R$0,0000</span>
+              <span class="stat-lbl">custo/msg est.</span>
+            </div>
+            <div class="prompt-stat">
+              <span id="prompt-chars" class="stat-val">0</span>
+              <span class="stat-lbl">caracteres</span>
+            </div>
+          </div>
+
+          <div id="prompt-status" class="prompt-status" aria-live="polite">
+            Prompt vazio - o bot respondera sem instrucao.
+          </div>
+          <div id="prompt-tip" class="prompt-tip" aria-live="polite" hidden></div>
         </div>
 
         <button class="btn btn-primary full" onclick="updatePrompt()">
@@ -120,65 +254,39 @@
         </button>
       </section>
 
-      <!-- ⚡ Atalhos -->
-      <section class="card shortcuts-card">
-        <h2><i class="fa-solid fa-bolt"></i> Atalhos Rápidos</h2>
+      <section class="card nav-overview-card">
+        <div class="nav-overview-head">
+          <span class="tag">Navegação fixa</span>
+          <h2><i class="fa-solid fa-compass"></i> Central de navegação</h2>
+          <p>Os módulos agora ficam presos na barra lateral. Use Principal, Envios e Configurações para trocar de contexto sem voltar ao painel.</p>
+        </div>
 
-        <div class="shortcut-grid">
-          <button class="shortcut purple" onclick="goToChat()">
+        <div class="nav-overview-grid">
+          <article class="nav-overview-group">
+            <span>Principal</span>
+            <strong>Chats, CRM, Analytics e a visão geral do sistema.</strong>
+          </article>
+
+          <article class="nav-overview-group">
+            <span>Envios</span>
+            <strong>Disparo, Agendamentos, Drip e Cobranças em uma mesma trilha.</strong>
+          </article>
+
+          <article class="nav-overview-group">
+            <span>Configurações</span>
+            <strong>Fallback, Qualificação, Sessões e Conta sempre acessíveis.</strong>
+          </article>
+        </div>
+
+        <div class="nav-overview-actions">
+          <button class="btn btn-primary" onclick="goToChat()">
             <i class="fa-solid fa-comments"></i>
-            Chats
+            Abrir Chats
           </button>
-
-          <button class="shortcut pink" onclick="goToDisparo()">
-            <i class="fa-solid fa-bullhorn"></i>
-            Disparo
-          </button>
-
-          <button class="shortcut red" onclick="goToAgendamentos()">
-            <i class="fa-solid fa-clock"></i>
-            Agendar
-          </button>
-
-          <button class="shortcut violet" onclick="window.location.href='/crm'">
+          <a href="/crm" class="btn btn-accent">
             <i class="fa-solid fa-address-book"></i>
-            CRM
-          </button>
-
-          <button class="shortcut orange" onclick="window.location.href='/cobrancas'">
-            <i class="fa-solid fa-file-invoice-dollar"></i>
-            Cobranças
-          </button>
-
-          <button class="shortcut teal" onclick="window.location.href='/fallback-settings'">
-            <i class="fa-solid fa-person-circle-question"></i>
-            Fallback
-          </button>
-
-          <button class="shortcut orange" onclick="window.location.href='/analytics'">
-            <i class="fa-solid fa-chart-line"></i>
-            Analytics
-          </button>
-
-          <button class="shortcut violet" onclick="window.location.href='/drips'">
-            <i class="fa-solid fa-timeline"></i>
-            Drip
-          </button>
-
-          <button class="shortcut teal" onclick="window.location.href='/qualificacao'">
-            <i class="fa-solid fa-user-check"></i>
-            Qualificação
-          </button>
-
-          <button class="shortcut green" onclick="goToSessions()">
-            <i class="fa-solid fa-mobile-screen-button"></i>
-            Sessões
-          </button>
-
-          <button class="shortcut blue" onclick="window.location.href='/user'">
-            <i class="fa-solid fa-user-gear"></i>
-            Conta
-          </button>
+            Abrir CRM
+          </a>
         </div>
       </section>
 
@@ -230,18 +338,6 @@
           </div>
         </div>
 
-        <div class="ia-usage-wrap" id="ia-usage-wrap" style="display:none;">
-          <div class="ia-usage-header">
-            <span class="ia-usage-label">Mensagens IA este mês</span>
-            <span class="ia-usage-count" id="ia-usage-count">—</span>
-          </div>
-          <div class="ia-progress-track">
-            <div class="ia-progress-bar" id="ia-progress-bar"></div>
-          </div>
-          <div class="ia-usage-footer">
-            <span id="ia-usage-remaining"></span>
-          </div>
-        </div>
       </section>
 
       <!-- 📱 Criar Sessão -->
@@ -310,6 +406,12 @@
     Desenvolvido por <a href="https://www.instagram.com/vini__n10?igsh=NzF4am94bjhmdHJ6" target="_blank">Vinicius Souza</a>
   </footer>
 
+  <script>
+    window.SESSIONS_COUNT = <%= Array.isArray(sessions) ? sessions.length : 0 %>;
+    window.HAS_PROMPT = <%= user.prompt && user.prompt.length > 10 ? 'true' : 'false' %>;
+    window.FIRST_MSG_SENT = <%= Number(user.onboarding_step || 0) >= 4 ? 'true' : 'false' %>;
+    window.USER_ONBOARDING_STEP = <%= Number(user.onboarding_step || 0) %>;
+  </script>
   <script src="/js/index.js"></script>
   <script src="/js/config.js"></script>
 
