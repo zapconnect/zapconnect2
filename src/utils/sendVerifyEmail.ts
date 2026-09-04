@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { getDB } from "../database";
+import { BASE_URL } from "./appBaseUrl";
 import { sendEmail } from "./sendEmail";
 
 export async function sendVerifyEmail(userId: number) {
@@ -32,7 +33,6 @@ export async function sendVerifyEmail(userId: number) {
     [token, expires, userId]
   );
 
-  const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
   const link = `${BASE_URL}/verify-email?token=${token}`;
 
   const name = user.name || "usuário";

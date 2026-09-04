@@ -17,7 +17,7 @@
     "@google-cloud/speech": "^7.2.1",
     "@google-cloud/text-to-speech": "^6.4.0",
     "@google/generative-ai": "^0.24.1",
-    "@wppconnect-team/wppconnect": "^1.37.8",
+    "@wppconnect-team/wppconnect": "^2.1.0",
     "axios": "^1.13.2",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",

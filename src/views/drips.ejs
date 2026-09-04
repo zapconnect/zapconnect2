@@ -9,18 +9,13 @@
   <link rel="stylesheet" href="/css/app-shell.css" />
   <script src="/js/app-shell.js" defer></script>
 </head>
-<body class="has-app-sidebar">
+<body class="has-app-sidebar app-screen-viewport">
   <%- include("partials/app-sidebar", { activePage: "drips" }) %>
-  <div class="page-shell">
+  <div class="page-shell app-screen-scroll">
     <div class="page-glow page-glow-a"></div>
     <div class="page-glow page-glow-b"></div>
 
     <div class="page-toolbar">
-      <a href="/painel" class="hero-back page-toolbar-back">
-        <i class="fa-solid fa-arrow-left"></i>
-        Voltar ao painel
-      </a>
-
       <div class="page-toolbar-actions">
         <span class="status-pill" id="usage-pill">Capacidade</span>
         <span class="status-pill" id="sessions-pill">Sess&otilde;es</span>

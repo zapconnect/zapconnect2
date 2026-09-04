@@ -1,13 +1,16 @@
 import crypto from "crypto";
 import { getDB } from "../database";
+import { BASE_URL } from "./appBaseUrl";
 import { sendEmail } from "./sendEmail";
+import { normalizeEmail } from "./email";
 
 export async function sendResetPasswordEmail(email: string) {
   const db = getDB();
+  const normalizedEmail = normalizeEmail(email);
 
   const user = await db.get<any>(
-    `SELECT id, name, email FROM users WHERE email = ?`,
-    [email]
+    `SELECT id, name, email FROM users WHERE email = ? OR email_normalized = ? LIMIT 1`,
+    [email, normalizedEmail]
   );
 
   // ⚠️ por segurança, nunca revela se o email existe
@@ -27,7 +30,6 @@ export async function sendResetPasswordEmail(email: string) {
     [token, expires, user.id]
   );
 
-  const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
   const link = `${BASE_URL}/reset-password?token=${token}`;
 
   const name = user.name || "usuário";

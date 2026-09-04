@@ -19,13 +19,10 @@
       <i class="fa-solid fa-user"></i>
       <h1>Minha Conta</h1>
     </div>
-
-    <a href="/painel" class="btn small">
-      <i class="fa-solid fa-arrow-left"></i> Voltar
-    </a>
   </header>
 
   <%
+    const safeAiProviderSummary = typeof aiProviderSummary !== "undefined" ? aiProviderSummary : null;
     const safeSessions = sessions || [];
     const onlineSessions = safeSessions.filter((session) => session.status === "connected").length;
     const offlineSessions = Math.max(safeSessions.length - onlineSessions, 0);
@@ -261,12 +258,12 @@
                 <div class="int-left">
                   <div class="int-icon int-icon-ai">AI</div>
                   <div>
-                    <div class="int-name">Gemini API</div>
-                    <div class="int-desc">Ativa via chave gerenciada pelo sistema.</div>
+                    <div class="int-name"><%= safeAiProviderSummary?.label || "IA do chatbot" %></div>
+                    <div class="int-desc"><%= safeAiProviderSummary?.description || "Ativa via chave gerenciada pelo sistema." %></div>
                   </div>
                 </div>
                 <div class="integration-actions">
-                  <span class="summary-badge badge-ok">Ativo via sistema</span>
+                  <span class="summary-badge badge-ok"><%= safeAiProviderSummary?.badge || "Ativo via sistema" %></span>
                 </div>
               </article>
             </div>

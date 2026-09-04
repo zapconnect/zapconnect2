@@ -39,6 +39,10 @@ body {
   font-family: var(--font-display);
 }
 
+body.app-screen-viewport {
+  padding: 0;
+}
+
 a {
   color: inherit;
 }
@@ -52,6 +56,11 @@ select {
   position: relative;
   max-width: 1440px;
   margin: 0 auto;
+}
+
+.page-shell.app-screen-scroll {
+  height: 100dvh;
+  padding: 30px 18px 52px;
 }
 
 .page-glow {

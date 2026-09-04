@@ -198,3 +198,16 @@ export async function appendChatHistoryEntries(params: {
     );
   });
 }
+
+export async function clearChatHistory(
+  userId: number,
+  chatId: string
+): Promise<void> {
+  const db = getDB();
+  await db.run(
+    `DELETE FROM chat_histories
+     WHERE user_id = ? AND chat_id = ?
+     LIMIT 1`,
+    [userId, chatId]
+  );
+}

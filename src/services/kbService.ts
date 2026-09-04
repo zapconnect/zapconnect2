@@ -4,6 +4,11 @@ import { GoogleGenerativeAI, TaskType } from "@google/generative-ai";
 import fs from "fs";
 import path from "path";
 import { getDB } from "../database";
+import {
+  UnsafeOutboundUrlError,
+  assertSafeOutboundHttpUrl,
+  resolveSafeOutboundRedirectUrl,
+} from "../utils/safeOutboundUrl";
 import { withTimeout } from "../utils/withTimeout";
 
 type KbSourceType = "text" | "url" | "file";
@@ -63,6 +68,14 @@ const KB_UPGRADE_SOURCES_PER_QUERY = Math.max(
   1,
   Number(process.env.KB_UPGRADE_SOURCES_PER_QUERY || 6)
 );
+const KB_URL_FETCH_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.KB_URL_FETCH_TIMEOUT_MS || 10_000)
+);
+const KB_URL_MAX_REDIRECTS = Math.max(
+  0,
+  Number(process.env.KB_URL_MAX_REDIRECTS || 3)
+);
 
 const embeddingClient = process.env.GEMINI_KEY
   ? new GoogleGenerativeAI(process.env.GEMINI_KEY)
@@ -83,6 +96,42 @@ function stripHtml(html: string): string {
       .replace(/<style[\s\S]*?<\/style>/gi, " ")
       .replace(/<[^>]+>/g, " ")
   );
+}
+
+async function fetchSafeUrlContent(rawUrl: string) {
+  let currentUrl = rawUrl;
+
+  for (let redirectCount = 0; redirectCount <= KB_URL_MAX_REDIRECTS; redirectCount++) {
+    await assertSafeOutboundHttpUrl(currentUrl);
+
+    const response = await axios.get(currentUrl, {
+      timeout: KB_URL_FETCH_TIMEOUT_MS,
+      maxRedirects: 0,
+      responseType: "text",
+      transformResponse: [(data) => data],
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = String(response.headers?.location || "").trim();
+      if (!location) {
+        throw new UnsafeOutboundUrlError("Redirecionamento sem destino");
+      }
+
+      if (redirectCount >= KB_URL_MAX_REDIRECTS) {
+        throw new UnsafeOutboundUrlError(
+          "URL excedeu o limite de redirecionamentos"
+        );
+      }
+
+      currentUrl = resolveSafeOutboundRedirectUrl(currentUrl, location);
+      continue;
+    }
+
+    return String(response.data || "");
+  }
+
+  throw new UnsafeOutboundUrlError("URL excedeu o limite de redirecionamentos");
 }
 
 function chunkText(
@@ -646,8 +695,8 @@ export async function ingestUrlSource(params: {
   const name = params.name || url;
 
   try {
-    const res = await axios.get(url, { timeout: 10_000 });
-    const text = stripHtml(res.data || "");
+    const rawContent = await fetchSafeUrlContent(url);
+    const text = stripHtml(rawContent);
     if (!text) throw new Error("Conteudo vazio");
     return ingestTextSource({
       userId,

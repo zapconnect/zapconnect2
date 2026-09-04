@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZapConnect - Guia para Leigos</title>
+  <style>
+    :root {
+      --bg: #f4f7f2;
+      --paper: #ffffff;
+      --ink: #163028;
+      --muted: #547066;
+      --line: #d8e4dd;
+      --brand: #1f8f5f;
+      --brand-dark: #136746;
+      --accent: #dff4e8;
+      --accent-strong: #b9e6cb;
+      --shadow: rgba(13, 38, 28, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Segoe UI", Arial, sans-serif;
+      line-height: 1.55;
+    }
+
+    body {
+      padding: 28px;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 900px;
+      margin: 0 auto 24px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: 0 20px 50px var(--shadow);
+      overflow: hidden;
+    }
+
+    .page-inner {
+      padding: 42px 46px;
+    }
+
+    .cover {
+      background:
+        radial-gradient(circle at top right, rgba(255,255,255,0.28), transparent 30%),
+        linear-gradient(140deg, var(--brand-dark), var(--brand));
+      color: #fff;
+    }
+
+    .eyebrow {
+      display: inline-block;
+      padding: 7px 14px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.16);
+      border: 1px solid rgba(255,255,255,0.22);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3 {
+      margin: 0 0 12px;
+      line-height: 1.15;
+    }
+
+    h1 {
+      font-size: 38px;
+      margin-top: 20px;
+      max-width: 560px;
+    }
+
+    h2 {
+      font-size: 25px;
+      color: var(--brand-dark);
+      margin-top: 4px;
+    }
+
+    h3 {
+      font-size: 18px;
+      color: var(--ink);
+    }
+
+    p {
+      margin: 0 0 14px;
+      font-size: 15px;
+    }
+
+    .cover p {
+      color: rgba(255,255,255,0.92);
+      font-size: 17px;
+      max-width: 620px;
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 0.9fr;
+      gap: 20px;
+      margin-top: 28px;
+      align-items: stretch;
+    }
+
+    .hero-card,
+    .info-card,
+    .feature-card,
+    .mini-card,
+    .story-box,
+    .tip-box {
+      border-radius: 20px;
+      padding: 20px;
+    }
+
+    .hero-card {
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.22);
+    }
+
+    .hero-card h3,
+    .hero-card p,
+    .hero-card li {
+      color: #fff;
+    }
+
+    .hero-card ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+
+    .hero-card li {
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .hero-side {
+      display: grid;
+      gap: 14px;
+    }
+
+    .hero-stat {
+      background: rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 20px;
+      padding: 18px;
+    }
+
+    .hero-stat strong {
+      display: block;
+      font-size: 28px;
+      margin-bottom: 6px;
+    }
+
+    .section-intro {
+      color: var(--muted);
+      margin-bottom: 24px;
+      max-width: 700px;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .info-card,
+    .feature-card,
+    .mini-card,
+    .story-box,
+    .tip-box {
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+
+    .info-card {
+      background: linear-gradient(180deg, #ffffff, #f8fcf9);
+    }
+
+    .feature-card {
+      min-height: 176px;
+    }
+
+    .card-label {
+      display: inline-block;
+      margin-bottom: 10px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: var(--brand-dark);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .feature-card ul,
+    .info-card ul,
+    .tip-box ul {
+      margin: 12px 0 0;
+      padding-left: 18px;
+    }
+
+    .feature-card li,
+    .info-card li,
+    .tip-box li {
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .process {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 12px;
+    }
+
+    .process-step {
+      padding: 18px;
+      border-radius: 20px;
+      background: linear-gradient(180deg, #ffffff, #f7fbf8);
+      border: 1px solid var(--line);
+      position: relative;
+    }
+
+    .process-step .step-number {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: var(--brand);
+      color: #fff;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+
+    .process-step p {
+      font-size: 14px;
+      margin-bottom: 0;
+      color: var(--muted);
+    }
+
+    .story-box {
+      background: linear-gradient(180deg, #f9fdfb, #eef8f2);
+    }
+
+    .story-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .mini-card {
+      background: #fff;
+    }
+
+    .mini-card strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--brand-dark);
+      font-size: 16px;
+    }
+
+    .tip-box {
+      background: linear-gradient(180deg, #fff, #f5fbf7);
+    }
+
+    .footer-note {
+      margin-top: 28px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255,255,255,0.24);
+      color: rgba(255,255,255,0.82);
+      font-size: 13px;
+    }
+
+    .plain-note {
+      margin-top: 20px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media print {
+      body {
+        padding: 0;
+        background: #fff;
+      }
+
+      .page {
+        box-shadow: none;
+        border: none;
+        border-radius: 0;
+        margin: 0 0 16px;
+        page-break-after: always;
+      }
+
+      .page:last-child {
+        page-break-after: auto;
+      }
+    }
+  </style>
+</head>
+<body>
+  <section class="page cover">
+    <div class="page-inner">
+      <span class="eyebrow">Guia simples do sistema</span>
+      <h1>ZapConnect: o que é e como esse sistema ajuda no atendimento pelo WhatsApp</h1>
+      <p>
+        Este material foi feito para quem não é técnico. A ideia é explicar, de forma direta,
+        o que o ZapConnect faz, como ele funciona no dia a dia e por que ele pode ajudar uma empresa
+        a vender, atender e cobrar melhor pelo WhatsApp.
+      </p>
+
+      <div class="hero-grid">
+        <div class="hero-card">
+          <h3>Em uma frase</h3>
+          <p>
+            O ZapConnect é uma plataforma que organiza o atendimento no WhatsApp,
+            usa IA para responder quando fizer sentido e reúne ferramentas de vendas,
+            automação e cobrança em um único painel.
+          </p>
+          <ul>
+            <li>Conecta um ou mais números de WhatsApp.</li>
+            <li>Ajuda a responder clientes com IA e com atendimento humano.</li>
+            <li>Organiza leads, contatos, cobranças e campanhas em um só lugar.</li>
+          </ul>
+        </div>
+
+        <div class="hero-side">
+          <div class="hero-stat">
+            <strong>1 painel</strong>
+            <span>para conversar, vender, acompanhar e cobrar.</span>
+          </div>
+          <div class="hero-stat">
+            <strong>IA + humano</strong>
+            <span>o sistema pode automatizar, mas também deixa a equipe assumir a conversa.</span>
+          </div>
+          <div class="hero-stat">
+            <strong>Mais controle</strong>
+            <span>sobre clientes, etapas do funil, campanhas e histórico.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer-note">
+        Resumo preparado com base nos módulos visíveis do sistema ZapConnect atual.
+      </div>
+    </div>
+  </section>
+
+  <section class="page">
+    <div class="page-inner">
+      <h2>O problema que o ZapConnect resolve</h2>
+      <p class="section-intro">
+        Muitas empresas atendem pelo WhatsApp de forma manual, desorganizada e dependente de uma única pessoa.
+        Isso costuma gerar atraso, esquecimento de clientes, mensagens repetidas, dificuldade para cobrar e pouca visão do que está funcionando.
+      </p>
+
+      <div class="grid-2">
+        <article class="info-card">
+          <span class="card-label">Sem sistema</span>
+          <h3>Como costuma ser sem uma plataforma</h3>
+          <ul>
+            <li>Conversas espalhadas e difíceis de acompanhar.</li>
+            <li>Leads sem organização e sem próxima ação definida.</li>
+            <li>Respostas repetidas digitadas várias vezes.</li>
+            <li>Cobranças feitas no improviso e sem histórico claro.</li>
+            <li>Falta de visão sobre horários de pico e dúvidas mais comuns.</li>
+          </ul>
+        </article>
+
+        <article class="info-card">
+          <span class="card-label">Com ZapConnect</span>
+          <h3>O que melhora com o uso da plataforma</h3>
+          <ul>
+            <li>Atendimento centralizado em um painel web.</li>
+            <li>IA para ajudar nas respostas, com possibilidade de pausar e retomar.</li>
+            <li>Clientes organizados em CRM por etapa, tags e follow-up.</li>
+            <li>Campanhas, fluxos e mensagens programadas com mais controle.</li>
+            <li>Cobranças e lembretes enviados pelo próprio WhatsApp.</li>
+          </ul>
+        </article>
+      </div>
+
+      <h2 style="margin-top: 30px;">Como funciona na prática</h2>
+      <div class="process">
+        <div class="process-step">
+          <div class="step-number">1</div>
+          <h3>Conecta o WhatsApp</h3>
+          <p>O usuário cria uma sessão e lê o QR Code, como no WhatsApp Web.</p>
+        </div>
+        <div class="process-step">
+          <div class="step-number">2</div>
+          <h3>Configura a operação</h3>
+          <p>Define prompt da IA, respostas rápidas, horários e regras do atendimento.</p>
+        </div>
+        <div class="process-step">
+          <div class="step-number">3</div>
+          <h3>Recebe e organiza</h3>
+          <p>As conversas entram no painel e podem virar lead, cliente, cobrança ou tarefa.</p>
+        </div>
+        <div class="process-step">
+          <div class="step-number">4</div>
+          <h3>Automatiza e acompanha</h3>
+          <p>O sistema dispara fluxos, registra histórico e mostra relatórios do desempenho.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page">
+    <div class="page-inner">
+      <h2>Principais áreas do sistema</h2>
+      <p class="section-intro">
+        Abaixo estão os módulos que mais ajudam uma empresa comum. A explicação foi simplificada para leitura rápida.
+      </p>
+
+      <div class="grid-3">
+        <article class="feature-card">
+          <span class="card-label">Atendimento</span>
+          <h3>Chat com IA e modo humano</h3>
+          <p>
+            O painel de conversa permite responder clientes com ajuda da IA, mas também deixa a equipe
+            assumir o controle quando precisar. A IA pode ser ligada, desligada, pausada ou reiniciada por conversa.
+          </p>
+        </article>
+
+        <article class="feature-card">
+          <span class="card-label">Produtividade</span>
+          <h3>Respostas rápidas e notas internas</h3>
+          <p>
+            O sistema guarda mensagens prontas, como preço, prazo ou link de pagamento.
+            Também permite registrar observações internas que não são enviadas ao cliente.
+          </p>
+        </article>
+
+        <article class="feature-card">
+          <span class="card-label">CRM</span>
+          <h3>Clientes organizados em etapas</h3>
+          <p>
+            Os contatos podem ser movidos em um quadro estilo funil. Isso ajuda a saber quem está entrando,
+            negociando, aguardando retorno ou pronto para fechar.
+          </p>
+        </article>
+
+        <article class="feature-card">
+          <span class="card-label">Qualificação</span>
+          <h3>Perguntas antes da conversa livre</h3>
+          <p>
+            O ZapConnect pode aplicar um pequeno questionário para entender melhor o lead
+            antes de liberar o atendimento normal da IA.
+          </p>
+        </article>
+
+        <article class="feature-card">
+          <span class="card-label">Fluxos</span>
+          <h3>Automação por palavra-chave ou boas-vindas</h3>
+          <p>
+            É possível criar sequências automáticas, por exemplo:
+            quando alguém mandar uma palavra específica ou quando for o primeiro contato.
+          </p>
+        </article>
+
+        <article class="feature-card">
+          <span class="card-label">Campanhas</span>
+          <h3>Disparos e jornadas automáticas</h3>
+          <p>
+            O sistema tem área para disparo de mensagens em lote e também campanhas em etapas,
+            ligadas ao andamento do cliente no CRM.
+          </p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="page">
+    <div class="page-inner">
+      <h2>Recursos de gestão e cobrança</h2>
+      <p class="section-intro">
+        O ZapConnect não serve só para responder mensagens. Ele também ajuda a vender, cobrar e acompanhar resultados.
+      </p>
+
+      <div class="grid-2">
+        <article class="info-card">
+          <span class="card-label">Cobranças</span>
+          <h3>Gestão de clientes, valores e recorrência</h3>
+          <ul>
+            <li>Cadastro de clientes e cobranças.</li>
+            <li>Envio de cobrança pelo WhatsApp.</li>
+            <li>Cobrança recorrente, como assinatura mensal.</li>
+            <li>Marcação de pagamento parcial ou total.</li>
+            <li>Checkout online com integrações de pagamento.</li>
+          </ul>
+        </article>
+
+        <article class="info-card">
+          <span class="card-label">Agenda</span>
+          <h3>Mensagens programadas</h3>
+          <ul>
+            <li>Agendar mensagens para data e hora específicas.</li>
+            <li>Repetir envios diariamente, semanalmente ou mensalmente.</li>
+            <li>Acompanhar logs do que foi enviado ou falhou.</li>
+            <li>Usar isso para lembretes, retornos e comunicações recorrentes.</li>
+          </ul>
+        </article>
+      </div>
+
+      <div class="grid-2" style="margin-top: 16px;">
+        <article class="info-card">
+          <span class="card-label">Analytics</span>
+          <h3>Leitura do que acontece nas conversas</h3>
+          <ul>
+            <li>Mostra temas mais frequentes.</li>
+            <li>Aponta dúvidas que o bot não respondeu bem.</li>
+            <li>Indica horários mais movimentados.</li>
+            <li>Sugere melhorias no prompt da IA.</li>
+            <li>Permite exportar relatórios em PDF.</li>
+          </ul>
+        </article>
+
+        <article class="info-card">
+          <span class="card-label">Conhecimento</span>
+          <h3>Base para a IA responder melhor</h3>
+          <ul>
+            <li>O sistema aceita textos, links e arquivos para consulta da IA.</li>
+            <li>Isso ajuda a responder com base em conteúdo do próprio negócio.</li>
+            <li>Exemplo: catálogo, regras, perguntas frequentes e documentos internos.</li>
+          </ul>
+        </article>
+      </div>
+
+      <p class="plain-note">
+        Observação: alguns recursos avançados dependem do plano contratado e da configuração feita pela empresa.
+      </p>
+    </div>
+  </section>
+
+  <section class="page">
+    <div class="page-inner">
+      <h2>Exemplo simples de uso no dia a dia</h2>
+      <div class="story-box">
+        <h3>Cenário: uma empresa que vende serviços pelo WhatsApp</h3>
+        <p>
+          Imagine uma clínica, escola, oficina ou loja que recebe dezenas de mensagens por dia.
+          Em vez de depender apenas do celular de alguém, ela usa o ZapConnect para organizar o processo.
+        </p>
+
+        <div class="story-row">
+          <div class="mini-card">
+            <strong>Quando o cliente chega</strong>
+            <p>
+              O sistema pode iniciar um fluxo de boas-vindas, fazer perguntas básicas e identificar o assunto.
+            </p>
+          </div>
+          <div class="mini-card">
+            <strong>Durante o atendimento</strong>
+            <p>
+              A IA ajuda nas respostas e a equipe assume manualmente quando a situação exige atenção humana.
+            </p>
+          </div>
+          <div class="mini-card">
+            <strong>Depois da conversa</strong>
+            <p>
+              O cliente fica salvo no CRM, pode entrar em uma automação de follow-up e receber cobrança ou lembrete.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <h2 style="margin-top: 30px;">Benefícios para quem não é técnico</h2>
+      <div class="tip-box">
+        <ul>
+          <li>Menos dependência de anotações soltas e memória da equipe.</li>
+          <li>Mais rapidez para responder perguntas repetidas.</li>
+          <li>Maior organização dos leads e clientes.</li>
+          <li>Mais chance de vender, porque o follow-up deixa de ser esquecido.</li>
+          <li>Mais previsibilidade nas cobranças e nos lembretes.</li>
+          <li>Mais visão sobre gargalos do atendimento.</li>
+        </ul>
+      </div>
+
+      <h2 style="margin-top: 30px;">O que é importante saber antes de usar</h2>
+      <div class="tip-box">
+        <ul>
+          <li>O sistema depende da conexão do WhatsApp da empresa com a plataforma.</li>
+          <li>A IA ajuda muito, mas ainda precisa de configuração e supervisão humana.</li>
+          <li>Quanto melhor o prompt, as respostas rápidas e a base de conhecimento, melhor tende a ser o resultado.</li>
+          <li>Nem toda conversa deve ser 100% automática; em muitos casos o melhor é misturar IA com atendimento humano.</li>
+          <li>Planos diferentes podem liberar quantidades diferentes de sessões e recursos.</li>
+        </ul>
+      </div>
+
+      <h2 style="margin-top: 30px;">Resumo final</h2>
+      <p>
+        Para um leigo, a forma mais simples de entender o ZapConnect é esta:
+        ele funciona como uma central de atendimento e operação comercial em cima do WhatsApp.
+        Em vez de só trocar mensagens, a empresa passa a ter organização, automação, histórico, CRM,
+        IA, campanhas, cobranças e relatórios em um único ambiente.
+      </p>
+      <p>
+        Em outras palavras, o ZapConnect transforma o WhatsApp de um canal solto de conversa
+        em uma ferramenta mais profissional para vender, atender e acompanhar clientes.
+      </p>
+    </div>
+  </section>
+</body>
+</html>

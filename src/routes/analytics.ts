@@ -146,12 +146,24 @@ router.get("/api/analytics/export.pdf", subscriptionGuard, async (req, res) => {
 
     try {
       const page = await browser.newPage();
+      await page.setJavaScriptEnabled(false);
+      await page.setRequestInterception(true);
+      page.on("request", (request) => {
+        const url = request.url();
+        if (url === "about:blank" || url.startsWith("data:")) {
+          void request.continue();
+          return;
+        }
+
+        void request.abort("blockedbyclient");
+      });
+
       await page.setContent(
         renderAnalyticsReportHtml({
           userName: String(user?.name || "Cliente"),
           report,
         }),
-        { waitUntil: "networkidle0" }
+        { waitUntil: "load" }
       );
 
       const pdfBuffer = await page.pdf({

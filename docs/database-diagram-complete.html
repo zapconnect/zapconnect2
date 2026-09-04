@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZapConnect Database Diagram</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #162033;
+      --muted: #5c667a;
+      --border: #d5ddec;
+      --shadow: 0 18px 60px rgba(18, 32, 58, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top left, #eef4ff 0%, var(--bg) 45%);
+      color: var(--text);
+      font: 14px/1.4 "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    }
+
+    .page {
+      width: max-content;
+      min-width: 100%;
+      padding: 28px;
+    }
+
+    .header {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: var(--shadow);
+      padding: 20px 22px;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.15;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 960px;
+    }
+
+    .diagram-shell {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      padding: 18px;
+      overflow: visible;
+    }
+
+    .mermaid {
+      min-width: 5200px;
+    }
+
+    .mermaid svg {
+      display: block;
+      max-width: none !important;
+      height: auto !important;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <section class="header">
+      <h1>ZapConnect Database Diagram</h1>
+      <p>
+        Diagrama completo derivado de <code>src/database.ts</code>. Linhas solidas representam
+        foreign keys reais; linhas tracejadas representam vinculos logicos ou colunas de referencia
+        sem FK explicita no schema.
+      </p>
+    </section>
+
+    <section class="diagram-shell">
+      <pre class="mermaid">
+flowchart LR
+  classDef accounts fill:#e9f2ff,stroke:#4f7fd7,color:#0f172a,stroke-width:1.3px;
+  classDef messaging fill:#ecfff2,stroke:#31a164,color:#0f172a,stroke-width:1.3px;
+  classDef crm fill:#fff6e8,stroke:#d58c2d,color:#0f172a,stroke-width:1.3px;
+  classDef billing fill:#fff0f3,stroke:#d65a7a,color:#0f172a,stroke-width:1.3px;
+  classDef analytics fill:#f2edff,stroke:#7c58d8,color:#0f172a,stroke-width:1.3px;
+  classDef ops fill:#eef1f6,stroke:#73819b,color:#0f172a,stroke-width:1.3px;
+
+  subgraph ACC["1. Accounts and configuration"]
+    direction TB
+    U["users<br/>PK id<br/>email / token<br/>plan<br/>subscription_status"]
+    QR["quick_replies<br/>PK id<br/>FK user_id<br/>shortcut"]
+    MPSET["mercadopago_settings<br/>PK id<br/>FK user_id<br/>access_token"]
+    SUBS["subscriptions<br/>PK id<br/>FK user_id<br/>stripe_subscription_id"]
+    PAY["payments<br/>PK id<br/>FK user_id<br/>payment_id"]
+    CHECK["checkout_leads<br/>PK id<br/>user_id (soft)<br/>stripe_payment_id"]
+    FALL["fallback_settings<br/>PK id<br/>FK user_id<br/>session_name"]
+    DEV["device_fingerprints<br/>PK device_id<br/>FK user_id (nullable)<br/>blocked"]
+    IPREG["ip_registrations<br/>PK id<br/>FK user_id<br/>ip"]
+    PLAN["plan_configs<br/>PK plan_key<br/>display_name<br/>price"]
+  end
+
+  subgraph MSG["2. WhatsApp, chats and automation"]
+    direction TB
+    SES["sessions<br/>PK id<br/>FK user_id<br/>session_name"]
+    MSGS["messages<br/>PK id<br/>FK session_id<br/>sender"]
+    SCH["schedules<br/>PK id<br/>FK user_id<br/>send_at / status"]
+    SCHLOG["schedule_logs<br/>PK id<br/>FK schedule_id<br/>FK user_id"]
+    SCHITEM["schedule_log_items<br/>PK id<br/>FK log_id<br/>FK schedule_id"]
+    FLOWS["flows<br/>PK id<br/>FK user_id<br/>trigger_type"]
+    WFLOW["welcome_flows<br/>PK id<br/>FK user_id<br/>active"]
+    CHATSET["chat_ai_settings<br/>PK id<br/>user_id (soft)<br/>chat_id"]
+    CHIST["chat_histories<br/>PK id<br/>FK user_id<br/>chat_id"]
+    CNOTE["chat_notes<br/>PK id<br/>FK user_id<br/>chat_id"]
+    DISPH["disparo_history<br/>PK id<br/>FK user_id<br/>success_rate"]
+    DSUP["dispatch_suppressions<br/>PK id<br/>FK user_id<br/>phone"]
+    DCE["dispatch_contact_events<br/>PK id<br/>FK user_id<br/>campaign_kind"]
+  end
+
+  subgraph CRM["3. CRM, qualification and drip"]
+    direction TB
+    CRMN["crm<br/>PK id<br/>FK user_id<br/>phone / stage"]
+    QFLOW["qualification_flows<br/>PK id<br/>FK user_id<br/>active"]
+    QSESS["qualification_sessions<br/>PK id<br/>FK user_id<br/>FK flow_id / crm_id"]
+    DCAMP["drip_campaigns<br/>PK id<br/>FK user_id<br/>trigger_stage"]
+    DSTEP["drip_steps<br/>PK id<br/>FK campaign_id<br/>step_order"]
+    DENR["drip_enrollments<br/>PK id<br/>FK campaign_id<br/>FK user_id / crm_id"]
+  end
+
+  subgraph BILL["4. Billing and collections"]
+    direction TB
+    CBCLI["cobranca_clientes<br/>PK id<br/>FK user_id<br/>telefone"]
+    CBREC["cobrancas_recorrencias<br/>PK id<br/>FK user_id<br/>FK cliente_id"]
+    COBR["cobrancas<br/>PK id<br/>FK user_id<br/>FK cliente_id<br/>status / valor"]
+    CBRCP["cobranca_recebimentos<br/>PK id<br/>FK cobranca_id<br/>FK user_id"]
+    CBRULE["cobranca_regua_rules<br/>PK id<br/>FK user_id<br/>slot / gatilho"]
+    CBQUEUE["cobranca_notifications_queue<br/>PK id<br/>FK cobranca_id<br/>FK user_id"]
+    MPLOG["mp_webhook_logs<br/>PK id<br/>user_id / cobranca_id (soft)<br/>payment_id"]
+  end
+
+  subgraph ANA["5. Knowledge base and analytics"]
+    direction TB
+    KBS["kb_sources<br/>PK id<br/>FK user_id<br/>type / status"]
+    KBC["kb_chunks<br/>PK id<br/>FK source_id<br/>FK user_id"]
+    KBQ["kb_queries<br/>PK id<br/>FK user_id<br/>session_name"]
+    AREP["analytics_reports<br/>PK id<br/>FK user_id<br/>report_date"]
+    AIM["ai_metrics<br/>PK id<br/>FK user_id<br/>provider / latency_ms"]
+  end
+
+  subgraph OPS["6. Ops and support tables"]
+    direction TB
+    STRE["stripe_events<br/>PK id<br/>event_id<br/>type"]
+    STRF["stripe_webhook_failures<br/>PK id<br/>event_id<br/>resolved"]
+    AUD["audit_logs<br/>PK id<br/>user_id (soft)<br/>action"]
+    WHF["webhook_delivery_failures<br/>PK id<br/>FK user_id<br/>attempts / status"]
+    EMT["email_templates<br/>PK template_key<br/>subject"]
+    RATE["rate_limits<br/>PK rate_key<br/>count / blocked_until"]
+  end
+
+  U -->|user_id| QR
+  U -->|user_id| MPSET
+  U -->|user_id| SUBS
+  U -->|user_id| PAY
+  U -. user_id .-> CHECK
+  U -->|user_id| FALL
+  U -->|user_id| DEV
+  U -->|user_id| IPREG
+  U -. plan / subscription .-> PLAN
+  SUBS -. plan .-> PLAN
+  PAY -. plan_name .-> PLAN
+
+  U -->|user_id| SES
+  SES -->|session_id| MSGS
+  U -->|user_id| SCH
+  SCH -->|schedule_id| SCHLOG
+  U -->|user_id| SCHLOG
+  SCHLOG -->|log_id| SCHITEM
+  SCH -->|schedule_id| SCHITEM
+  U -->|user_id| SCHITEM
+  U -->|user_id| FLOWS
+  U -->|user_id| WFLOW
+  U -. user_id .-> CHATSET
+  U -->|user_id| CHIST
+  U -->|user_id| CNOTE
+  U -->|user_id| DISPH
+  U -->|user_id| DSUP
+  U -->|user_id| DCE
+
+  U -->|user_id| CRMN
+  U -->|user_id| QFLOW
+  QFLOW -->|flow_id| QSESS
+  CRMN -. crm_id .-> QSESS
+  U -->|user_id| QSESS
+  U -->|user_id| DCAMP
+  DCAMP -->|campaign_id| DSTEP
+  DCAMP -->|campaign_id| DENR
+  CRMN -->|crm_id| DENR
+  U -->|user_id| DENR
+
+  U -->|user_id| CBCLI
+  U -->|user_id| CBREC
+  CBCLI -->|cliente_id| CBREC
+  U -->|user_id| COBR
+  CBCLI -->|cliente_id| COBR
+  CBREC -. recorrencia_id .-> COBR
+  COBR -->|cobranca_id| CBRCP
+  U -->|user_id| CBRCP
+  U -->|user_id| CBRULE
+  COBR -->|cobranca_id| CBQUEUE
+  U -->|user_id| CBQUEUE
+  CBRULE -. regua_rule_id .-> CBQUEUE
+  U -. user_id .-> MPLOG
+  COBR -. cobranca_id .-> MPLOG
+
+  U -->|user_id| KBS
+  KBS -->|source_id| KBC
+  U -->|user_id| KBC
+  U -->|user_id| KBQ
+  U -->|user_id| AREP
+  U -->|user_id| AIM
+
+  U -. user_id .-> AUD
+  U -->|user_id| WHF
+
+  class U,QR,MPSET,SUBS,PAY,CHECK,FALL,DEV,IPREG,PLAN accounts;
+  class SES,MSGS,SCH,SCHLOG,SCHITEM,FLOWS,WFLOW,CHATSET,CHIST,CNOTE,DISPH,DSUP,DCE messaging;
+  class CRMN,QFLOW,QSESS,DCAMP,DSTEP,DENR crm;
+  class CBCLI,CBREC,COBR,CBRCP,CBRULE,CBQUEUE,MPLOG billing;
+  class KBS,KBC,KBQ,AREP,AIM analytics;
+  class STRE,STRF,AUD,WHF,EMT,RATE ops;
+      </pre>
+    </section>
+  </div>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "loose",
+      theme: "neutral",
+      maxTextSize: 200000
+    });
+
+    const render = async () => {
+      await mermaid.run({ querySelector: ".mermaid" });
+      const svg = document.querySelector(".mermaid svg");
+      if (svg) {
+        svg.style.maxWidth = "none";
+      }
+      document.body.dataset.rendered = "true";
+    };
+
+    render().catch((err) => {
+      document.body.dataset.rendered = "error";
+      document.body.dataset.renderError = String(err && err.message ? err.message : err);
+      console.error(err);
+    });
+  </script>
+</body>
+</html>

@@ -14,6 +14,7 @@
     crossorigin="anonymous" referrerpolicy="no-referrer" />
 
   <link rel="icon" href="/img/favinco.png" />
+  <link rel="stylesheet" href="/css/design-tokens.css" />
   <script src="/js/loading-utils.js"></script>
   <script src="/js/toast.js"></script>
   <script src="/js/deviceFingerprint.js"></script>
@@ -98,6 +99,59 @@
       color: var(--success);
     }
 
+    .oauth-stack {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    .oauth-btn {
+      width: 100%;
+      min-height: 52px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: transform .18s ease, border-color .18s ease, background .18s ease;
+    }
+
+    .oauth-btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .oauth-btn i {
+      font-size: 18px;
+      color: #fbbc05;
+    }
+
+    .oauth-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #8e97bf;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .oauth-divider::before,
+    .oauth-divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
     .input-error {
       border: 1px solid var(--error) !important;
       box-shadow: 0 0 0 2px rgba(239, 68, 68, .25);
@@ -126,6 +180,16 @@
       </p>
     </div>
 
+    <% if (googleEnabled) { %>
+      <div class="oauth-stack">
+        <a href="/auth/google" class="oauth-btn">
+          <i class="fa-brands fa-google"></i>
+          Criar conta com Google
+        </a>
+        <div class="oauth-divider">ou preencha abaixo</div>
+      </div>
+    <% } %>
+
     <!-- Nome -->
     <label class="text-sm font-medium mb-1">Nome*</label>
     <input id="name" type="text" placeholder="Seu nome" class="w-full p-3 rounded-lg mb-4">
@@ -153,11 +217,6 @@
         <i id="eye2" class="fa-solid fa-eye"></i>
       </button>
     </div>
-
-    <!-- Prompt -->
-    <label class="text-sm font-medium mb-1">Prompt da IA</label>
-    <textarea id="prompt" placeholder="Ex: Seja educado, objetivo e use emojis quando fizer sentido"
-      class="w-full p-3 rounded-lg h-28 mb-6"></textarea>
 
     <button onclick="registerUser()" class="w-full p-3 rounded-xl btn-main font-semibold">
       Criar Conta
@@ -208,7 +267,6 @@
       const email = document.getElementById("email");
       const password = document.getElementById("password");
       const confirmPassword = document.getElementById("confirmPassword");
-      const prompt = document.getElementById("prompt").value.trim();
 
       let hasError = false;
 
@@ -264,7 +322,6 @@
             name: name.value.trim(),
             email: email.value.trim(),
             password: password.value,
-            prompt,
             deviceId
           })
         });

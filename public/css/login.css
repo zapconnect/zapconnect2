@@ -50,6 +50,70 @@ body {
   color: var(--muted);
 }
 
+.oauth-feedback {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(229, 72, 72, 0.35);
+  background: rgba(229, 72, 72, 0.12);
+  color: #ffb4b4;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.oauth-stack {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.oauth-btn {
+  width: 100%;
+  min-height: 52px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: transform .18s ease, border-color .18s ease, background .18s ease;
+}
+
+.oauth-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.oauth-btn i {
+  font-size: 18px;
+  color: #fbbc05;
+}
+
+.oauth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #8e97bf;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+
+.oauth-divider::before,
+.oauth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 /* LABEL */
 label {
   font-size: 13px;

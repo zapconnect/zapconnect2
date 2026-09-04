@@ -1,4 +1,5 @@
 // src/database.ts
+import net from "net";
 import mysql, { PoolConnection, RowDataPacket, ResultSetHeader } from "mysql2/promise";
 
 let pool: mysql.Pool;
@@ -13,6 +14,74 @@ type IndexRow = RowDataPacket & {
 type ColumnRow = RowDataPacket & {
   DATA_TYPE: string;
 };
+
+type TcpProbeResult = {
+  tcpConnected: boolean;
+  handshakeReceived: boolean;
+};
+
+async function probeMysqlTcp(host: string, port: number): Promise<TcpProbeResult> {
+  return new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    let settled = false;
+    let tcpConnected = false;
+    let handshakeReceived = false;
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ tcpConnected, handshakeReceived });
+    };
+
+    socket.setTimeout(1500);
+    socket.once("connect", () => {
+      tcpConnected = true;
+    });
+    socket.once("data", () => {
+      handshakeReceived = true;
+      finish();
+    });
+    socket.once("timeout", finish);
+    socket.once("error", finish);
+    socket.once("close", finish);
+  });
+}
+
+async function enrichDbConnectionError(err: unknown, host: string, port: number) {
+  const code = String((err as any)?.code || (err as any)?.errno || "db_connect_failed");
+  let probe: TcpProbeResult | null = null;
+
+  try {
+    probe = await probeMysqlTcp(host, port);
+  } catch {
+    probe = null;
+  }
+
+  const hints = [`Falha ao conectar no MySQL em ${host}:${port} (${code}).`];
+
+  if (code === "ETIMEDOUT" && probe?.tcpConnected && !probe.handshakeReceived) {
+    hints.push(
+      "A porta TCP aceitou a conexao, mas o servidor nao respondeu ao handshake do MySQL."
+    );
+    hints.push(
+      "Isso costuma indicar MariaDB/MySQL travado ou degradado no host local, mesmo com a porta 3306 aberta."
+    );
+  } else if (code === "ETIMEDOUT") {
+    hints.push("O host/porta nao respondeu a tempo. Verifique DB_HOST, DB_PORT e firewall.");
+  }
+
+  if (host === "localhost" || host === "127.0.0.1" || host === "::1") {
+    hints.push(
+      "Se voce usa XAMPP ou MariaDB local, reinicie o servico do MySQL e valide com o cliente nativo antes de subir o app."
+    );
+  }
+
+  const wrapped = new Error(hints.join(" "));
+  (wrapped as any).code = code;
+  (wrapped as any).cause = err;
+  throw wrapped;
+}
 
 async function getIndexColumns(tableName: string, indexName: string): Promise<string[]> {
   const [rows] = await pool.query<RowDataPacket[]>(`SHOW INDEX FROM ${tableName}`);
@@ -130,19 +199,26 @@ export async function initDB() {
   console.log("DB_PORT =", process.env.DB_PORT);
   console.log("DB_USER =", process.env.DB_USER);
   console.log("DB_NAME =", process.env.DB_NAME);
+  const dbHost = process.env.DB_HOST || "127.0.0.1";
+  const dbPort = Number(process.env.DB_PORT || 3306);
   
   pool = mysql.createPool({
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT || 3306),
+    host: dbHost,
+    port: dbPort,
     user: process.env.DB_USER,
     password: process.env.DB_PASS,
     database: process.env.DB_NAME,
     connectionLimit: Number(process.env.DB_POOL_LIMIT || 30),
+    connectTimeout: Number(process.env.DB_CONNECT_TIMEOUT_MS || 8_000),
     charset: "utf8mb4",
   });
 
   // 🔥 Teste de conexão
-  await pool.query("SELECT 1");
+  try {
+    await pool.query("SELECT 1");
+  } catch (err) {
+    await enrichDbConnectionError(err, dbHost, dbPort);
+  }
   console.log("✅ MySQL conectado");
 
   // Migração: adicionar deal_value se não existir (seguro rodar múltiplas vezes)
@@ -262,8 +338,10 @@ export async function initDB() {
       email VARCHAR(255) UNIQUE NOT NULL,
       email_normalized VARCHAR(255) UNIQUE,
       signup_device_id VARCHAR(255),
+      google_id VARCHAR(255) UNIQUE,
       password VARCHAR(255) NOT NULL,
       prompt TEXT,
+      ai_config LONGTEXT,
       token VARCHAR(255) UNIQUE NOT NULL,
       token_expires_at BIGINT DEFAULT NULL,
 
@@ -300,12 +378,44 @@ export async function initDB() {
       plan_expires_at BIGINT,
       subscription_id VARCHAR(255),
       subscription_status VARCHAR(50) DEFAULT 'trial'
-    )
-    `,
+	    )
+	    `,
 
-    `
-    CREATE TABLE IF NOT EXISTS mercadopago_settings (
-      id INT AUTO_INCREMENT PRIMARY KEY,
+	    `
+	    CREATE TABLE IF NOT EXISTS quick_replies (
+	      id INT AUTO_INCREMENT PRIMARY KEY,
+	      user_id INT NOT NULL,
+	      shortcut VARCHAR(50) NOT NULL,
+	      title VARCHAR(100) NOT NULL,
+	      content TEXT NOT NULL,
+	      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+	      INDEX idx_user (user_id),
+	      UNIQUE KEY uniq_user_shortcut (user_id, shortcut),
+	      CONSTRAINT fk_quick_replies_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	    )
+	    `,
+
+	    `
+	    CREATE TABLE IF NOT EXISTS crm (
+	      id INT AUTO_INCREMENT PRIMARY KEY,
+	      user_id INT NOT NULL,
+	      name VARCHAR(255) NOT NULL,
+	      phone VARCHAR(50) NOT NULL,
+	      citystate VARCHAR(255),
+	      tags LONGTEXT,
+	      notes LONGTEXT,
+	      stage VARCHAR(100) DEFAULT 'Novo',
+	      last_seen BIGINT,
+	      avatar TEXT,
+	      deal_value DECIMAL(10,2) DEFAULT 0,
+	      follow_up_date BIGINT DEFAULT NULL,
+	      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+	    )
+	    `,
+
+	    `
+	    CREATE TABLE IF NOT EXISTS mercadopago_settings (
+	      id INT AUTO_INCREMENT PRIMARY KEY,
       user_id INT NOT NULL UNIQUE,
       access_token TEXT NOT NULL,
       public_key VARCHAR(255),
@@ -1087,6 +1197,7 @@ export async function initDB() {
     `ALTER TABLE schedules ADD COLUMN IF NOT EXISTS preferred_session VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_normalized VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_device_id VARCHAR(255)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS token_expires_at BIGINT DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_started_at BIGINT DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_day1_sent TINYINT DEFAULT 0`,
@@ -1135,6 +1246,7 @@ export async function initDB() {
     `ALTER TABLE cobranca_regua_rules ADD COLUMN IF NOT EXISTS slot INT NOT NULL DEFAULT 0`,
     `ALTER TABLE cobranca_notifications_queue ADD COLUMN IF NOT EXISTS regua_rule_id INT NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_history_cleaned_at BIGINT DEFAULT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_config LONGTEXT`,
     `ALTER TABLE kb_sources ADD COLUMN IF NOT EXISTS embedding_version INT DEFAULT 1`
   ];
 
@@ -1212,6 +1324,7 @@ export async function initDB() {
     "CREATE INDEX IF NOT EXISTS idx_kb_chunks_scope ON kb_chunks (user_id, session_scope)",
     "CREATE INDEX IF NOT EXISTS idx_cobranca_regua_user_active ON cobranca_regua_rules (user_id, ativo)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users (email_normalized)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users (google_id)",
     "CREATE INDEX IF NOT EXISTS idx_users_signup_device ON users (signup_device_id)",
     "CREATE INDEX IF NOT EXISTS idx_users_subscription_status_id ON users (subscription_status, subscription_id)",
     "CREATE INDEX IF NOT EXISTS idx_device_fingerprints_blocked ON device_fingerprints (blocked)",

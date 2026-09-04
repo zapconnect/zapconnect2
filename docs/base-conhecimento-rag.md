@@ -52,7 +52,8 @@ Objetivo: permitir que cada conta alimente a IA com PDFs, URLs e textos, e que a
 ## Segurança e privacidade
 - Escopo por `user_id`; atendentes herdam permissões do titular.
 - Sanitizar uploads, limitar tipos/extensões e tamanho.
-- Rate limit em `/api/kb/query` e `/api/kb/upload`.
+- Rate limit por usuário autenticado em `/api/kb/query`, `/api/kb/upload` e `/api/kb/url`.
+- Padrões atuais: `query` = 30 req/min, `upload` = 10 req/10 min, `url` = 5 req/10 min.
 
 ## Passos sugeridos de implementação (incremental)
 1) Schema + endpoints mínimos:

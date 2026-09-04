@@ -154,11 +154,23 @@ const wizardState = {
   riskKey: "",
 };
 
-if (refs.btnStart && refs.btnPause && refs.btnCancel && refs.btnPrevStep && refs.btnNextStep) {
+if (refs.btnStart) {
   refs.btnStart.addEventListener("click", startDisparo);
+}
+
+if (refs.btnPause) {
   refs.btnPause.addEventListener("click", togglePause);
+}
+
+if (refs.btnCancel) {
   refs.btnCancel.addEventListener("click", cancelDisparo);
+}
+
+if (refs.btnPrevStep) {
   refs.btnPrevStep.addEventListener("click", handlePrevStep);
+}
+
+if (refs.btnNextStep) {
   refs.btnNextStep.addEventListener("click", handleNextStep);
 }
 
@@ -477,7 +489,11 @@ function renderConfirmWarnings(riskCheck, draft) {
     });
   }
 
-  if (riskCheck?.blocked || (!riskCheck?.ok && !riskCheck?.requiresConfirmation)) {
+  const isBlockedRisk =
+    Boolean(riskCheck) &&
+    (riskCheck.blocked || (!riskCheck.ok && !riskCheck.requiresConfirmation));
+
+  if (isBlockedRisk) {
     items.push({
       tone: "danger",
       text: riskCheck.error || "A validação impediu o disparo com a configuração atual.",

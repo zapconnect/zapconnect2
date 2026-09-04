@@ -2,6 +2,12 @@
 // 🌍 API
 // ===============================
 const API = window.APP_CONFIG?.API_URL || window.location.origin;
+const painelBootstrapDataset = document.body?.dataset || {};
+
+window.SESSIONS_COUNT = Number(painelBootstrapDataset.sessionsCount || 0);
+window.HAS_PROMPT = String(painelBootstrapDataset.hasPrompt || "").trim() === "true";
+window.FIRST_MSG_SENT = String(painelBootstrapDataset.firstMsgSent || "").trim() === "true";
+window.USER_ONBOARDING_STEP = Number(painelBootstrapDataset.userOnboardingStep || 0);
 
 // ===============================
 // 🎫 VARIÁVEIS
@@ -9,19 +15,231 @@ const API = window.APP_CONFIG?.API_URL || window.location.origin;
 let qrTimer = null;
 let currentUser = null;
 let lastScheduleLogId = 0;
-const PROMPT_TOKEN_RATIO = 3.8;
-const PROMPT_BUFFER_TOKENS = 500;
-const PROMPT_OUTPUT_MULTIPLIER = 5;
-const PROMPT_PRICE_PER_TOKEN_BRL = 0.000001;
-const PROMPT_MIN_CHARS = 60;
-const PROMPT_WARN_TOKENS = 800;
-const PROMPT_MAX_CHARS = 4000;
 const ONBOARDING_DISMISS_KEY = "zap_onboarding_dismissed";
-const PROMPT_LANGUAGE_REGEX = /\bportugu[eê]s\b|\bpt-br\b|\bpt br\b|\bidioma\b/i;
-const PROMPT_BOUNDARY_REGEX = /\b(n[aã]o|nunca|jamais|somente|apenas|evite|proibido|sem)\b/i;
-const PROMPT_HANDOFF_REGEX = /\b(humano|atendente|suporte|encaminh|transfer)\w*/i;
-const PROMPT_CONFLICT_REGEX =
-    /<\/?(system|assistant|developer|tool|instructions?)>|\b(ignore|desconsidere|esque[çc]a)\b.{0,80}\b(instru[cç][aã]o|prompt|regra|sistema)\b/i;
+
+const AI_CONFIG_FIELDS = {
+    assistantName: "ai-assistant-name",
+    companyName: "ai-company-name",
+    role: "ai-role",
+    personalityTone: "ai-personality-tone",
+    mainObjective: "ai-main-objective",
+    companyContext: "ai-company-context",
+    productsServices: "ai-products-services",
+    faq: "ai-faq",
+    additionalContext: "ai-additional-context",
+    greeting: "ai-greeting",
+    serviceFlow: "ai-service-flow",
+    leadQualification: "ai-lead-qualification",
+    commercialRules: "ai-commercial-rules",
+    objections: "ai-objections",
+    availability: "ai-availability",
+    bookingRules: "ai-booking-rules",
+    calendarInstructions: "ai-calendar-instructions",
+    handoffConditions: "ai-handoff-conditions",
+    handoffMessage: "ai-handoff-message",
+    restrictions: "ai-restrictions",
+    closing: "ai-closing",
+    advancedInstructions: "ai-advanced-instructions"
+};
+
+const AI_CONFIG_AREAS = {
+    identity: ["assistantName", "companyName", "role", "personalityTone"],
+    objective: ["mainObjective"],
+    knowledge: ["companyContext", "productsServices", "faq", "additionalContext"],
+    service: ["greeting", "serviceFlow", "leadQualification"],
+    sales: ["commercialRules", "objections"],
+    scheduling: ["availability", "bookingRules", "calendarInstructions"],
+    human: ["handoffConditions", "handoffMessage"],
+    safety: ["restrictions", "closing", "advancedInstructions"]
+};
+
+function createEmptyAiConfig() {
+    return Object.keys(AI_CONFIG_FIELDS).reduce((config, key) => {
+        config[key] = "";
+        return config;
+    }, { version: 1 });
+}
+
+function parseAiConfig(rawConfig) {
+    if (!rawConfig) return null;
+
+    try {
+        const parsed = typeof rawConfig === "string" ? JSON.parse(rawConfig) : rawConfig;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+
+        const config = createEmptyAiConfig();
+        Object.keys(AI_CONFIG_FIELDS).forEach(key => {
+            config[key] = String(parsed[key] || "");
+        });
+        return config;
+    } catch {
+        return null;
+    }
+}
+
+function getAiConfigFromForm() {
+    const config = createEmptyAiConfig();
+    Object.entries(AI_CONFIG_FIELDS).forEach(([key, id]) => {
+        config[key] = String(document.getElementById(id)?.value || "").trim();
+    });
+    return config;
+}
+
+function setAiConfigForm(config) {
+    Object.entries(AI_CONFIG_FIELDS).forEach(([key, id]) => {
+        const input = document.getElementById(id);
+        if (input) input.value = String(config?.[key] || "");
+    });
+    updateAiConfigProgress();
+}
+
+function getFilledAiConfigAreaCount(config) {
+    return Object.values(AI_CONFIG_AREAS).filter(fields =>
+        fields.some(field => String(config?.[field] || "").trim())
+    ).length;
+}
+
+function renderAiConfigSummary() {
+    const summary = document.getElementById("ai-config-summary");
+    if (!summary) return;
+
+    const config = parseAiConfig(currentUser?.ai_config);
+    if (config) {
+        const filledAreas = getFilledAiConfigAreaCount(config);
+        summary.textContent = filledAreas
+            ? `${filledAreas} de 8 áreas configuradas. A IA já usa estas informações nos atendimentos.`
+            : "A configuração foi salva, mas ainda não há informações para orientar a IA.";
+        summary.classList.toggle("is-ready", filledAreas > 0);
+        return;
+    }
+
+    if (String(currentUser?.prompt || "").trim()) {
+        summary.textContent = "Você possui uma configuração anterior. Abra para organizá-la nas novas áreas.";
+        summary.classList.add("is-ready");
+        return;
+    }
+
+    summary.textContent = "Ainda não configurada. Comece pela identidade e pelo objetivo da IA.";
+    summary.classList.remove("is-ready");
+}
+
+function updateAiConfigProgress() {
+    const progress = document.getElementById("ai-config-progress");
+    if (!progress) return;
+    const filledAreas = getFilledAiConfigAreaCount(getAiConfigFromForm());
+    progress.textContent = `${filledAreas} de 8 áreas preenchidas`;
+}
+
+function selectAiConfigSection(section) {
+    document.querySelectorAll("[data-ai-config-section]").forEach(button => {
+        const active = button.dataset.aiConfigSection === section;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+    });
+
+    document.querySelectorAll("[data-ai-config-panel]").forEach(panel => {
+        const active = panel.dataset.aiConfigPanel === section;
+        panel.classList.toggle("active", active);
+        panel.hidden = !active;
+    });
+}
+
+function openAiConfigModal() {
+    const modal = document.getElementById("ai-config-modal");
+    if (!modal) return;
+
+    const savedConfig = parseAiConfig(currentUser?.ai_config);
+    const config = savedConfig || createEmptyAiConfig();
+
+    // Clientes antigos não perdem a configuração que já tinham antes do novo painel.
+    if (!savedConfig && String(currentUser?.prompt || "").trim()) {
+        config.advancedInstructions = currentUser.prompt;
+    }
+
+    setAiConfigForm(config);
+    selectAiConfigSection("identity");
+    modal.hidden = false;
+    modal.setAttribute("aria-hidden", "false");
+    document.body.classList.add("ai-config-open");
+    setTimeout(() => document.getElementById("ai-assistant-name")?.focus(), 0);
+}
+
+function closeAiConfigModal() {
+    const modal = document.getElementById("ai-config-modal");
+    if (!modal) return;
+    modal.hidden = true;
+    modal.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("ai-config-open");
+}
+
+async function saveAiConfiguration(event) {
+    event.preventDefault();
+    const config = getAiConfigFromForm();
+    const submitButton = document.querySelector("#ai-config-form button[type='submit']");
+    const originalContent = submitButton?.innerHTML;
+
+    if (!getFilledAiConfigAreaCount(config)) {
+        notify("Preencha pelo menos uma área para orientar a IA.", "warning");
+        return;
+    }
+
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Salvando...';
+    }
+
+    try {
+        const res = await fetch(API + "/user/ai-config", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ config })
+        });
+        const data = await res.json();
+
+        if (!res.ok || !data.ok) {
+            throw new Error(data.error || "Não foi possível salvar a configuração.");
+        }
+
+        if (currentUser) {
+            currentUser.ai_config = JSON.stringify(config);
+            currentUser.prompt = data.prompt || currentUser.prompt;
+        }
+        window.HAS_PROMPT = String(data.prompt || "").trim().length > 10;
+        renderAiConfigSummary();
+        renderOnboardingChecklist();
+        closeAiConfigModal();
+        notify("Configuração da IA salva com sucesso.", "success");
+    } catch (err) {
+        notify(err?.message || "Erro ao salvar a configuração da IA.", "error");
+    } finally {
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.innerHTML = originalContent;
+        }
+    }
+}
+
+function initAiConfigModal() {
+    const form = document.getElementById("ai-config-form");
+    if (!form) return;
+
+    form.addEventListener("submit", saveAiConfiguration);
+    form.addEventListener("input", updateAiConfigProgress);
+    document.querySelectorAll("[data-ai-config-section]").forEach(button => {
+        button.addEventListener("click", () => selectAiConfigSection(button.dataset.aiConfigSection));
+    });
+    document.querySelectorAll("[data-ai-config-close]").forEach(button => {
+        button.addEventListener("click", closeAiConfigModal);
+    });
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape" && !document.getElementById("ai-config-modal")?.hidden) {
+            closeAiConfigModal();
+        }
+    });
+}
+
+initAiConfigModal();
 
 // ===============================
 // 🔌 SOCKET.IO
@@ -70,15 +288,17 @@ async function loadUser() {
     if (!res.ok) return location.href = "/login";
 
     const { user, planConfig } = await res.json();
-    currentUser = { ...user, prompt: user?.prompt || "", planConfig: planConfig || null };
+    currentUser = {
+        ...user,
+        prompt: user?.prompt || "",
+        ai_config: user?.ai_config || null,
+        planConfig: planConfig || null
+    };
     window.HAS_PROMPT = typeof currentUser.prompt === "string" && currentUser.prompt.trim().length > 10;
     window.USER_ONBOARDING_STEP = Number(currentUser.onboarding_step || 0);
     window.FIRST_MSG_SENT = window.USER_ONBOARDING_STEP >= 4;
 
-    document.getElementById("user-id").innerText = currentUser.id;
-    document.getElementById("user-name").innerText = currentUser.name;
-    document.getElementById("user-prompt").value = currentUser.prompt;
-    updatePromptMeta(); // Atualizar meta do prompt ao carregar
+    renderAiConfigSummary();
     renderOnboardingChecklist();
 
     // Renderizar indicador de uso de IA
@@ -414,168 +634,6 @@ function renderSessionUsage(sessions = []) {
     remaining.style.color = left === 0 ? "#fca5a5" : "";
 }
 
-function formatPromptInteger(value) {
-    return new Intl.NumberFormat("pt-BR").format(Math.max(0, Math.round(Number(value) || 0)));
-}
-
-function formatPromptCurrency(value) {
-    return `R$${Number(value || 0).toFixed(4).replace(".", ",")}`;
-}
-
-function resolvePromptMetaFeedback(text, chars, tokens) {
-    const trimmed = text.trim();
-
-    if (!trimmed) {
-        return {
-            tone: "warn",
-            status: "Prompt vazio - o bot respondera sem instrucao.",
-            tip: "Explique papel, objetivo, idioma, tom de voz e quando a IA deve encaminhar para um humano."
-        };
-    }
-
-    if (PROMPT_CONFLICT_REGEX.test(text)) {
-        return {
-            tone: "warn",
-            status: "Possiveis instrucoes conflitantes detectadas.",
-            tip: "Evite colar trechos com tags como <system> ou ordens para ignorar regras anteriores."
-        };
-    }
-
-    if (chars < PROMPT_MIN_CHARS) {
-        return {
-            tone: "warn",
-            status: "Prompt curto - faltam contexto e regras para o bot.",
-            tip: "Inclua o papel da IA, o que ela vende, o tom de resposta e quais informacoes nunca devem ser inventadas."
-        };
-    }
-
-    if (chars > PROMPT_MAX_CHARS) {
-        return {
-            tone: "warn",
-            status: "Prompt acima do limite pratico - parte do texto pode ser cortada.",
-            tip: `O backend trabalha melhor com ate ${formatPromptInteger(PROMPT_MAX_CHARS)} caracteres. Remova repeticoes e consolide regras parecidas.`
-        };
-    }
-
-    if (tokens > PROMPT_WARN_TOKENS) {
-        return {
-            tone: "warn",
-            status: "Prompt longo - pode aumentar custo e reduzir o foco das respostas.",
-            tip: "Resuma exemplos extensos, elimine regras duplicadas e mantenha so o que realmente muda a resposta do bot."
-        };
-    }
-
-    if (!PROMPT_LANGUAGE_REGEX.test(text)) {
-        return {
-            tone: "tip",
-            status: "Dica: especifique o idioma de resposta.",
-            tip: 'Ex.: "Responda sempre em portugues do Brasil, com tom cordial e objetivo."'
-        };
-    }
-
-    if (!PROMPT_BOUNDARY_REGEX.test(text)) {
-        return {
-            tone: "tip",
-            status: "Dica: adicione limites do que o bot pode responder.",
-            tip: 'Ex.: "Nao invente prazos, valores, estoque ou descontos sem confirmacao explicita."'
-        };
-    }
-
-    if (!PROMPT_HANDOFF_REGEX.test(text)) {
-        return {
-            tone: "tip",
-            status: "Dica: defina quando escalar para atendimento humano.",
-            tip: 'Ex.: "Se houver reclamacao, cancelamento ou pedido fora do catalogo, transfira para um atendente humano."'
-        };
-    }
-
-    return {
-        tone: "ok",
-        status: "Prompt valido para uso.",
-        tip: ""
-    };
-}
-
-function updatePromptMeta() {
-    const textarea = document.getElementById("user-prompt");
-    const charsEl = document.getElementById("prompt-chars");
-    const tokensEl = document.getElementById("token-count");
-    const costEl = document.getElementById("cost-per-msg");
-    const statusEl = document.getElementById("prompt-status");
-    const tipEl = document.getElementById("prompt-tip");
-
-    if (!textarea || !charsEl || !tokensEl || !costEl || !statusEl || !tipEl) return;
-
-    const text = String(textarea.value || "");
-    const chars = text.length;
-    const tokens = Math.max(0, Math.round(chars / PROMPT_TOKEN_RATIO));
-    const costPerMsg =
-        (tokens + PROMPT_BUFFER_TOKENS) * PROMPT_PRICE_PER_TOKEN_BRL * PROMPT_OUTPUT_MULTIPLIER;
-    const feedback = resolvePromptMetaFeedback(text, chars, tokens);
-
-    charsEl.textContent = formatPromptInteger(chars);
-    tokensEl.textContent = `~${formatPromptInteger(tokens)}`;
-    costEl.textContent = formatPromptCurrency(costPerMsg);
-
-    statusEl.textContent = feedback.status;
-    statusEl.className = `prompt-status ${feedback.tone}`;
-
-    if (feedback.tip) {
-        tipEl.textContent = feedback.tip;
-        tipEl.hidden = false;
-    } else {
-        tipEl.textContent = "";
-        tipEl.hidden = true;
-    }
-}
-
-function updateCharCount() {
-    updatePromptMeta();
-}
-
-// ===============================
-// ✍️ CONTADOR DE CARACTERES DO PROMPT
-// ===============================
-function updateCharCountLegacy() {
-    updatePromptMeta();
-}
-/*
-    return updatePromptMeta();
-    const textarea = document.getElementById("user-prompt");
-    const countEl  = document.getElementById("prompt-count");
-    const hintEl   = document.getElementById("prompt-hint");
-
-    if (!textarea || !countEl) return;
-
-    const len = textarea.value.length;
-    countEl.textContent = len + " caracteres";
-
-    // Remover classes anteriores
-    countEl.className = "prompt-count";
-    hintEl.textContent = "";
-
-    if (len === 0) {
-        hintEl.textContent = "Prompt vazio — a IA vai responder sem contexto";
-        hintEl.className = "prompt-hint hint-warning";
-    } else if (len < 50) {
-        hintEl.textContent = "Prompt muito curto — adicione mais contexto para melhores respostas";
-        hintEl.className = "prompt-hint hint-warning";
-        countEl.className = "prompt-count count-warning";
-    } else if (len > 2000) {
-        hintEl.textContent = "Prompt muito longo — pode afetar a velocidade da IA";
-        hintEl.className = "prompt-hint hint-danger";
-        countEl.className = "prompt-count count-danger";
-    } else if (len >= 100) {
-        hintEl.textContent = "✓ Prompt bem configurado";
-        hintEl.className = "prompt-hint hint-ok";
-        countEl.className = "prompt-count count-ok";
-    }
-}
-
-// ===============================
-// 🌙 HORÁRIO DE SILÊNCIO
-// ===============================
-*/
 function renderSilenceConfig(user) {
     const toggle  = document.getElementById("silence-toggle");
     const config  = document.getElementById("silence-config");
@@ -709,29 +767,6 @@ async function logout() {
         console.error("Erro ao sair:", err);
         notify("Erro ao sair da conta", "error");
     }
-}
-
-
-// ===============================
-// 📝 PROMPT
-// ===============================
-async function updatePrompt() {
-    const prompt = document.getElementById("user-prompt").value;
-
-    await fetch(API + "/user/update-prompt", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt })
-    });
-
-    if (currentUser) {
-        currentUser.prompt = prompt;
-    }
-    window.HAS_PROMPT = String(prompt || "").trim().length > 10;
-    renderOnboardingChecklist();
-
-    notify("Prompt atualizado com sucesso", "success");
 }
 
 

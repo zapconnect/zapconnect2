@@ -41,6 +41,26 @@ const DISPARO_MIN_INTERVAL_MS = Math.max(
   1_000,
   Number(process.env.DISPARO_MIN_INTERVAL_MS || 1_500)
 );
+const KB_QUERY_WINDOW_MS = Math.max(
+  1_000,
+  Number(process.env.KB_QUERY_RATE_LIMIT_WINDOW_MS || 60_000)
+);
+const KB_QUERY_MAX_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.KB_QUERY_RATE_LIMIT_MAX || 30)
+);
+const KB_INGEST_WINDOW_MS = Math.max(
+  60_000,
+  Number(process.env.KB_INGEST_RATE_LIMIT_WINDOW_MS || 10 * 60 * 1000)
+);
+const KB_UPLOAD_MAX_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.KB_UPLOAD_RATE_LIMIT_MAX || 10)
+);
+const KB_URL_MAX_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.KB_URL_RATE_LIMIT_MAX || 5)
+);
 
 const memoryStore = new Map<string, CachedAttemptRecord>();
 const pendingDbWrites = new Map<string, Promise<void>>();
@@ -227,6 +247,11 @@ function getIp(req: any): string {
   );
 }
 
+function getAuthenticatedUserKey(req: any): string | null {
+  const userId = Number(req?.user?.id);
+  return Number.isFinite(userId) && userId > 0 ? String(userId) : null;
+}
+
 startRateLimitMaintenance();
 
 export function createRateLimiter(opts: RateLimitOptions) {
@@ -349,8 +374,32 @@ export const disparoUserLimiter = createRateLimiter({
   message: "Aguarde antes de iniciar outro disparo.",
   prefix: "disparo_user",
   persistMode: "sync",
-  keyBuilder: async (req: any) => {
-    const userId = Number(req?.user?.id);
-    return Number.isFinite(userId) && userId > 0 ? String(userId) : null;
-  },
+  keyBuilder: async (req: any) => getAuthenticatedUserKey(req),
+});
+
+export const kbUploadLimiter = createRateLimiter({
+  windowMs: KB_INGEST_WINDOW_MS,
+  maxAttempts: KB_UPLOAD_MAX_ATTEMPTS,
+  blockDurationMs: KB_INGEST_WINDOW_MS,
+  message: "Muitos uploads para a base de conhecimento. Aguarde alguns minutos e tente novamente.",
+  prefix: "kb_upload",
+  keyBuilder: async (req: any) => getAuthenticatedUserKey(req),
+});
+
+export const kbUrlLimiter = createRateLimiter({
+  windowMs: KB_INGEST_WINDOW_MS,
+  maxAttempts: KB_URL_MAX_ATTEMPTS,
+  blockDurationMs: KB_INGEST_WINDOW_MS,
+  message: "Muitas URLs enviadas para a base de conhecimento. Aguarde alguns minutos e tente novamente.",
+  prefix: "kb_url",
+  keyBuilder: async (req: any) => getAuthenticatedUserKey(req),
+});
+
+export const kbQueryLimiter = createRateLimiter({
+  windowMs: KB_QUERY_WINDOW_MS,
+  maxAttempts: KB_QUERY_MAX_ATTEMPTS,
+  blockDurationMs: KB_QUERY_WINDOW_MS,
+  message: "Muitas consultas na base de conhecimento. Aguarde um instante e tente novamente.",
+  prefix: "kb_query",
+  keyBuilder: async (req: any) => getAuthenticatedUserKey(req),
 });

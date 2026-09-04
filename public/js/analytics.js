@@ -603,7 +603,7 @@
     refs.statSatisfactionLabel.textContent = satisfaction.label || "Sem dados";
     refs.statUnanswered.textContent = formatCompactNumber(unansweredCount);
     refs.statUnansweredFoot.textContent = unansweredCount
-      ? "Itens pedem ajuste no prompt"
+      ? "Itens pedem ajuste na configuração da IA"
       : "Nenhuma lacuna cr\u00edtica detectada";
     refs.statPeakHour.textContent = peakHour ? peakHour.label : "\u2014";
     refs.statPeakCount.textContent = peakHour
@@ -707,7 +707,7 @@
           unansweredTheme.occurrences,
           "ocorr\u00eancia",
           "ocorr\u00eancias"
-        )} e cerca de ${unansweredTheme.share}% das perguntas sem resposta. Atualize o prompt com orienta\u00e7\u00e3o objetiva para esse tema.`,
+        )} e cerca de ${unansweredTheme.share}% das perguntas sem resposta. Atualize a configuração da IA com orientação objetiva para esse tema.`,
       });
     }
 
@@ -745,14 +745,14 @@
             )}%. Vale antecipar a transfer\u00eancia para humano em sinais de frustra\u00e7\u00e3o ou repeti\u00e7\u00e3o.`
           : `A satisfa\u00e7\u00e3o estimada est\u00e1 em ${Math.round(
               satisfaction.score
-            )}%. Continue alimentando o prompt com exemplos reais para sustentar esse padr\u00e3o.`,
+            )}%. Continue alimentando a configuração da IA com exemplos reais para sustentar esse padrão.`,
       });
     } else if (topTheme?.topic) {
       insights.push({
         emoji: "\ud83c\udfaf",
         tone: "positive",
         title: `Tema dominante: ${clipText(topTheme.topic, 32)}`,
-        text: `Esse assunto liderou o per\u00edodo. Reforce respostas-padr\u00e3o e exemplos pr\u00e1ticos no prompt para reduzir improviso do bot.`,
+        text: `Esse assunto liderou o período. Reforce respostas-padrão e exemplos práticos na configuração da IA para reduzir improviso do bot.`,
       });
     }
 

@@ -11,7 +11,7 @@
   <script src="/js/app-shell.js" defer></script>
 </head>
 
-<body class="has-app-sidebar" data-default-ddi="<%= user.default_ddi || '55' %>">
+<body class="has-app-sidebar app-screen-framed" data-default-ddi="<%= user.default_ddi || '55' %>">
   <%- include("partials/app-sidebar", { activePage: "disparo" }) %>
 
   <header class="topbar">
@@ -20,13 +20,9 @@
       <h1>Disparo em Massa</h1>
     </div>
 
-    <a href="/painel" class="btn-back">
-      <i class="fa-solid fa-arrow-left"></i>
-      Voltar
-    </a>
   </header>
 
-  <main class="wrap">
+  <main class="wrap app-screen-scroll">
     <section class="wizard-shell">
       <div class="wizard-hero">
         <div class="wizard-hero-copy">
@@ -328,11 +324,6 @@
       </div>
 
       <div class="wizard-actions">
-        <button id="btnPrevStep" class="btn-secondary" type="button">
-          <i class="fa-solid fa-arrow-left"></i>
-          Voltar
-        </button>
-
         <button id="btnNextStep" class="btn-primary" type="button">
           <i class="fa-solid fa-arrow-right"></i>
           Avançar para mensagem
@@ -416,11 +407,6 @@
       </section>
     </section>
   </main>
-
-  <footer>
-    © 2026 ZapConnect — Todos os direitos reservados.<br>
-    Desenvolvido por <a href="https://www.instagram.com/vini__n10?igsh=NzF4am94bjhmdHJ6" target="_blank">Vinicius Souza</a>
-  </footer>
 
   <script src="/js/loading-utils.js"></script>
   <script src="/js/toast.js"></script>

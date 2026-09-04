@@ -10,10 +10,10 @@
   <link rel="stylesheet" href="/css/app-shell.css">
   <script src="/js/app-shell.js" defer></script>
 </head>
-<body class="has-app-sidebar">
+<body class="has-app-sidebar app-screen-viewport">
   <%- include("partials/app-sidebar", { activePage: "fallback-settings" }) %>
 
-  <div class="fallback-page">
+  <div class="fallback-page app-screen-scroll">
     <header class="page-header">
       <div class="page-copy">
         <span class="page-kicker">Fallback IA → Humano</span>
@@ -25,10 +25,6 @@
       </div>
 
       <div class="header-actions">
-        <button class="btn-ghost small" type="button" onclick="window.location.href='/painel'">
-          <i class="fa-solid fa-arrow-left"></i>
-          Voltar
-        </button>
         <button class="btn-ghost small" type="button" id="btnResetSession">
           <i class="fa-solid fa-rotate-left"></i>
           Restaurar padrão

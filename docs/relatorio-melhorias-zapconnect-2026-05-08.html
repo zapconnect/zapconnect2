@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Relatorio de Melhorias - ZapConnect</title>
+  <style>
+    :root {
+      --bg: #f3f7fb;
+      --ink: #17324d;
+      --muted: #5c738c;
+      --line: #d7e3ef;
+      --card: #ffffff;
+      --brand: #0b72e7;
+      --brand-soft: #e8f2ff;
+      --ok: #1d8f5a;
+      --ok-soft: #eaf8f0;
+      --warn: #ad6a00;
+      --warn-soft: #fff4df;
+      --danger: #c23d3d;
+      --danger-soft: #ffe9e9;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: var(--ink);
+      background: linear-gradient(180deg, #eef5fb 0%, #f7fbff 100%);
+    }
+
+    .page {
+      width: 210mm;
+      min-height: 297mm;
+      margin: 0 auto;
+      padding: 18mm 16mm 16mm;
+      background: var(--card);
+    }
+
+    .hero {
+      padding: 18px 22px;
+      border-radius: 20px;
+      background:
+        radial-gradient(circle at top right, rgba(11, 114, 231, 0.14), transparent 36%),
+        linear-gradient(135deg, #133f6f 0%, #0b72e7 100%);
+      color: #fff;
+    }
+
+    .eyebrow {
+      margin: 0 0 8px;
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      opacity: 0.82;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.15;
+    }
+
+    .subtitle {
+      margin: 10px 0 0;
+      font-size: 14px;
+      line-height: 1.55;
+      max-width: 88%;
+      color: rgba(255, 255, 255, 0.92);
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 18px;
+    }
+
+    .meta-card {
+      padding: 14px 14px 12px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+    }
+
+    .meta-label {
+      display: block;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      opacity: 0.8;
+      margin-bottom: 6px;
+    }
+
+    .meta-value {
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    .section {
+      margin-top: 24px;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 19px;
+      color: #123961;
+    }
+
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      color: #123961;
+    }
+
+    p {
+      margin: 0 0 10px;
+      font-size: 13px;
+      line-height: 1.65;
+      color: var(--ink);
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 14px;
+    }
+
+    .card {
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: var(--card);
+      border: 1px solid var(--line);
+    }
+
+    .highlight {
+      background: linear-gradient(180deg, #f8fbff 0%, #f3f9ff 100%);
+    }
+
+    .status-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .status-chip {
+      padding: 12px 12px 10px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+    }
+
+    .status-chip strong {
+      display: block;
+      font-size: 19px;
+      margin-bottom: 4px;
+    }
+
+    .status-chip span {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .ok {
+      background: var(--ok-soft);
+      border-color: #bfe5cf;
+    }
+
+    .warn {
+      background: var(--warn-soft);
+      border-color: #f1d79d;
+    }
+
+    .danger {
+      background: var(--danger-soft);
+      border-color: #efb4b4;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      overflow: hidden;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+    }
+
+    thead th {
+      text-align: left;
+      padding: 11px 12px;
+      background: #f1f7fd;
+      color: #123961;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    tbody td {
+      padding: 11px 12px;
+      border-top: 1px solid var(--line);
+      vertical-align: top;
+      line-height: 1.45;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .tag.ok {
+      color: var(--ok);
+      background: var(--ok-soft);
+      border: none;
+    }
+
+    .tag.warn {
+      color: var(--warn);
+      background: var(--warn-soft);
+      border: none;
+    }
+
+    .tag.danger {
+      color: var(--danger);
+      background: var(--danger-soft);
+      border: none;
+    }
+
+    .callout {
+      padding: 14px 16px;
+      border-radius: 16px;
+      margin-top: 10px;
+      border-left: 4px solid var(--brand);
+      background: var(--brand-soft);
+    }
+
+    ul {
+      margin: 8px 0 0 18px;
+      padding: 0;
+    }
+
+    li {
+      margin: 0 0 7px;
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+
+    .two-col {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .footer-note {
+      margin-top: 24px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">QA local e recomendacoes</p>
+      <h1>Relatorio de melhorias do ZapConnect</h1>
+      <p class="subtitle">
+        Avaliacao funcional realizada em ambiente local, cobrindo navegacao das telas principais,
+        autenticacao, endpoints criticos, exportacoes e validacoes de payload. O foco do documento
+        e transformar os achados em melhorias objetivas de produto, qualidade e testabilidade.
+      </p>
+      <div class="meta-grid">
+        <div class="meta-card">
+          <span class="meta-label">Data</span>
+          <span class="meta-value">08 de maio de 2026</span>
+        </div>
+        <div class="meta-card">
+          <span class="meta-label">Ambiente</span>
+          <span class="meta-value">http://localhost:3000</span>
+        </div>
+        <div class="meta-card">
+          <span class="meta-label">Escopo</span>
+          <span class="meta-value">Frontend, API e exportacoes</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="section summary-grid">
+      <div class="card highlight">
+        <h2>Resumo executivo</h2>
+        <p>
+          O sistema apresentou boa estabilidade nas areas principais. As paginas centrais carregaram,
+          os endpoints de negocio mais importantes responderam como esperado e os fluxos de analytics
+          conseguiram gerar e exportar PDF.
+        </p>
+        <p>
+          Durante a rodada foi confirmado um bug real no modulo de disparo em massa, que gerava erro
+          de JavaScript no carregamento da etapa de confirmacao. O problema foi corrigido durante o teste
+          e retestado com sucesso.
+        </p>
+        <div class="callout">
+          <strong>Conclusao pratica:</strong>
+          o produto esta funcional para os fluxos centrais testados, mas vale investir em cobertura automatizada,
+          previsibilidade de contratos de API e infraestrutura de QA local para reduzir regressao em modulos complexos.
+        </div>
+      </div>
+      <div class="card">
+        <h2>Painel de status</h2>
+        <div class="status-row">
+          <div class="status-chip ok">
+            <strong>Core OK</strong>
+            <span>Autenticacao, paginas protegidas e exports funcionando</span>
+          </div>
+          <div class="status-chip warn">
+            <strong>1 bug</strong>
+            <span>Falha real confirmada em disparo, ja corrigida e retestada</span>
+          </div>
+          <div class="status-chip ok">
+            <strong>0 bloqueios</strong>
+            <span>Nenhum bloqueio funcional restante nas rotas principais testadas</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Escopo de testes executado</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Area</th>
+            <th>O que foi validado</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Rotas publicas</td>
+            <td>/health, /ready, /login, /register e /forgot-password</td>
+            <td><span class="tag ok">Aprovado</span></td>
+          </tr>
+          <tr>
+            <td>Autenticacao</td>
+            <td>Login invalido, login valido, /auth/me, logout e invalidacao de sessao</td>
+            <td><span class="tag ok">Aprovado</span></td>
+          </tr>
+          <tr>
+            <td>Paginas autenticadas</td>
+            <td>/painel, /crm, /analytics, /disparo, /agendamentos, /drips, /cobrancas, /qualificacao, /fallback-settings, /user, /chat</td>
+            <td><span class="tag ok">Aprovado</span></td>
+          </tr>
+          <tr>
+            <td>Configuracoes de usuario</td>
+            <td>Atualizacao de prompt, horario de silencio e toggle de IA</td>
+            <td><span class="tag ok">Aprovado</span></td>
+          </tr>
+          <tr>
+            <td>Drip campaigns</td>
+            <td>Listagem, bootstrap e validacao de payload invalido</td>
+            <td><span class="tag ok">Aprovado</span></td>
+          </tr>
+          <tr>
+            <td>Qualificacao</td>
+            <td>Listagem de fluxos e validacao de payload invalido</td>
+            <td><span class="tag ok">Aprovado</span></td>
+          </tr>
+          <tr>
+            <td>Cobrancas</td>
+            <td>Listagem, clientes, criacao de cliente e exportacao CSV</td>
+            <td><span class="tag ok">Aprovado</span></td>
+          </tr>
+          <tr>
+            <td>Analytics</td>
+            <td>Geracao de relatorio, historico e exportacao PDF</td>
+            <td><span class="tag ok">Aprovado</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>Achado confirmado</h2>
+      <div class="card">
+        <h3>Modulo de disparo quebrava no carregamento da etapa de confirmacao</h3>
+        <p>
+          Antes do ajuste, a tela <strong>/disparo</strong> emitia um erro de JavaScript ao montar os alertas
+          de confirmacao quando <code>riskCheck</code> ainda nao existia. O efeito pratico era um console sujo
+          e risco de comportamento inconsistente justamente no wizard de envio em massa.
+        </p>
+        <ul>
+          <li><strong>Impacto:</strong> regressao em um modulo sensivel, com potencial de afetar confianca do usuario em um fluxo de alto risco operacional.</li>
+          <li><strong>Causa:</strong> ausencia de guarda defensiva antes de acessar <code>riskCheck.error</code>.</li>
+          <li><strong>Status:</strong> corrigido durante a sessao de QA e retestado sem novos erros de aplicacao no console.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section two-col">
+      <div class="card">
+        <h2>Melhorias prioritarias</h2>
+        <ul>
+          <li><strong>P1. Cobertura automatizada de regressao:</strong> criar suite E2E/API para autenticacao, disparo, analytics export e cobrancas.</li>
+          <li><strong>P1. Testes de estado nulo e fluxo incompleto:</strong> wizards como disparo, drips e qualificacao precisam de casos automatizados para estados parciais.</li>
+          <li><strong>P2. Contratos de API mais previsiveis:</strong> consolidar envelopes de resposta e tipagens compartilhadas entre backend e frontend.</li>
+          <li><strong>P2. Testabilidade da UI:</strong> adicionar <code>data-testid</code> e landmarks mais estaveis nos modulos principais.</li>
+          <li><strong>P3. Bootstrap de QA local:</strong> incluir comando de seed para conta/demo e dados sinteticos, evitando preparacao manual no banco.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h2>Melhorias de processo</h2>
+        <ul>
+          <li><strong>Documentar comportamento 401/redirect:</strong> diferenciar claramente respostas HTML e JSON para rotas protegidas.</li>
+          <li><strong>Validar exports em CI:</strong> incluir smoke tests para PDF de analytics e CSV de cobrancas.</li>
+          <li><strong>Checklists por modulo:</strong> transformar a rodada manual em roteiro reusavel por release.</li>
+          <li><strong>Ambiente de demo interno:</strong> garantir um usuario QA pro com dados minimamente realistas para navegacao completa.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Alteracoes aplicadas durante a sessao</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Acao</th>
+            <th>Resultado</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Correcao do null-guard em disparo</td>
+            <td>Erro de console removido e tela retestada com sucesso</td>
+          </tr>
+          <tr>
+            <td>Remocao do footer em /disparo</td>
+            <td>Layout limpo conforme solicitado e validado no navegador</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section">
+      <h2>Evidencias sinteticas</h2>
+      <div class="card">
+        <ul>
+          <li>Rotas protegidas e principais paginas autenticadas carregaram corretamente no navegador.</li>
+          <li>Endpoints de leitura e escrita de usuario responderam com sucesso, incluindo prompt, silencio da IA e toggle de IA.</li>
+          <li>Validacoes negativas dos modulos de Drip e Qualificacao responderam com <code>400</code> e mensagens coerentes.</li>
+          <li>Exportacao de cobrancas em CSV respondeu <code>200</code>.</li>
+          <li>Geracao e exportacao do relatorio de analytics em PDF responderam com sucesso.</li>
+          <li>Foi usada uma conta temporaria isolada para os testes de API e, ao fim, ela pode ser removida sem impacto em contas reais.</li>
+        </ul>
+      </div>
+      <p class="footer-note">
+        Documento gerado a partir de uma sessao de QA local em desenvolvimento. O objetivo deste material e priorizar melhorias
+        praticas, nao substituir um plano de homologacao multiambiente ou testes com usuarios finais.
+      </p>
+    </section>
+  </main>
+</body>
+</html>

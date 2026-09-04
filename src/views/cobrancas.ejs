@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/css/app-shell.css" />
   <script src="/js/app-shell.js" defer></script>
 </head>
-<body class="has-app-sidebar" data-default-ddi="<%= user.default_ddi || '55' %>">
+<body class="has-app-sidebar app-screen-framed" data-default-ddi="<%= user.default_ddi || '55' %>">
   <%- include("partials/app-sidebar", { activePage: "cobrancas" }) %>
   <header class="topbar">
     <div class="brand">
@@ -18,13 +18,9 @@
       <h1>Cobranças</h1>
     </div>
 
-    <a href="/painel" class="btn-back">
-      <i class="fa-solid fa-arrow-left"></i>
-      Voltar
-    </a>
   </header>
 
-  <div class="cobrancas-wrap">
+  <div class="cobrancas-wrap app-screen-scroll">
     <nav class="tabs-nav">
       <button class="tab-btn active" data-tab="cobrancas" onclick="switchTab('cobrancas')">
         <i class="fa-solid fa-file-invoice"></i> Cobranças
@@ -821,11 +817,11 @@
     </aside>
   </div>
 
-  <footer>
+  <% /*
     © 2026 ZapConnect — Todos os direitos reservados.<br />
     Desenvolvido por
     <a href="https://www.instagram.com/vini__n10?igsh=NzF4am94bjhmdHJ6" target="_blank">Vinicius Souza</a>
-  </footer>
+  */ %>
 
   <script>
     window.USER_ID = <%- JSON.stringify(Number(user?.id || 0)) %>;

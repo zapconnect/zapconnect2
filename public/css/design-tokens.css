@@ -199,22 +199,30 @@
 /* ===========================
    Scrollbar global
 =========================== */
+html,
+body,
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--scroll) transparent;
 }
 
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
 *::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
 *::-webkit-scrollbar-thumb {
   background: var(--scroll);
   border-radius: 999px;
   border: 1px solid transparent;
 }
 
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
 *::-webkit-scrollbar-track {
   background: transparent;
 }

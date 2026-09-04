@@ -21,38 +21,38 @@
         { id: "disparo", label: "Disparo", href: "/disparo", icon: "fa-solid fa-bullhorn", dotClass: "dot-rose" },
         { id: "agendamentos", label: "Agendamentos", href: "/agendamentos", icon: "fa-solid fa-calendar-check", dotClass: "dot-gold" },
         { id: "drips", label: "Drip", href: "/drips", icon: "fa-solid fa-timeline", dotClass: "dot-purple" },
-        { id: "cobrancas", label: "Cobranças", href: "/cobrancas", icon: "fa-solid fa-file-invoice-dollar", dotClass: "dot-orange" },
+        { id: "cobrancas", label: "Cobran\u00e7as", href: "/cobrancas", icon: "fa-solid fa-file-invoice-dollar", dotClass: "dot-orange" },
       ],
     },
     {
-      label: "Configurações",
+      label: "Configura\u00e7\u00f5es",
       items: [
-        { id: "qualificacao", label: "Qualificação", href: "/qualificacao", icon: "fa-solid fa-user-check", dotClass: "dot-teal" },
+        { id: "qualificacao", label: "Qualifica\u00e7\u00e3o", href: "/qualificacao", icon: "fa-solid fa-user-check", dotClass: "dot-teal" },
         { id: "fallback-settings", label: "Fallback", href: "/fallback-settings", icon: "fa-solid fa-person-circle-question", dotClass: "dot-coral" },
-        { id: "sessions", label: "Sessões", href: "/painel#sessions-list", icon: "fa-solid fa-mobile-screen-button", dotClass: "dot-green" },
+        { id: "sessions", label: "Sess\u00f5es", href: "/painel#sessions-list", icon: "fa-solid fa-mobile-screen-button", dotClass: "dot-green" },
         { id: "user", label: "Conta", href: "/user", icon: "fa-solid fa-user-gear", dotClass: "dot-sky" },
       ],
     },
   ];
 %>
 
-<button class="app-shell-toggle" type="button" aria-label="Abrir navegação" aria-expanded="false" data-app-shell-toggle>
+<button class="app-shell-toggle" type="button" aria-label="Abrir navegacao" aria-expanded="false" data-app-shell-toggle>
   <i class="fa-solid fa-bars"></i>
 </button>
 
 <div class="app-shell-backdrop" data-app-shell-close></div>
 
-<aside class="app-shell-sidebar" id="app-shell-sidebar" aria-label="Navegação principal">
+<aside class="app-shell-sidebar" id="app-shell-sidebar" aria-label="Navegacao principal">
   <div class="app-shell-brand-row">
     <a href="/painel" class="app-shell-brand-link">
       <img src="/img/logo3.png" alt="ZapConnect" class="app-shell-brand-logo">
       <div>
-        <strong>ZapConnect</strong>
-        <span>Navegação do app</span>
+        <strong>Zap<span class="app-shell-brand-connect">Connect</span></strong>
+        <span class="app-shell-brand-caption">Navega&ccedil;&atilde;o do app</span>
       </div>
     </a>
 
-    <button class="app-shell-close" type="button" aria-label="Fechar navegação" data-app-shell-close>
+    <button class="app-shell-close" type="button" aria-label="Fechar navegacao" data-app-shell-close>
       <i class="fa-solid fa-xmark"></i>
     </button>
   </div>
@@ -71,9 +71,9 @@
   </button>
 
   <div class="app-shell-intro">
-    <span class="app-shell-intro-label">Sempre à mão</span>
-    <strong>Olá, <%= displayName %></strong>
-    <p>Plano <%= planName %>. Troque de módulo sem voltar ao painel.</p>
+    <span class="app-shell-intro-label">Sempre &agrave; m&atilde;o</span>
+    <strong>Ol&aacute;, <%= displayName %></strong>
+    <p>Plano <%= planName %>. Troque de m&oacute;dulo sem voltar ao painel.</p>
   </div>
 
   <% navGroups.forEach((group) => { %>
@@ -100,8 +100,8 @@
   <% }) %>
 
   <div class="app-shell-footer">
-    <strong>Fluxo contínuo</strong>
-    <p>Principal, Envios e Configurações agora ficam fixos em qualquer rota.</p>
+    <strong>Fluxo cont&iacute;nuo</strong>
+    <p>Principal, Envios e Configura&ccedil;&otilde;es agora ficam fixos em qualquer rota.</p>
   </div>
 </aside>
 

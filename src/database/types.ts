@@ -3,10 +3,14 @@ export interface User {
 
   name: string;
   email: string;
+  email_normalized?: string | null;
+  email_verified?: number;
+  google_id?: string | null;
 
   password: string;
 
   prompt: string;
+  ai_config?: string | null;
   ia_enabled: number; // 0 ou 1 (boolean no banco)
   onboarding_step?: number | null;
 

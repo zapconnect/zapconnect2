@@ -268,6 +268,15 @@ function clipText(value: unknown, max = 220) {
   return `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
 }
 
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function toSafeInt(value: unknown, fallback = 0) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -629,7 +638,7 @@ function buildFallbackSuggestions(
     suggestions.push({
       title: "Cobrir lacunas frequentes",
       suggestion:
-        "Inclua no prompt uma seção com respostas claras para as perguntas que ficaram sem resposta e instrua o bot a pedir contexto mínimo antes de desistir.",
+        "Inclua na configuração da IA respostas claras para as perguntas que ficaram sem resposta e instrua o bot a pedir contexto mínimo antes de desistir.",
       why: "O relatório encontrou perguntas recorrentes sem retorno convincente.",
       priority: "high",
     });
@@ -648,7 +657,7 @@ function buildFallbackSuggestions(
   if (themes.length) {
     suggestions.push({
       title: "Especializar respostas do nicho",
-      suggestion: `Reforce no prompt exemplos e respostas padrão sobre "${themes[0].topic}" para reduzir improviso do bot.`,
+      suggestion: `Reforce na configuração da IA exemplos e respostas padrão sobre "${themes[0].topic}" para reduzir improviso do bot.`,
       why: "Esse é o assunto mais frequente no período.",
       priority: "medium",
     });
@@ -658,7 +667,7 @@ function buildFallbackSuggestions(
     suggestions.push({
       title: "Manter monitoramento",
       suggestion:
-        "Continue acompanhando os relatórios diários e adicione exemplos reais de conversas bem-sucedidas ao prompt.",
+        "Continue acompanhando os relatórios diários e adicione exemplos reais de conversas bem-sucedidas à configuração da IA.",
       why: "O período analisado não mostrou falhas críticas, mas exemplos reais ajudam a estabilizar a IA.",
       priority: "low",
     });
@@ -843,7 +852,7 @@ async function analyzeWithGemini(input: {
     "Você é um analista de operações de atendimento no WhatsApp.",
     "Analise conversas das últimas 24h e retorne SOMENTE JSON válido.",
     "Não invente dados. Use contagens conservadoras.",
-    "Foque em: temas recorrentes, satisfação estimada, perguntas sem boa resposta e melhorias de prompt.",
+    "Foque em: temas recorrentes, satisfação estimada, perguntas sem boa resposta e melhorias na configuração da IA.",
     "",
     "Formato esperado:",
     JSON.stringify(
@@ -1295,8 +1304,40 @@ export function renderAnalyticsReportHtml(input: {
   userName: string;
   report: AnalyticsReport;
 }) {
-  const { report } = input;
-  const safeSummary = clipText(report.data.summary, 600);
+  const safeUserName = escapeHtml(clipText(input.userName, 80));
+
+  const report: AnalyticsReport = {
+    ...input.report,
+    reportDate: escapeHtml(input.report.reportDate),
+    data: {
+      ...input.report.data,
+      summary: escapeHtml(clipText(input.report.data.summary, 600)),
+      satisfaction: {
+        ...input.report.data.satisfaction,
+        label: escapeHtml(clipText(input.report.data.satisfaction.label, 40)),
+      },
+      peakHours: input.report.data.peakHours.map((item) => ({
+        ...item,
+        label: escapeHtml(item.label),
+      })),
+      themes: input.report.data.themes.map((item) => ({
+        ...item,
+        topic: escapeHtml(item.topic),
+      })),
+      unansweredQuestions: input.report.data.unansweredQuestions.map((item) => ({
+        ...item,
+        question: escapeHtml(item.question),
+        reason: escapeHtml(item.reason),
+      })),
+      promptSuggestions: input.report.data.promptSuggestions.map((item) => ({
+        ...item,
+        title: escapeHtml(item.title),
+        suggestion: escapeHtml(item.suggestion),
+        why: escapeHtml(item.why),
+      })),
+    },
+  };
+  const safeSummary = report.data.summary;
   const peakHours = report.data.peakHours
     .map(
       (item) =>
@@ -1326,7 +1367,7 @@ export function renderAnalyticsReportHtml(input: {
   <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <title>Relatório Analytics • ${input.userName}</title>
+    <title>Relatório Analytics • ${safeUserName}</title>
     <style>
       body{font-family:Arial,sans-serif;padding:32px;color:#0f172a}
       h1,h2,h3{margin:0 0 12px}
@@ -1346,14 +1387,14 @@ export function renderAnalyticsReportHtml(input: {
   <body>
     <span class="pill">ZapConnect Analytics</span>
     <h1>Relatório de Conversas com IA</h1>
-    <p class="muted">Cliente: ${clipText(input.userName, 80)} • Referência: ${report.reportDate}</p>
+    <p class="muted">Cliente: ${safeUserName} • Referência: ${report.reportDate}</p>
     <p class="muted">Janela analisada: ${formatDateTimeBr(report.windowStart)} até ${formatDateTimeBr(report.windowEnd)}</p>
 
     <div class="grid">
       <div class="card">
         <div class="muted">Satisfação estimada</div>
         <div class="big">${report.data.satisfaction.score}%</div>
-        <div>${clipText(report.data.satisfaction.label, 40)}</div>
+        <div>${report.data.satisfaction.label}</div>
       </div>
       <div class="card">
         <div class="muted">Conversas analisadas</div>
@@ -1389,7 +1430,7 @@ export function renderAnalyticsReportHtml(input: {
     <h2>Perguntas sem Resposta</h2>
     <ul>${unanswered || "<li>Nenhuma pergunta crítica encontrada.</li>"}</ul>
 
-    <h2>Sugestões para o Prompt</h2>
+    <h2>Sugestões para a configuração da IA</h2>
     <ul>${suggestions || "<li>Nenhuma sugestão adicional.</li>"}</ul>
   </body>
   </html>`;

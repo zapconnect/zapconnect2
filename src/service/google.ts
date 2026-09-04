@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI, type ChatSession } from "@google/generative-ai";
 import dotenv from "dotenv";
 import { getDB, withDBTransaction } from "../database";
+import type { PersistedChatHistoryEntry } from "../services/chatHistoryService";
 import {
   decodeCompressedJson,
   encodeCompressedJson,
@@ -195,6 +196,30 @@ const mapAIHistoryTurnsToGeminiHistory = (
         if (!text) return null;
         return {
           role: entry.role === "user" ? "user" : "model",
+          parts: [{ text }],
+        };
+      })
+      .filter(Boolean) as ChatHistory
+  );
+
+const mapPersistedEntriesToGeminiHistory = (
+  entries: PersistedChatHistoryEntry[]
+): ChatHistory =>
+  trimHistory(
+    entries
+      .map((entry) => {
+        const text = String(
+          Array.isArray(entry?.parts)
+            ? entry.parts.map((part) => String(part?.text || "")).join(" ")
+            : ""
+        )
+          .trim();
+
+        if (!text) return null;
+        if (entry.role !== "user" && entry.role !== "model") return null;
+
+        return {
+          role: entry.role,
           parts: [{ text }],
         };
       })
@@ -627,6 +652,36 @@ export function getGoogleRuntimeCacheStats() {
     historyCleanupMarkers: describeLRUCache(historyCleanupMarkers),
     historyCleanupInFlight: historyCleanupInFlight.size,
   };
+}
+
+export function syncGoogleRuntimeHistory(params: {
+  userId: number | string;
+  chatId: string;
+  entries: PersistedChatHistoryEntry[];
+}) {
+  const normalizedEntries = mapPersistedEntriesToGeminiHistory(params.entries);
+  if (!normalizedEntries.length) return;
+
+  const chatKey = buildChatKey(params.userId, params.chatId);
+  const cachedHistory = getCachedHistory(chatKey);
+  if (!cachedHistory?.length) return;
+
+  const mergedHistory = trimHistory([...cachedHistory, ...normalizedEntries]);
+  setCachedHistory(chatKey, mergedHistory);
+
+  const pending = persistQueue.get(chatKey);
+  if (pending) {
+    pending.lastHistory = mergedHistory;
+  }
+}
+
+export function clearGoogleRuntimeHistory(
+  userId: number | string,
+  chatId: string
+) {
+  const chatKey = buildChatKey(userId, chatId);
+  activeChats.delete(chatKey);
+  persistQueue.delete(chatKey);
 }
 
 export const stopChatSession = async (

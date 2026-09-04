@@ -9,17 +9,13 @@
   <link rel="stylesheet" href="/css/app-shell.css" />
   <script src="/js/app-shell.js" defer></script>
 </head>
-<body class="has-app-sidebar">
+<body class="has-app-sidebar app-screen-viewport">
   <%- include("partials/app-sidebar", { activePage: "analytics" }) %>
-  <div class="page-shell">
+  <div class="page-shell app-screen-scroll">
     <div class="page-glow page-glow-a"></div>
     <div class="page-glow page-glow-b"></div>
 
     <header class="analytics-topbar">
-      <a href="/painel" class="btn-back">
-        <i class="fa-solid fa-arrow-left"></i>
-        Painel
-      </a>
       <h1 class="analytics-title">Analytics</h1>
       <div class="analytics-controls">
         <select id="days-select" aria-label="Per&iacute;odo do relat&oacute;rio">
@@ -241,7 +237,7 @@
         <div class="card-head">
           <div>
             <span class="card-kicker">Sugest&otilde;es</span>
-            <h2>Melhorias para o prompt</h2>
+            <h2>Melhorias para a configuração da IA</h2>
           </div>
         </div>
         <div id="suggestions-list" class="suggestion-list"></div>

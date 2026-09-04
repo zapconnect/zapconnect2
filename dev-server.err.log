@@ -1,0 +1,1 @@
+⚠️ Agendamentos com mídia estão usando armazenamento local em C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\schedule_uploads. Em containers com disco efêmero, esses arquivos podem sumir após restart/deploy. Monte volume persistente ou mova para storage externo antes de produção.

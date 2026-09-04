@@ -20,7 +20,7 @@
 }
 
 .question-card {
-  padding: 18px;
+  padding: 18px 18px 18px 84px;
 }
 
 .question-grid {
@@ -556,6 +556,10 @@
 @media (max-width: 760px) {
   .field-wide {
     grid-column: auto;
+  }
+
+  .question-card {
+    padding-left: 18px;
   }
 
   .score-calibration-head,

@@ -1,0 +1,192 @@
+
+> zapconnect@2.0.0 dev
+> tsx watch src/index.ts
+
+[INFO] DB_HOST = localhost
+[INFO] DB_PORT = 3306
+[INFO] DB_USER = root
+[INFO] DB_NAME = zapconnect
+[INFO] ✅ MySQL conectado
+[INFO] ✅ Tabela quick_replies pronta
+[INFO] 📌 Tabelas verificadas/criadas com sucesso
+[INFO] 📄 Banco de dados inicializado
+[INFO]  Limpeza concluída. Tokens removidos: 0
+[INFO] 🧹 Tokens inativos limpos
+[INFO] 🔄 Restaurando 0 sessões conectadas...
+[INFO] ✅ Restauração concluída.
+[INFO] ♻️ Sessões restauradas
+[INFO] ⏱️ Worker de agendamentos ativo (batch=5, idle=30000ms)
+[INFO] Worker de agendamentos iniciado
+[INFO] 📨 Worker de notificações de cobrança ativo (batch=10, delay=3000ms)
+[INFO] Worker de notificações de cobrança iniciado
+[INFO] 🔄 Reconciliador de assinaturas ativo (intervalo=7200000ms, shards=10, batch=25)
+[INFO] Reconciliador de assinaturas iniciado
+[INFO] Worker de analytics iniciado
+[INFO] ⏱️ Worker de drip ativo (batch=10, idle=20000ms)
+[INFO] Worker de drip iniciado
+[INFO] Sweep de cobranças iniciado
+[INFO] 🚀 Server online em http://localhost:3000
+[INFO] 🔌 Socket conectado: TMO5XzC0vH8jHvPcAAAB
+[INFO] ❌ Socket desconectado: TMO5XzC0vH8jHvPcAAAB
+[INFO] 🔌 Socket conectado: mmEDeCm1nKVuGvn7AAAD
+[INFO] ❌ Socket desconectado: mmEDeCm1nKVuGvn7AAAD
+[INFO] 🔌 Socket conectado: ESs7QUKueEowPbPwAAAF
+[INFO]  Apagando sessão COMPLETA: USER1_CELULAR
+[INFO] OK Sessão totalmente removida: USER1_CELULAR
+[INFO]  Criando sessão: USER1_zapconnect
+[32minfo[39m:     
+   _       ______  ____  ______                            __ 
+  | |     / / __ \/ __ \/ ____/___  ____  ____  ___  _____/ /_
+  | | /| / / /_/ / /_/ / /   / __ \/ __ \/ __ \/ _ \/ ___/ __/
+  | |/ |/ / ____/ ____/ /___/ /_/ / / / / / / /  __/ /__/ /_  
+  |__/|__/_/   /_/    \____/\____/_/ /_/_/ /_/\___/\___/\__/
+[32minfo[39m:     Checking for updates
+[32minfo[39m:     There is a new version available
+[32minfo[39m:     ┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│   There is a new version of Wppconnect 1.41.3 ➜  2.0.2   │
+│   Update your package by running:                        │
+│                                                          │
+│   > npm update @wppconnect-team/wppconnect               │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+[32minfo[39m:     For more info visit: https://github.com/wppconnect-team/wppconnect/blob/master/README.md#update-checking
+
+[32minfo[39m:     [USER1_zapconnect:browser] Using browser folder 'tokens\USER1_zapconnect'
+[32minfo[39m:     [USER1_zapconnect:browser] Initializing browser...
+[31merror[39m:    [USER1_zapconnect:browser] Error no open browser
+[31merror[39m:    [USER1_zapconnect:browser] spawn EPERM
+[ERROR] Error: spawn EPERM
+    at ChildProcess.spawn (node:internal/child_process:420:11)
+    at Object.spawn (node:child_process:786:9)
+    at new Process (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\@puppeteer\browsers\lib\cjs\launch.js:177:61)
+    at launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\@puppeteer\browsers\lib\cjs\launch.js:71:12)
+    at ChromeLauncher.launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\puppeteer-core\lib\cjs\puppeteer\node\BrowserLauncher.js:103:54)
+    at async PuppeteerExtra.launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\puppeteer-extra\dist\index.cjs.js:128:25)
+[INFO] ❌ Socket desconectado: ESs7QUKueEowPbPwAAAF
+[INFO] 🔌 Socket conectado: U7NJ6EVMvCiozLEqAAAH
+[INFO]  Apagando sessão COMPLETA: USER1_zapconnect
+[INFO] OK Sessão totalmente removida: USER1_zapconnect
+[INFO]  Criando sessão: USER1_zapconnect
+[32minfo[39m:     [USER1_zapconnect:browser] Using browser folder 'tokens\USER1_zapconnect'
+[32minfo[39m:     [USER1_zapconnect:browser] Initializing browser...
+[31merror[39m:    [USER1_zapconnect:browser] Error no open browser
+[31merror[39m:    [USER1_zapconnect:browser] spawn EPERM
+[ERROR] Error: spawn EPERM
+    at ChildProcess.spawn (node:internal/child_process:420:11)
+    at Object.spawn (node:child_process:786:9)
+    at new Process (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\@puppeteer\browsers\lib\cjs\launch.js:177:61)
+    at launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\@puppeteer\browsers\lib\cjs\launch.js:71:12)
+    at ChromeLauncher.launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\puppeteer-core\lib\cjs\puppeteer\node\BrowserLauncher.js:103:54)
+    at async PuppeteerExtra.launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\puppeteer-extra\dist\index.cjs.js:128:25)
+[INFO]  Apagando sessão COMPLETA: USER1_zapconnect
+[INFO] OK Sessão totalmente removida: USER1_zapconnect
+[INFO]  Criando sessão: USER1_CELULAR
+[32minfo[39m:     [USER1_CELULAR:browser] Using browser folder 'tokens\USER1_CELULAR'
+[32minfo[39m:     [USER1_CELULAR:browser] Initializing browser...
+[31merror[39m:    [USER1_CELULAR:browser] Error no open browser
+[31merror[39m:    [USER1_CELULAR:browser] spawn EPERM
+[ERROR] Error: spawn EPERM
+    at ChildProcess.spawn (node:internal/child_process:420:11)
+    at Object.spawn (node:child_process:786:9)
+    at new Process (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\@puppeteer\browsers\lib\cjs\launch.js:177:61)
+    at launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\@puppeteer\browsers\lib\cjs\launch.js:71:12)
+    at ChromeLauncher.launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\puppeteer-core\lib\cjs\puppeteer\node\BrowserLauncher.js:103:54)
+    at async PuppeteerExtra.launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\puppeteer-extra\dist\index.cjs.js:128:25)
+[INFO] ❌ Socket desconectado: U7NJ6EVMvCiozLEqAAAH
+[INFO] 🔌 Socket conectado: hZdAskmRdYvtCx1pAAAJ
+[INFO]  Apagando sessão COMPLETA: USER1_CELULAR
+[INFO] OK Sessão totalmente removida: USER1_CELULAR
+[INFO]  Criando sessão: USER1_AAA
+[32minfo[39m:     [USER1_AAA:browser] Using browser folder 'tokens\USER1_AAA'
+[32minfo[39m:     [USER1_AAA:browser] Initializing browser...
+[31merror[39m:    [USER1_AAA:browser] Error no open browser
+[31merror[39m:    [USER1_AAA:browser] spawn EPERM
+[ERROR] Error: spawn EPERM
+    at ChildProcess.spawn (node:internal/child_process:420:11)
+    at Object.spawn (node:child_process:786:9)
+    at new Process (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\@puppeteer\browsers\lib\cjs\launch.js:177:61)
+    at launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\@puppeteer\browsers\lib\cjs\launch.js:71:12)
+    at ChromeLauncher.launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\puppeteer-core\lib\cjs\puppeteer\node\BrowserLauncher.js:103:54)
+    at async PuppeteerExtra.launch (C:\Users\Vinicius\Desktop\projetos\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\node_modules\puppeteer-extra\dist\index.cjs.js:128:25)
+[INFO] ❌ Socket desconectado: hZdAskmRdYvtCx1pAAAJ
+[INFO] 🔌 Socket conectado: E_a3W1EZywajXvh3AAAL
+[ERROR] ❌ authMiddleware error: {
+  error: {
+    name: 'Error',
+    message: '',
+    stack: 'Error\n' +
+      '    at PromisePool.query (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\mysql2\\lib\\promise\\pool.js:36:22)\n' +
+      '    at Object.get (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/database.ts:787:12086)\n' +
+      '    at findUserByToken (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/utils/authSession.ts:1:1795)\n' +
+      '    at authMiddleware (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/server.ts:36:2751)\n' +
+      '    at Layer.handleRequest (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\lib\\layer.js:152:17)\n' +
+      '    at next (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\lib\\route.js:157:13)\n' +
+      '    at Route.dispatch (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\lib\\route.js:117:3)\n' +
+      '    at handle (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\index.js:435:11)\n' +
+      '    at Layer.handleRequest (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\lib\\layer.js:152:17)\n' +
+      '    at C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\index.js:295:15'
+  }
+}
+[ERROR] ❌ Erro crítico no worker de notificações: {
+  error: {
+    name: 'Error',
+    message: '',
+    stack: 'Error\n' +
+      '    at PromisePool.query (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\mysql2\\lib\\promise\\pool.js:36:22)\n' +
+      '    at Object.all (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/database.ts:787:12175)\n' +
+      '    at claimDueNotifications (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/workers/notificationWorker.ts:10:194)\n' +
+      '    at runCycle (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/workers/notificationWorker.ts:85:821)\n' +
+      '    at Timeout._onTimeout (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/workers/notificationWorker.ts:85:474)\n' +
+      '    at listOnTimeout (node:internal/timers:588:17)\n' +
+      '    at process.processTimers (node:internal/timers:523:7)'
+  }
+}
+[ERROR] Erro crítico no worker de drip: {
+  error: {
+    name: 'Error',
+    message: '',
+    stack: 'Error\n' +
+      '    at PromisePool.query (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\mysql2\\lib\\promise\\pool.js:36:22)\n' +
+      '    at Object.all (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/database.ts:787:12175)\n' +
+      '    at claimDueDripEnrollments (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/workers/dripWorker.ts:7:727)\n' +
+      '    at runCycle (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/workers/dripWorker.ts:97:6225)\n' +
+      '    at Timeout._onTimeout (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/workers/dripWorker.ts:97:5884)\n' +
+      '    at listOnTimeout (node:internal/timers:588:17)\n' +
+      '    at process.processTimers (node:internal/timers:523:7)'
+  }
+}
+[ERROR] Erro ao calcular próximo ciclo drip: {
+  error: {
+    name: 'Error',
+    message: '',
+    stack: 'Error\n' +
+      '    at PromisePool.query (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\mysql2\\lib\\promise\\pool.js:36:22)\n' +
+      '    at Object.get (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/database.ts:787:12086)\n' +
+      '    at resolveNextDripCycleDelay (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/workers/dripWorker.ts:41:177)\n' +
+      '    at runCycle (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/workers/dripWorker.ts:97:6484)\n' +
+      '    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)'
+  }
+}
+[ERROR] ❌ authMiddleware error: {
+  error: {
+    name: 'Error',
+    message: '',
+    stack: 'Error\n' +
+      '    at PromisePool.query (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\mysql2\\lib\\promise\\pool.js:36:22)\n' +
+      '    at Object.get (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/database.ts:787:12086)\n' +
+      '    at findUserByToken (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/utils/authSession.ts:1:1795)\n' +
+      '    at authMiddleware (file:///C:/Users/Vinicius/Desktop/projetos/whatsapp-bot-ia%20-%20multisessoes%20-%203.0%20-%20Stripe%20-%20mysql/src/server.ts:36:2751)\n' +
+      '    at Layer.handleRequest (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\lib\\layer.js:152:17)\n' +
+      '    at next (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\lib\\route.js:157:13)\n' +
+      '    at Route.dispatch (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\lib\\route.js:117:3)\n' +
+      '    at handle (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\index.js:435:11)\n' +
+      '    at Layer.handleRequest (C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\lib\\layer.js:152:17)\n' +
+      '    at C:\\Users\\Vinicius\\Desktop\\projetos\\whatsapp-bot-ia - multisessoes - 3.0 - Stripe - mysql\\node_modules\\router\\index.js:295:15'
+  }
+}
+[INFO] ❌ Socket desconectado: E_a3W1EZywajXvh3AAAL
+[INFO] 🔌 Socket conectado: QHyXK1mYpIbp2LmIAAAN
+[INFO] ❌ Socket desconectado: QHyXK1mYpIbp2LmIAAAN
+[INFO] 🔌 Socket conectado: JUeg4n33OECpIcMoAAAP
+[INFO] ❌ Socket desconectado: JUeg4n33OECpIcMoAAAP

@@ -57,6 +57,8 @@ import {
 } from "./services/dripCampaignService";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
+import { getAiProviderSummary } from "./utils/aiProvider";
+import { normalizeEmail } from "./utils/email";
 import { validatePhone } from "./utils/phoneUtils";
 import {
   cleanupLocalMediaFile,
@@ -71,6 +73,10 @@ import {
 } from "./utils/humanDelay";
 import { withTimeout } from "./utils/withTimeout";
 import { runChatHistoryCleanup } from "./services/chatHistoryCleaner";
+import {
+  appendConversationHistoryEntries,
+  clearConversationHistory,
+} from "./services/conversationHistoryService";
 import { getPlanConfig, listPlanConfigs } from "./services/planConfigs";
 import {
   getChargeCadenceMessageType,
@@ -104,14 +110,21 @@ import { setSocketServer } from "./lib/socketEmitter";
 import { logAudit } from "./utils/audit";
 import {
   disparoUserLimiter,
+  kbQueryLimiter,
+  kbUploadLimiter,
+  kbUrlLimiter,
   loginLimiter,
   registerLimiter,
   forgotPasswordLimiter,
   resendEmailLimiter,
 } from "./middlewares/rateLimiter";
+import { BASE_URL, buildPortInUseHelp, HTTP_PORT } from "./utils/appBaseUrl";
+import {
+  buildPromptFromAiConfiguration,
+  normalizeAiConfiguration,
+} from "./services/aiConfiguration";
 // setupLogging é chamado em index.ts antes de carregar o servidor
 
-const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 const MAX_CHAT_MESSAGES = Number(process.env.MAX_CHAT_MESSAGES || 500);
 const TRIAL_EMAIL_SWEEP_MS = 60 * 60 * 1000; // 1h
 const COBRANCAS_SWEEP_INTERVAL_MS = 15 * 60 * 1000; // 15 min
@@ -390,6 +403,7 @@ import {
   cancelAIDebounce,
   chatHumanLastActivity,
   chatHumanDuration,
+  removeHumanModeBusinessLabel,
   invalidateChatAICache,
   getWppRuntimeCacheStats,
   shutdownWppClients,
@@ -409,6 +423,18 @@ import {
   issueUserSession,
   setAuthCookie,
 } from "./utils/authSession";
+import {
+  buildGoogleAuthUrl,
+  createGoogleOAuthNonce,
+  createGoogleOAuthState,
+  exchangeGoogleCodeForProfile,
+  getGoogleOAuthCookieClearOptions,
+  getGoogleOAuthCookieOptions,
+  GOOGLE_OAUTH_NONCE_COOKIE,
+  GOOGLE_OAUTH_STATE_COOKIE,
+  GoogleAuthError,
+  isGoogleAuthConfigured,
+} from "./utils/googleAuth";
 
 
 const app = express();
@@ -1551,6 +1577,17 @@ io.on("connection", (socket) => {
            WHERE id = ?`,
           [userId]
         );
+        await appendConversationHistoryEntries({
+          userId,
+          sessionName: session.session_name,
+          chatId,
+          entries: [
+            {
+              role: "model",
+              parts: [{ text: String(body || "").trim() || `[Arquivo enviado: ${safeFile.filename}]` }],
+            },
+          ],
+        });
         io.to(`user:${userId}`).emit("onboarding:step", { step: 4 });
         return;
       }
@@ -1578,6 +1615,12 @@ io.on("connection", (socket) => {
          WHERE id = ?`,
         [userId]
       );
+      await appendConversationHistoryEntries({
+        userId,
+        sessionName: session.session_name,
+        chatId,
+        entries: [{ role: "model", parts: [{ text: String(body || "").trim() }] }],
+      });
       io.to(`user:${userId}`).emit("onboarding:step", { step: 4 });
 
     } catch (err) {
@@ -1615,6 +1658,7 @@ io.on("connection", (socket) => {
 
       chatHumanLock.set(humanKey, false);
       chatHumanLastActivity.delete(humanKey);
+      void removeHumanModeBusinessLabel(userId, sessionName, chatId);
 
       cancelAIDebounce(chatKey);
 
@@ -1892,7 +1936,7 @@ io.on("connection", (socket) => {
    * ❌ DISCONNECT
    * =========================================================
    */
-  // 🧹 LIMPAR HISTÓRICO DA IA (GEMINI) POR CHAT
+  // 🧹 LIMPAR HISTÓRICO DA CONVERSA USADO PELA IA POR CHAT
   socket.on("ai:clear_history", async ({ chatId }) => {
     try {
       const userId = socket.data.userId as number | undefined;
@@ -1904,12 +1948,16 @@ io.on("connection", (socket) => {
         [userId]
       );
 
-      if (!session) return;
-
-      await stopChatSession(Number(userId), session.session_name, chatId);
+      if (session?.session_name) {
+        await stopChatSession(Number(userId), session.session_name, chatId);
+      }
+      await clearConversationHistory({
+        userId: Number(userId),
+        chatId,
+      });
 
       socket.emit("ai:history_cleared", { chatId });
-      console.log(`🧹 Histórico Gemini limpo — user:${userId} chat:${chatId}`);
+      console.log(`🧹 Histórico da conversa limpo — user:${userId} chat:${chatId}`);
     } catch (err) {
       console.error("❌ Erro ao limpar histórico IA:", err);
     }
@@ -2143,7 +2191,8 @@ app.get("/user", authMiddleware, async (req, res) => {
     planConfig,
     payments: payments || [],          // 🔥 SEMPRE define
     lastPaymentAt: lastPayment?.created_at || null,
-    now: Date.now()
+    now: Date.now(),
+    aiProviderSummary: getAiProviderSummary(process.env.AI_SELECTED),
   });
 });
 
@@ -2518,8 +2567,183 @@ app.get("/checkout/pending", authMiddleware, async (req, res) => {
   res.render("checkout-pending");
 });
 
-app.get("/login", (_req, res) => {
-  res.render("login"); // ⬅️ render EJS
+app.get("/login", (req, res) => {
+  res.render("login", {
+    authError: resolveGoogleAuthErrorMessage(req.query.authError),
+    googleEnabled: isGoogleAuthConfigured(),
+  });
+});
+
+app.get("/auth/google", (req, res) => {
+  if (!isGoogleAuthConfigured()) {
+    return redirectToGoogleAuthError(res, "google_not_configured");
+  }
+
+  try {
+    const state = createGoogleOAuthState();
+    const nonce = createGoogleOAuthNonce();
+    const cookieOptions = getGoogleOAuthCookieOptions();
+
+    res.cookie(GOOGLE_OAUTH_STATE_COOKIE, state, cookieOptions);
+    res.cookie(GOOGLE_OAUTH_NONCE_COOKIE, nonce, cookieOptions);
+
+    const authUrl = buildGoogleAuthUrl(BASE_URL, state, nonce);
+    return res.redirect(authUrl);
+  } catch (err) {
+    console.error("❌ Erro ao iniciar Google OAuth:", err);
+    return redirectToGoogleAuthError(res, "google_callback_failed");
+  }
+});
+
+app.get("/auth/google/callback", async (req, res) => {
+  const providerError = String(req.query.error || "").trim();
+  const code = String(req.query.code || "").trim();
+  const state = String(req.query.state || "").trim();
+  const expectedState = String(req.cookies?.[GOOGLE_OAUTH_STATE_COOKIE] || "").trim();
+  const expectedNonce = String(req.cookies?.[GOOGLE_OAUTH_NONCE_COOKIE] || "").trim();
+
+  clearGoogleOAuthCookies(res);
+
+  if (providerError) {
+    return redirectToGoogleAuthError(
+      res,
+      providerError === "access_denied" ? "google_access_denied" : "google_callback_failed"
+    );
+  }
+
+  if (!code || !state || !expectedState || state !== expectedState || !expectedNonce) {
+    return redirectToGoogleAuthError(res, "google_invalid_state");
+  }
+
+  try {
+    const profile = await exchangeGoogleCodeForProfile(BASE_URL, code, expectedNonce);
+
+    if (!profile.emailVerified) {
+      return redirectToGoogleAuthError(res, "google_email_not_verified");
+    }
+
+    const db = getDB();
+    const now = Date.now();
+    const trialDays = 7;
+    const normalizedEmail = normalizeEmail(profile.email);
+    let user = await db.get<any>(`SELECT * FROM users WHERE google_id = ? LIMIT 1`, [profile.sub]);
+
+    if (!user) {
+      const linkedByEmail = await findUserByEmailIdentity(profile.email);
+
+      if (linkedByEmail) {
+        if (linkedByEmail.google_id && linkedByEmail.google_id !== profile.sub) {
+          return redirectToGoogleAuthError(res, "google_account_conflict");
+        }
+
+        await db.run(
+          `
+          UPDATE users
+          SET google_id = ?,
+              email_verified = 1,
+              email_verify_token = NULL,
+              email_verify_expires = NULL
+          WHERE id = ?
+          `,
+          [profile.sub, linkedByEmail.id]
+        );
+
+        user = await db.get<any>(`SELECT * FROM users WHERE id = ? LIMIT 1`, [linkedByEmail.id]);
+      } else {
+        const ip = getClientIp(req);
+
+        if (ip) {
+          const limitRow = await db.get<{ total: number }>(
+            `
+            SELECT COUNT(DISTINCT user_id) AS total
+            FROM ip_registrations
+            WHERE ip = ?
+              AND created_at >= ?
+            `,
+            [ip, now - IP_WINDOW_MS]
+          );
+
+          if (Number(limitRow?.total || 0) >= 3) {
+            return redirectToGoogleAuthError(res, "google_signup_blocked");
+          }
+        }
+
+        const generatedPassword = await bcrypt.hash(crypto.randomBytes(32).toString("hex"), 10);
+        const session = createSessionToken(now);
+        const result = await db.run(
+          `
+          INSERT INTO users (
+            name, email, email_normalized, password, prompt, token, token_expires_at,
+            plan, subscription_status, plan_expires_at, trial_started_at,
+            email_verified, email_verify_token, email_verify_expires,
+            signup_device_id, google_id
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `,
+          [
+            profile.name,
+            profile.email,
+            normalizedEmail,
+            generatedPassword,
+            "",
+            session.token,
+            session.expiresAt,
+            "free",
+            "trial",
+            now + trialDays * 24 * 60 * 60 * 1000,
+            now,
+            1,
+            null,
+            null,
+            null,
+            profile.sub,
+          ]
+        );
+
+        const userId = Number(result.insertId || 0);
+        if (!userId) {
+          return redirectToGoogleAuthError(res, "google_signup_blocked");
+        }
+
+        if (ip) {
+          await db.run(
+            `INSERT INTO ip_registrations (ip, user_id, created_at) VALUES (?, ?, ?)`,
+            [ip, userId, now]
+          );
+        }
+
+        user = await db.get<any>(`SELECT * FROM users WHERE id = ? LIMIT 1`, [userId]);
+      }
+    } else if (Number(user.email_verified) !== 1) {
+      await db.run(
+        `
+        UPDATE users
+        SET email_verified = 1,
+            email_verify_token = NULL,
+            email_verify_expires = NULL
+        WHERE id = ?
+        `,
+        [user.id]
+      );
+
+      user = {
+        ...user,
+        email_verified: 1,
+      };
+    }
+
+    if (!user) {
+      return redirectToGoogleAuthError(res, "google_callback_failed");
+    }
+
+    const session = await issueUserSession(user.id);
+    setAuthCookie(res, session.token);
+    return res.redirect("/painel");
+  } catch (err) {
+    console.error("❌ Erro no callback Google OAuth:", err);
+    const errorCode = err instanceof GoogleAuthError ? err.code : "google_callback_failed";
+    return redirectToGoogleAuthError(res, errorCode);
+  }
 });
 
 app.get("/auth/me", authMiddleware, async (req, res) => {
@@ -2537,7 +2761,9 @@ app.get("/auth/me", authMiddleware, async (req, res) => {
 
 app.get("/", (_req, res) => res.redirect("/painel"));
 app.get("/register", (_req, res) => {
-  res.render("register");
+  res.render("register", {
+    googleEnabled: isGoogleAuthConfigured(),
+  });
 });
 app.get("/onboarding", (_req, res) => {
   res.render("onboarding");
@@ -2656,7 +2882,7 @@ app.get("/api/chats", authMiddleware, async (_req, res) => {
 });
 
 // 📚 Base de conhecimento (RAG)
-app.post("/api/kb/upload", authMiddleware, async (req, res) => {
+app.post("/api/kb/upload", authMiddleware, kbUploadLimiter, async (req, res) => {
   try {
     const user = (req as any).user;
     const { name, content, sessionScope, fileBase64, fileName } = req.body || {};
@@ -2703,7 +2929,7 @@ app.post("/api/kb/upload", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/kb/url", authMiddleware, async (req, res) => {
+app.post("/api/kb/url", authMiddleware, kbUrlLimiter, async (req, res) => {
   try {
     const user = (req as any).user;
     const { url, name, sessionScope } = req.body || {};
@@ -2736,7 +2962,7 @@ app.get("/api/kb/list", authMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/kb/query", authMiddleware, async (req, res) => {
+app.post("/api/kb/query", authMiddleware, kbQueryLimiter, async (req, res) => {
   try {
     const user = (req as any).user;
     const { query, sessionName, chatId, topK } = req.body || {};
@@ -4528,12 +4754,27 @@ app.post("/api/crm/stage", authMiddleware, subscriptionGuard, async (req, res) =
 app.post("/api/crm/tag", authMiddleware, subscriptionGuard, async (req, res) => {
   try {
     const db = getDB();
+    const user = (req as any).user;
     const { id, tag } = req.body;
+    const crmId = Number(id || 0);
 
     if (!id || !tag)
       return res.status(400).json({ ok: false, error: "ID e tag obrigatórios" });
 
-    const row = await db.get(`SELECT tags FROM crm WHERE id = ?`, [id]);
+    const row = await db.get(
+      `
+      SELECT tags
+      FROM crm
+      WHERE id = ? AND user_id = ?
+      LIMIT 1
+      `,
+      [crmId, user.id]
+    );
+
+    if (!row) {
+      return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+    }
+
     let tags = [];
 
     try {
@@ -4545,8 +4786,8 @@ app.post("/api/crm/tag", authMiddleware, subscriptionGuard, async (req, res) => 
     tags.push(tag);
 
     await db.run(
-      `UPDATE crm SET tags = ? WHERE id = ?`,
-      [JSON.stringify(tags), id]
+      `UPDATE crm SET tags = ? WHERE id = ? AND user_id = ?`,
+      [JSON.stringify(tags), crmId, user.id]
     );
 
     res.json({ ok: true, tags });
@@ -4565,8 +4806,23 @@ app.post("/api/crm/note", authMiddleware, subscriptionGuard, async (req, res) =>
   if (!id || !text) return res.status(400).json({ ok: false, error: "Dados faltando" });
 
   try {
+    const user = (req as any).user;
     const db = getDB();
-    const client = await db.get(`SELECT notes FROM crm WHERE id = ?`, [id]);
+    const crmId = Number(id || 0);
+
+    const client = await db.get(
+      `
+      SELECT notes
+      FROM crm
+      WHERE id = ? AND user_id = ?
+      LIMIT 1
+      `,
+      [crmId, user.id]
+    );
+
+    if (!client) {
+      return res.status(404).json({ ok: false, error: "Cliente não encontrado" });
+    }
 
     let notes = [];
     try { notes = JSON.parse(client?.notes || "[]"); } catch { }
@@ -4578,9 +4834,10 @@ app.post("/api/crm/note", authMiddleware, subscriptionGuard, async (req, res) =>
 
     notes.unshift(note);
 
-    await db.run(`UPDATE crm SET notes = ? WHERE id = ?`, [
+    await db.run(`UPDATE crm SET notes = ? WHERE id = ? AND user_id = ?`, [
       JSON.stringify(notes),
-      id
+      crmId,
+      user.id
     ]);
 
     return res.json({ ok: true, notes });
@@ -5244,31 +5501,6 @@ app.delete("/api/fallback-settings", authMiddleware, async (req, res) => {
 const REGISTRATION_GENERIC_ERROR = "Não foi possível criar sua conta. Entre em contato com o suporte.";
 const IP_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
-function normalizeEmail(rawEmail: string): string {
-  const email = String(rawEmail || "").trim().toLowerCase();
-  const [localPart, domain] = email.split("@");
-  if (!localPart || !domain) return email;
-
-  const withoutAlias = localPart.split("+")[0];
-  const domainsWithoutDots = new Set([
-    "gmail.com",
-    "googlemail.com",
-    "outlook.com",
-    "outlook.com.br",
-    "hotmail.com",
-    "hotmail.com.br",
-    "live.com",
-    "live.com.br",
-    "msn.com",
-  ]);
-
-  const cleanedLocal = domainsWithoutDots.has(domain)
-    ? withoutAlias.replace(/\./g, "")
-    : withoutAlias;
-
-  return `${cleanedLocal}@${domain}`;
-}
-
 function getClientIp(req: Request): string | null {
   const forwarded = req.headers["x-forwarded-for"];
   const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
@@ -5279,6 +5511,59 @@ function getClientIp(req: Request): string | null {
 
 const shortDeviceId = (deviceId?: string | null) =>
   deviceId ? deviceId.slice(0, 8) : null;
+
+function resolveGoogleAuthErrorMessage(rawCode: unknown): string | null {
+  const code = String(rawCode || "").trim();
+  if (!code) return null;
+
+  const messages: Record<string, string> = {
+    access_denied: "A autenticação com Google foi cancelada.",
+    google_access_denied: "A autenticação com Google foi cancelada.",
+    google_account_conflict: "Este Google já está vinculado a outra conta.",
+    google_callback_failed: "Não foi possível concluir a autenticação com Google.",
+    google_email_not_verified: "Seu e-mail do Google precisa estar verificado.",
+    google_incomplete_profile: "O Google não retornou os dados mínimos da conta.",
+    google_invalid_audience: "A configuração do Google OAuth está inválida.",
+    google_invalid_id_token: "Não foi possível validar o login do Google.",
+    google_invalid_issuer: "A configuração do Google OAuth está inválida.",
+    google_invalid_nonce: "A validação de segurança do Google expirou. Tente novamente.",
+    google_invalid_state: "A validação de segurança do Google expirou. Tente novamente.",
+    google_missing_access_token: "O Google não retornou um token de acesso válido.",
+    google_not_configured: "Login com Google não está configurado neste ambiente.",
+    google_profile_fetch_failed: "Não foi possível carregar o perfil da sua conta Google.",
+    google_signup_blocked: "Não foi possível criar sua conta com Google agora.",
+    google_token_exchange_failed: "Não foi possível confirmar sua conta Google agora.",
+  };
+
+  return messages[code] || "Não foi possível concluir a autenticação com Google.";
+}
+
+function clearGoogleOAuthCookies(res: Response) {
+  const clearOptions = getGoogleOAuthCookieClearOptions();
+  res.clearCookie(GOOGLE_OAUTH_STATE_COOKIE, clearOptions);
+  res.clearCookie(GOOGLE_OAUTH_NONCE_COOKIE, clearOptions);
+}
+
+function redirectToGoogleAuthError(res: Response, code: string) {
+  return res.redirect(`/login?authError=${encodeURIComponent(code)}`);
+}
+
+async function findUserByEmailIdentity(email: string) {
+  const db = getDB();
+  const rawEmail = String(email || "").trim();
+  const normalizedEmail = normalizeEmail(rawEmail);
+  const rows = await db.all<any>(
+    `SELECT * FROM users WHERE email = ? OR email_normalized = ?`,
+    [rawEmail, normalizedEmail]
+  );
+
+  return (
+    rows.find((row) => {
+      const storedNorm = row.email_normalized || normalizeEmail(row.email);
+      return storedNorm === normalizedEmail;
+    }) || null
+  );
+}
 
 app.post("/register", registerLimiter, async (req, res) => {
   const { name, email, password, prompt } = req.body;
@@ -5445,12 +5730,7 @@ app.post("/auth/login", loginLimiter, async (req, res) => {
 
   if (requireFields(res, { email, password })) return;
 
-  const db = getDB();
-
-  const user = await db.get<any>(
-    "SELECT * FROM users WHERE email = ?",
-    [email]
-  );
+  const user = await findUserByEmailIdentity(email);
 
   // 🔒 nunca diga se o email existe ou não
   if (!user) {
@@ -5541,6 +5821,29 @@ app.post("/user/update-prompt", authMiddleware, async (req, res) => {
   await logAudit("prompt_update", user.id, "user", user.id, { length: (prompt || "").length });
 
   res.json({ ok: true });
+});
+
+app.post("/user/ai-config", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const config = normalizeAiConfiguration(req.body?.config);
+    const prompt = buildPromptFromAiConfiguration(config);
+    const db = getDB();
+
+    await db.run(
+      `UPDATE users SET ai_config = ?, prompt = ? WHERE id = ?`,
+      [JSON.stringify(config), prompt, user.id]
+    );
+
+    await logAudit("ai_config_update", user.id, "user", user.id, {
+      promptLength: prompt.length,
+    });
+
+    return res.json({ ok: true, prompt });
+  } catch (err) {
+    console.error("Erro ao salvar configuração da IA:", err);
+    return res.status(500).json({ ok: false, error: "Não foi possível salvar a configuração da IA" });
+  }
 });
 
 app.patch("/api/user/onboarding-step", authMiddleware, async (req, res) => {
@@ -5871,7 +6174,16 @@ setInterval(() => {
       const chatId = parts[1];
 
       const fullKey = parts[0] || "";
-      const userId = Number(fullKey.replace(/^USER/, "").split("_")[0]);
+      const sessionKey = fullKey.replace(/^USER/, "");
+      const separatorIndex = sessionKey.indexOf("_");
+      const userId = Number(separatorIndex >= 0 ? sessionKey.slice(0, separatorIndex) : 0);
+      const sessionName =
+        separatorIndex >= 0 ? sessionKey.slice(separatorIndex + 1) : "";
+
+      if (userId && sessionName && chatId) {
+        void removeHumanModeBusinessLabel(userId, sessionName, chatId);
+      }
+
       io.to(`user:${userId}`).emit("human_state_changed", {
         chatId,
         state: false,
@@ -6111,9 +6423,41 @@ setTimeout(() => {
   }, CLEANUP_INTERVAL_MS);
 }, Math.random() * 60 * 60 * 1000);
 
-server.listen(3000, () => {
-  console.log("🚀 Server online em http://localhost:3000");
-});
+let serverListenPromise: Promise<void> | null = null;
+
+function normalizeListenError(err: Error) {
+  const listenError = err as NodeJS.ErrnoException;
+  if (listenError.code !== "EADDRINUSE") {
+    return err;
+  }
+
+  const friendlyError = new Error(
+    `${buildPortInUseHelp(HTTP_PORT)}\nDetalhe técnico: ${listenError.message}`
+  );
+  friendlyError.name = listenError.name || "Error";
+  return friendlyError;
+}
+
+export function startHttpServer() {
+  if (serverListenPromise) return serverListenPromise;
+
+  serverListenPromise = new Promise((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.off("error", onError);
+      serverListenPromise = null;
+      reject(normalizeListenError(err));
+    };
+
+    server.once("error", onError);
+    server.listen(HTTP_PORT, () => {
+      server.off("error", onError);
+      console.log(`🚀 Server online em http://localhost:${HTTP_PORT}`);
+      resolve();
+    });
+  });
+
+  return serverListenPromise;
+}
 
 
 

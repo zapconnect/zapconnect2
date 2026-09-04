@@ -103,7 +103,11 @@ body.has-app-sidebar.app-shell-collapsed {
   line-height: 1.1;
 }
 
-.app-shell-brand-link span {
+.app-shell-brand-connect {
+  color: #6037EB;
+}
+
+.app-shell-brand-caption {
   display: block;
   margin-top: 4px;
   font-size: 0.74rem;
@@ -270,6 +274,43 @@ body.has-app-sidebar.app-shell-collapsed {
 body.has-app-sidebar.app-chat-page .wrap {
   width: calc(100vw - var(--app-shell-current-width) - var(--app-shell-gap));
   transition: width 0.22s ease;
+}
+
+body.has-app-sidebar.app-screen-framed {
+  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+body.has-app-sidebar.app-screen-viewport {
+  min-height: 100dvh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.app-screen-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll) transparent;
+}
+
+.app-screen-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.app-screen-scroll::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.app-screen-scroll::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 @media (min-width: 1025px) {
@@ -459,6 +500,19 @@ body.has-app-sidebar.app-chat-page .wrap {
     min-height: 100dvh;
     overflow-x: hidden;
     padding-bottom: calc(var(--app-shell-mobile-nav-height) + env(safe-area-inset-bottom) + 12px);
+  }
+
+  body.has-app-sidebar.app-screen-framed,
+  body.has-app-sidebar.app-screen-viewport {
+    height: auto;
+    overflow: auto;
+    display: block;
+  }
+
+  .app-screen-scroll {
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
   }
 
   body.has-app-sidebar.app-chat-page .wrap {

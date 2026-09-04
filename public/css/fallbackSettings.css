@@ -7,10 +7,20 @@ body {
   font-family: "Inter", "Segoe UI", system-ui, sans-serif;
 }
 
+body.app-screen-viewport {
+  margin: 0;
+}
+
 .fallback-page {
   max-width: 1220px;
   margin: 24px auto 72px;
   padding: 0 16px;
+}
+
+.fallback-page.app-screen-scroll {
+  height: 100dvh;
+  margin: 0 auto;
+  padding: 24px 16px 72px;
 }
 
 @media (min-width: 1025px) {

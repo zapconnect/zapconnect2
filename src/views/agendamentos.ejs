@@ -12,7 +12,7 @@
   <script src="/js/app-shell.js" defer></script>
 </head>
 
-<body class="has-app-sidebar" data-user-tz="<%= user.timezone_offset || -180 %>" data-default-ddi="<%= user.default_ddi || '55' %>">
+<body class="has-app-sidebar app-screen-framed" data-user-tz="<%= user.timezone_offset || -180 %>" data-default-ddi="<%= user.default_ddi || '55' %>">
   <%- include("partials/app-sidebar", { activePage: "agendamentos" }) %>
 
   <header class="topbar">
@@ -20,13 +20,9 @@
       <i class="fa-solid fa-calendar-check"></i>
       <h1>Agendamentos</h1>
     </div>
-    <a href="/painel" class="btn-back">
-      <i class="fa-solid fa-arrow-left"></i>
-      Voltar
-    </a>
   </header>
 
-  <main class="container">
+  <main class="container app-screen-scroll">
     <div class="agend-layout">
       <aside class="card agend-calendar-panel">
         <div class="calendar-panel-head">
@@ -298,7 +294,7 @@
           <i class="fa-solid fa-check"></i> Confirmar e agendar
         </button>
         <button id="btnCancelModal" class="btn-secondary" type="button">
-          <i class="fa-solid fa-circle-xmark"></i> Voltar e editar
+          <i class="fa-solid fa-circle-xmark"></i> Cancelar
         </button>
       </div>
     </div>
@@ -522,6 +518,7 @@
         new Intl.DateTimeFormat("pt-BR", {
           month: "long",
           year: "numeric",
+          timeZone: "UTC",
         }).format(date)
       );
     }
@@ -535,6 +532,7 @@
           weekday: "short",
           day: "numeric",
           month: "long",
+          timeZone: "UTC",
         })
           .format(date)
           .replace(".", "")

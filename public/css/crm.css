@@ -615,21 +615,23 @@ body {
 /* Firefox */
 .kanban-board {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.351) transparent;
+  scrollbar-color: var(--scroll) transparent;
 }
 
 /* Chrome / Edge / Safari */
 .kanban-board::-webkit-scrollbar {
-  height: 6px;              /* mais fina */
+  width: 8px;
+  height: 8px;
 }
 
 .kanban-board::-webkit-scrollbar-track {
-  background: transparent; /* some o fundo */
+  background: transparent;
 }
 
 .kanban-board::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.581); /* bem sutil */
+  background: var(--scroll);
   border-radius: 999px;
+  border: 1px solid transparent;
 }
 
 .kanban-board::-webkit-scrollbar-thumb:hover {
@@ -1531,3 +1533,39 @@ body.modal-open {
   transition: opacity .15s;
 }
 .active-tag-badge button:hover { opacity: 1; }
+
+/* ================================
+   Scrollbar padrao do painel
+================================ */
+.kanban-board,
+.modal {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll) transparent;
+}
+
+.kanban-board::-webkit-scrollbar,
+.modal::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.kanban-board::-webkit-scrollbar-track,
+.modal::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.kanban-board::-webkit-scrollbar-thumb,
+.kanban-board::-webkit-scrollbar-thumb:hover,
+.modal::-webkit-scrollbar-thumb,
+.modal::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll);
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+@media (max-width: 600px) {
+  .modal::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+}

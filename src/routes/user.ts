@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { getDB } from "../database";
+import { getAiProviderSummary } from "../utils/aiProvider";
 
 const router = Router();
 
@@ -35,7 +36,8 @@ router.get("/user", async (req, res) => {
     user,
     payments,
     lastPaymentAt: lastPayment?.created_at || null,
-    now: Date.now()
+    now: Date.now(),
+    aiProviderSummary: getAiProviderSummary(process.env.AI_SELECTED),
   });
 });
 

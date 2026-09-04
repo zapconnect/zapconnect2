@@ -18,7 +18,13 @@
   <script src="/socket.io/socket.io.js"></script>
 </head>
 
-<body class="has-app-sidebar">
+<body
+  class="has-app-sidebar"
+  data-sessions-count="<%= Array.isArray(sessions) ? sessions.length : 0 %>"
+  data-has-prompt="<%= user.prompt && user.prompt.length > 10 ? 'true' : 'false' %>"
+  data-first-msg-sent="<%= Number(user.onboarding_step || 0) >= 4 ? 'true' : 'false' %>"
+  data-user-onboarding-step="<%= Number(user.onboarding_step || 0) %>"
+>
   <%- include("partials/app-sidebar", { activePage: "painel" }) %>
 
   <!-- ============================
@@ -99,9 +105,9 @@
               <span class="onboarding-step-badge">Passo 3</span>
               <span class="onboarding-step-state" data-step-status>Pendente</span>
             </div>
-            <h3>Configurar prompt da IA</h3>
+            <h3>Configurar IA</h3>
             <p>Defina tom, regras e limites para a IA responder do seu jeito antes de atender automaticamente.</p>
-            <a href="/painel#prompt" class="onboarding-step-link">Abrir prompt</a>
+            <a href="#prompt" class="onboarding-step-link" onclick="openAiConfigModal()">Configurar IA</a>
           </article>
 
           <article class="onboarding-step-card step-pending" data-step-index="4">
@@ -214,43 +220,20 @@
 
     <div class="grid">
 
-      <!-- 👤 Usuário -->
-      <section class="card" id="prompt">
-        <h2><i class="fa-solid fa-user"></i> Usuário</h2>
-
-        <p><b>ID:</b> <span id="user-id"></span></p>
-        <p><b>Nome:</b> <span id="user-name"></span></p>
-
-        <label class="label">Prompt da IA</label>
-        <textarea id="user-prompt" class="textarea"
-          placeholder="Defina como a IA deve responder aos clientes..."
-          oninput="updatePromptMeta()"></textarea>
-
-        <div class="prompt-meta-v2">
-          <div class="prompt-stats">
-            <div class="prompt-stat">
-              <span id="token-count" class="stat-val">~0</span>
-              <span class="stat-lbl">tokens est.</span>
-            </div>
-            <div class="prompt-stat">
-              <span id="cost-per-msg" class="stat-val">R$0,0000</span>
-              <span class="stat-lbl">custo/msg est.</span>
-            </div>
-            <div class="prompt-stat">
-              <span id="prompt-chars" class="stat-val">0</span>
-              <span class="stat-lbl">caracteres</span>
-            </div>
+      <!-- 🤖 Configuração guiada da IA -->
+      <section class="card ai-config-card" id="prompt">
+        <div class="ai-config-card-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+        <div class="ai-config-card-copy">
+          <span class="tag">Atendimento inteligente</span>
+          <h2>Configure sua IA</h2>
+          <p>Organize como a IA atende em oito áreas simples. Nós cuidamos das instruções técnicas por trás.</p>
+          <div id="ai-config-summary" class="ai-config-summary" aria-live="polite">
+            Ainda não configurada. Comece pela identidade e pelo objetivo da IA.
           </div>
-
-          <div id="prompt-status" class="prompt-status" aria-live="polite">
-            Prompt vazio - o bot respondera sem instrucao.
-          </div>
-          <div id="prompt-tip" class="prompt-tip" aria-live="polite" hidden></div>
         </div>
-
-        <button class="btn btn-primary full" onclick="updatePrompt()">
-          <i class="fa-solid fa-floppy-disk"></i>
-          Salvar Prompt
+        <button class="btn btn-primary ai-config-card-action" type="button" onclick="openAiConfigModal()">
+          <i class="fa-solid fa-sliders"></i>
+          Configurar IA
         </button>
       </section>
 
@@ -401,17 +384,203 @@
 
   </main>
 
+  <div id="ai-config-modal" class="ai-config-modal" hidden aria-hidden="true">
+    <div class="ai-config-backdrop" data-ai-config-close></div>
+    <section class="ai-config-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-config-title">
+      <header class="ai-config-dialog-header">
+        <div>
+          <span class="tag">Configuração guiada</span>
+          <h2 id="ai-config-title"><i class="fa-solid fa-robot"></i> Configure sua IA</h2>
+          <p>Preencha apenas o que fizer sentido para o seu atendimento. Você pode voltar e editar quando quiser.</p>
+        </div>
+        <button class="ai-config-close" type="button" aria-label="Fechar configuração da IA" data-ai-config-close>
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </header>
+
+      <form id="ai-config-form">
+        <div class="ai-config-workspace">
+          <nav class="ai-config-nav" aria-label="Áreas de configuração da IA" role="tablist">
+            <button type="button" class="ai-config-nav-item active" role="tab" aria-selected="true" data-ai-config-section="identity">
+              <i class="fa-solid fa-user-astronaut"></i><span>1. Identidade</span>
+            </button>
+            <button type="button" class="ai-config-nav-item" role="tab" aria-selected="false" data-ai-config-section="objective">
+              <i class="fa-solid fa-bullseye"></i><span>2. Objetivo</span>
+            </button>
+            <button type="button" class="ai-config-nav-item" role="tab" aria-selected="false" data-ai-config-section="knowledge">
+              <i class="fa-solid fa-book-open"></i><span>3. Conhecimento</span>
+            </button>
+            <button type="button" class="ai-config-nav-item" role="tab" aria-selected="false" data-ai-config-section="service">
+              <i class="fa-solid fa-comments"></i><span>4. Atendimento</span>
+            </button>
+            <button type="button" class="ai-config-nav-item" role="tab" aria-selected="false" data-ai-config-section="sales">
+              <i class="fa-solid fa-cart-shopping"></i><span>5. Vendas</span>
+            </button>
+            <button type="button" class="ai-config-nav-item" role="tab" aria-selected="false" data-ai-config-section="scheduling">
+              <i class="fa-solid fa-calendar-days"></i><span>6. Agendamento</span>
+            </button>
+            <button type="button" class="ai-config-nav-item" role="tab" aria-selected="false" data-ai-config-section="human">
+              <i class="fa-solid fa-headset"></i><span>7. Atendimento humano</span>
+            </button>
+            <button type="button" class="ai-config-nav-item" role="tab" aria-selected="false" data-ai-config-section="safety">
+              <i class="fa-solid fa-shield-halved"></i><span>8. Segurança</span>
+            </button>
+          </nav>
+
+          <div class="ai-config-panels">
+            <section class="ai-config-panel active" data-ai-config-panel="identity" role="tabpanel">
+              <div class="ai-config-panel-heading">
+                <span class="ai-config-step">Área 1 de 8</span>
+                <h3><i class="fa-solid fa-user-astronaut" aria-hidden="true"></i> Identidade</h3>
+                <p>Dê à IA uma presença coerente para que ela fale em nome da sua empresa.</p>
+              </div>
+              <div class="ai-config-fields ai-config-fields-two">
+                <label>Nome da IA
+                  <input id="ai-assistant-name" maxlength="120" placeholder="Ex.: Ana, assistente virtual da Acme">
+                </label>
+                <label>Nome da empresa
+                  <input id="ai-company-name" maxlength="180" placeholder="Ex.: Acme Soluções">
+                </label>
+              </div>
+              <label>Função da IA
+                <textarea id="ai-role" rows="3" maxlength="1000" placeholder="Ex.: Consultora de vendas que orienta clientes e ajuda a encontrar o melhor serviço."></textarea>
+              </label>
+              <label>Personalidade e tom de voz
+                <textarea id="ai-personality-tone" rows="3" maxlength="1000" placeholder="Ex.: Cordial, objetiva e próxima. Use português do Brasil, frases curtas e emojis apenas quando fizer sentido."></textarea>
+              </label>
+            </section>
+
+            <section class="ai-config-panel" data-ai-config-panel="objective" role="tabpanel" hidden>
+              <div class="ai-config-panel-heading">
+                <span class="ai-config-step">Área 2 de 8</span>
+                <h3><i class="fa-solid fa-bullseye" aria-hidden="true"></i> Objetivo</h3>
+                <p>Explique o resultado que a IA deve buscar em cada conversa.</p>
+              </div>
+              <label>O que a IA deve fazer?
+                <textarea id="ai-main-objective" rows="7" maxlength="2000" placeholder="Ex.: Entender a necessidade, apresentar as opções adequadas, esclarecer dúvidas e conduzir o cliente para o agendamento de uma demonstração."></textarea>
+              </label>
+            </section>
+
+            <section class="ai-config-panel" data-ai-config-panel="knowledge" role="tabpanel" hidden>
+              <div class="ai-config-panel-heading">
+                <span class="ai-config-step">Área 3 de 8</span>
+                <h3><i class="fa-solid fa-book-open" aria-hidden="true"></i> Conhecimento</h3>
+                <p>Centralize as informações que ajudam a IA a responder com segurança.</p>
+              </div>
+              <label>Sobre a empresa
+                <textarea id="ai-company-context" rows="3" maxlength="2000" placeholder="História, público atendido, localização, diferenciais e informações importantes."></textarea>
+              </label>
+              <label>Produtos e serviços
+                <textarea id="ai-products-services" rows="4" maxlength="2000" placeholder="Descreva o que você vende, benefícios, preços ou condições que podem ser informadas."></textarea>
+              </label>
+              <label>Perguntas frequentes
+                <textarea id="ai-faq" rows="4" maxlength="2000" placeholder="Ex.: Horário de atendimento: seg. a sex., 9h às 18h. Prazo de entrega: até 5 dias úteis."></textarea>
+              </label>
+              <label>Contexto adicional
+                <textarea id="ai-additional-context" rows="3" maxlength="2000" placeholder="Informações que não se encaixam acima, mas que a IA precisa conhecer."></textarea>
+              </label>
+            </section>
+
+            <section class="ai-config-panel" data-ai-config-panel="service" role="tabpanel" hidden>
+              <div class="ai-config-panel-heading">
+                <span class="ai-config-step">Área 4 de 8</span>
+                <h3><i class="fa-solid fa-comments" aria-hidden="true"></i> Atendimento</h3>
+                <p>Defina como começa a conversa e quais dados importam para avançar.</p>
+              </div>
+              <label>Saudação inicial
+                <textarea id="ai-greeting" rows="3" maxlength="1000" placeholder="Ex.: Olá, {nome}! Eu sou a Ana, assistente da Acme. Como posso ajudar você hoje?"></textarea>
+              </label>
+              <label>Fluxo de atendimento
+                <textarea id="ai-service-flow" rows="4" maxlength="2000" placeholder="Ex.: Cumprimente, descubra o que a pessoa procura, faça perguntas de contexto, apresente a opção mais adequada e indique o próximo passo."></textarea>
+              </label>
+              <label>Qualificação de leads
+                <textarea id="ai-lead-qualification" rows="4" maxlength="2000" placeholder="Quais informações a IA deve coletar? Ex.: nome, cidade, produto de interesse, quantidade, orçamento e prazo."></textarea>
+              </label>
+            </section>
+
+            <section class="ai-config-panel" data-ai-config-panel="sales" role="tabpanel" hidden>
+              <div class="ai-config-panel-heading">
+                <span class="ai-config-step">Área 5 de 8</span>
+                <h3><i class="fa-solid fa-cart-shopping" aria-hidden="true"></i> Vendas</h3>
+                <p>Oriente a IA sobre negociações para manter as condições comerciais corretas.</p>
+              </div>
+              <label>Regras comerciais
+                <textarea id="ai-commercial-rules" rows="5" maxlength="2000" placeholder="Formas de pagamento, descontos permitidos, frete, prazos, garantias e o que precisa de confirmação humana."></textarea>
+              </label>
+              <label>Objeções e respostas
+                <textarea id="ai-objections" rows="5" maxlength="2000" placeholder="Ex.: Se a pessoa disser que está caro, destaque o benefício X e ofereça falar com um especialista; não ofereça desconto sem autorização."></textarea>
+              </label>
+            </section>
+
+            <section class="ai-config-panel" data-ai-config-panel="scheduling" role="tabpanel" hidden>
+              <div class="ai-config-panel-heading">
+                <span class="ai-config-step">Área 6 de 8</span>
+                <h3><i class="fa-solid fa-calendar-days" aria-hidden="true"></i> Agendamento</h3>
+                <p>Informe como a IA deve lidar com reservas, horários e confirmações.</p>
+              </div>
+              <label>Disponibilidade
+                <textarea id="ai-availability" rows="3" maxlength="1200" placeholder="Ex.: Atendimento de segunda a sexta, das 9h às 18h. Não agendar em feriados."></textarea>
+              </label>
+              <label>Regras para agendar
+                <textarea id="ai-booking-rules" rows="4" maxlength="2000" placeholder="Quais dados coletar, antecedência mínima, duração, cancelamento e remarcação."></textarea>
+              </label>
+              <label>Calendário e confirmações
+                <textarea id="ai-calendar-instructions" rows="3" maxlength="1200" placeholder="Ex.: Antes de confirmar, peça nome e telefone. Informe que a equipe confirmará a disponibilidade."></textarea>
+              </label>
+            </section>
+
+            <section class="ai-config-panel" data-ai-config-panel="human" role="tabpanel" hidden>
+              <div class="ai-config-panel-heading">
+                <span class="ai-config-step">Área 7 de 8</span>
+                <h3><i class="fa-solid fa-headset" aria-hidden="true"></i> Atendimento humano</h3>
+                <p>Evite que a IA insista em situações que exigem uma pessoa da equipe.</p>
+              </div>
+              <label>Quando transferir para um humano?
+                <textarea id="ai-handoff-conditions" rows="5" maxlength="2000" placeholder="Ex.: Reclamações, cancelamento, negociação fora das regras, pedido técnico complexo, solicitação explícita de falar com uma pessoa."></textarea>
+              </label>
+              <label>Mensagem de transferência
+                <textarea id="ai-handoff-message" rows="3" maxlength="1000" placeholder="Ex.: Vou encaminhar você para uma pessoa da nossa equipe que poderá ajudar melhor. Um momento, por favor."></textarea>
+              </label>
+            </section>
+
+            <section class="ai-config-panel" data-ai-config-panel="safety" role="tabpanel" hidden>
+              <div class="ai-config-panel-heading">
+                <span class="ai-config-step">Área 8 de 8</span>
+                <h3><i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Segurança e comportamento</h3>
+                <p>Defina limites, como encerrar conversas e quaisquer instruções específicas.</p>
+              </div>
+              <label>Restrições
+                <textarea id="ai-restrictions" rows="4" maxlength="2000" placeholder="Ex.: Não invente preços, disponibilidade, prazos ou políticas. Não solicite dados sensíveis. Não faça promessas em nome da empresa."></textarea>
+              </label>
+              <label>Encerramento
+                <textarea id="ai-closing" rows="3" maxlength="1000" placeholder="Ex.: Ao finalizar, confirme se ficou alguma dúvida e se despeça de forma cordial."></textarea>
+              </label>
+              <label>Instruções adicionais
+                <textarea id="ai-advanced-instructions" rows="4" maxlength="2000" placeholder="Regras específicas do seu negócio. Este campo é opcional."></textarea>
+              </label>
+            </section>
+          </div>
+        </div>
+
+        <footer class="ai-config-footer">
+          <span id="ai-config-progress" class="ai-config-progress">0 de 8 áreas preenchidas</span>
+          <div class="ai-config-footer-actions">
+            <button type="button" class="btn btn-secondary" data-ai-config-close>Cancelar</button>
+            <button type="submit" class="btn btn-primary">
+              <i class="fa-solid fa-floppy-disk"></i>
+              Salvar configuração
+            </button>
+          </div>
+        </footer>
+      </form>
+    </section>
+  </div>
+
   <footer>
     © 2026 ZapConnect — Todos os direitos reservados.<br>
     Desenvolvido por <a href="https://www.instagram.com/vini__n10?igsh=NzF4am94bjhmdHJ6" target="_blank">Vinicius Souza</a>
   </footer>
 
-  <script>
-    window.SESSIONS_COUNT = <%= Array.isArray(sessions) ? sessions.length : 0 %>;
-    window.HAS_PROMPT = <%= user.prompt && user.prompt.length > 10 ? 'true' : 'false' %>;
-    window.FIRST_MSG_SENT = <%= Number(user.onboarding_step || 0) >= 4 ? 'true' : 'false' %>;
-    window.USER_ONBOARDING_STEP = <%= Number(user.onboarding_step || 0) %>;
-  </script>
   <script src="/js/index.js"></script>
   <script src="/js/config.js"></script>
 

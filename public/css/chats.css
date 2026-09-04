@@ -92,9 +92,21 @@ body.has-app-sidebar.app-chat-page .btn-voltar{
   overflow-x:auto;
   border-bottom:1px solid #0f1a1f;
   background:linear-gradient(180deg, rgba(17,27,33,0.96), rgba(11,20,26,0.88));
-  scrollbar-width:none;
+  scrollbar-width:thin;
+  scrollbar-color:var(--scroll) transparent;
 }
-.chat-tag-filters::-webkit-scrollbar{ display:none; }
+.chat-tag-filters::-webkit-scrollbar{
+  width:8px;
+  height:8px;
+}
+.chat-tag-filters::-webkit-scrollbar-thumb{
+  background:var(--scroll);
+  border-radius:999px;
+  border:1px solid transparent;
+}
+.chat-tag-filters::-webkit-scrollbar-track{
+  background:transparent;
+}
 .chat-tag-filters-empty{
   font-size:11px;
   color:#667387;

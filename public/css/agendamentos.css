@@ -17,7 +17,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 14px 20px;
+  padding: 10px 20px;
   background: rgba(22,27,48,.9);
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--stroke);
@@ -25,12 +25,19 @@ body {
 
 .brand {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: center;
 }
 
 .brand i {
   color: var(--accent);
+  font-size: 1rem;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 1.2rem;
+  line-height: 1.2;
 }
 
 .btn-back {

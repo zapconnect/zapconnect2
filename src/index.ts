@@ -6,6 +6,7 @@ import { initDB } from "./database";
 import {
   restoreSessionsOnStartup,
   markAppReady,
+  startHttpServer,
   startCobrancasSweepCron,
 } from "./server";
 import { cleanupInactiveTokens } from "./wppManager";
@@ -47,6 +48,7 @@ async function start() {
     startCobrancasSweepCron();
     console.log("Sweep de cobranças iniciado");
 
+    await startHttpServer();
     markAppReady(true);
   } catch (err) {
     console.error("❌ Erro ao iniciar aplicação:", err);

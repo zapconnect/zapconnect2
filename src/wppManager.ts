@@ -48,10 +48,11 @@ import {
   updateChargeWhatsappAckByMessageId,
 } from "./services/cobrancaWhatsappTracking";
 import { logAudit } from "./utils/audit";
+import { resolveRuntimeAiProvider } from "./utils/aiProvider";
 import {
-  appendChatHistoryEntries,
   loadRecentHistory,
 } from "./services/chatHistoryService";
+import { appendConversationHistoryEntries } from "./services/conversationHistoryService";
 
 type PanelMessageDeliveryStatus = "sent" | "delivered" | "read";
 
@@ -272,6 +273,40 @@ async function executeUserFlows(ctx: FlowContext) {
   }
 }
 
+function buildHistoryText(
+  text: string | null | undefined,
+  fallbackLabel?: string | null
+): string {
+  const normalized = String(text || "").trim();
+  if (normalized) return normalized;
+
+  const fallback = String(fallbackLabel || "").trim();
+  return fallback ? `[${fallback}]` : "";
+}
+
+async function appendConversationHistoryQuietly(params: {
+  userId: number;
+  sessionName: string;
+  chatId: string;
+  role: "user" | "model";
+  text: string | null | undefined;
+  fallbackLabel?: string | null;
+}) {
+  const historyText = buildHistoryText(params.text, params.fallbackLabel);
+  if (!historyText) return;
+
+  try {
+    await appendConversationHistoryEntries({
+      userId: params.userId,
+      sessionName: params.sessionName,
+      chatId: params.chatId,
+      entries: [{ role: params.role, parts: [{ text: historyText }] }],
+    });
+  } catch (err) {
+    console.warn("Falha ao persistir historico da conversa:", err);
+  }
+}
+
 async function executeWelcomeFlow(
   ctx: FlowContext & { isNewContact: boolean }
 ) {
@@ -458,7 +493,7 @@ async function getChatAIState(userId: number, chatId: string): Promise<boolean> 
 
 const term = terminalKit.terminal;
 
-const AI_SELECTED = (process.env.AI_SELECTED as "GPT" | "GEMINI") || "GEMINI";
+const AI_SELECTED = resolveRuntimeAiProvider(process.env.AI_SELECTED);
 const MAX_RETRIES = 3;
 
 const clients = new Map<string, wppconnect.Whatsapp>();
@@ -1290,6 +1325,13 @@ async function runFlowActions(
         try {
           await withTimeout(ctx.client.sendText(ctx.chatId, trimmed), WPP_TIMEOUT_MS, "sendText");
           ctx.lastResponse = trimmed;
+          await appendConversationHistoryQuietly({
+            userId: ctx.userId,
+            sessionName: ctx.sessionName,
+            chatId: ctx.chatId,
+            role: "model",
+            text: trimmed,
+          });
         } catch { }
       }
     }
@@ -1313,6 +1355,14 @@ async function runFlowActions(
             WPP_TIMEOUT_MS,
             "sendFile"
           );
+          await appendConversationHistoryQuietly({
+            userId: ctx.userId,
+            sessionName: ctx.sessionName,
+            chatId: ctx.chatId,
+            role: "model",
+            text: "",
+            fallbackLabel: "Arquivo enviado pelo fluxo",
+          });
         } catch (err) {
           console.warn("Erro ao enviar mídia em flow:", err);
         }
@@ -1347,15 +1397,24 @@ async function runFlowActions(
       if (options.simulate) {
         options.logs?.push("handover_human");
       } else {
+        const transferMessage =
+          " Vou transferir você para um atendente humano. Aguarde...";
         try {
           await withTimeout(
             ctx.client.sendText(
               ctx.chatId,
-              " Vou transferir você para um atendente humano. Aguarde..."
+              transferMessage
             ),
             WPP_TIMEOUT_MS,
             "sendText"
           );
+          await appendConversationHistoryQuietly({
+            userId: ctx.userId,
+            sessionName: ctx.sessionName,
+            chatId: ctx.chatId,
+            role: "model",
+            text: transferMessage,
+          });
         } catch { }
 
         try {
@@ -1677,6 +1736,9 @@ export const chatHumanDuration = createLRUCache<string, number | null>(
   50_000
 ); // null = sem limite
 
+const HUMAN_MODE_BUSINESS_LABEL_NAME = "Atendimento humano";
+const humanModeBusinessLabelResolvers = new Map<string, Promise<string | null>>();
+
 function getHumanKey(
   userId: string | number,
   sessionName: string,
@@ -1688,6 +1750,11 @@ function getHumanKey(
 type HumanActivationOptions = {
   contactMessage?: string | null;
   sendTransferMessage?: boolean;
+};
+
+type WppBusinessLabel = {
+  id?: string | null;
+  name?: string | null;
 };
 
 const FALLBACK_REASON_LABELS: Record<FallbackReason, string> = {
@@ -1704,6 +1771,146 @@ const FALLBACK_REASON_LABELS: Record<FallbackReason, string> = {
 function getFallbackReasonLabel(reason?: FallbackReason) {
   if (!reason) return "Fallback automático";
   return FALLBACK_REASON_LABELS[reason] || "Fallback automático";
+}
+
+function normalizeBusinessLabelName(value: unknown) {
+  return String(value || "").trim().toLocaleLowerCase("pt-BR");
+}
+
+function canApplyBusinessLabelToChat(chatId: string) {
+  return /@(c\.us|lid)$/i.test(String(chatId || "").trim());
+}
+
+async function resolveHumanModeBusinessLabelId(
+  client: any,
+  sessionKey: string,
+  options: { createIfMissing?: boolean } = {}
+): Promise<string | null> {
+  const createIfMissing = options.createIfMissing !== false;
+  const pending = humanModeBusinessLabelResolvers.get(sessionKey);
+  if (pending) return pending;
+
+  const task = (async () => {
+    const targetName = normalizeBusinessLabelName(HUMAN_MODE_BUSINESS_LABEL_NAME);
+
+    try {
+      const labels = await withTimeout<unknown>(
+        Promise.resolve(client.getAllLabels()),
+        WPP_TIMEOUT_MS,
+        "getAllLabels"
+      );
+
+      const existing = Array.isArray(labels)
+        ? (labels as WppBusinessLabel[]).find(
+            (label) => normalizeBusinessLabelName(label?.name) === targetName
+          )
+        : null;
+
+      if (existing?.id) {
+        return String(existing.id);
+      }
+
+      if (!createIfMissing) {
+        return null;
+      }
+
+      const created = await withTimeout<any>(
+        Promise.resolve(client.addNewLabel(HUMAN_MODE_BUSINESS_LABEL_NAME)),
+        WPP_TIMEOUT_MS,
+        "addNewLabel"
+      );
+
+      const createdId = String(created?.id || "").trim();
+      if (createdId) {
+        return createdId;
+      }
+
+      const labelsAfterCreate = await withTimeout<unknown>(
+        Promise.resolve(client.getAllLabels()),
+        WPP_TIMEOUT_MS,
+        "getAllLabels"
+      );
+
+      const createdLabel = Array.isArray(labelsAfterCreate)
+        ? (labelsAfterCreate as WppBusinessLabel[]).find(
+            (label) => normalizeBusinessLabelName(label?.name) === targetName
+          )
+        : null;
+
+      return createdLabel?.id ? String(createdLabel.id) : null;
+    } catch (error) {
+      console.warn(
+        `⚠️ Não foi possível localizar/criar a etiqueta "${HUMAN_MODE_BUSINESS_LABEL_NAME}" na sessão ${sessionKey}:`,
+        error
+      );
+      return null;
+    } finally {
+      humanModeBusinessLabelResolvers.delete(sessionKey);
+    }
+  })();
+
+  humanModeBusinessLabelResolvers.set(sessionKey, task);
+  return task;
+}
+
+async function updateHumanModeBusinessLabel(
+  userId: string | number,
+  sessionName: string,
+  chatId: string,
+  type: "add" | "remove"
+) {
+  const normalizedChatId = String(chatId || "").trim();
+  if (!normalizedChatId || !canApplyBusinessLabelToChat(normalizedChatId)) {
+    return;
+  }
+
+  const fullSessionName = `USER${userId}_${sessionName}`;
+  const client = getClient(fullSessionName);
+
+  if (
+    !client ||
+    typeof client.getAllLabels !== "function" ||
+    typeof client.addNewLabel !== "function" ||
+    typeof client.addOrRemoveLabels !== "function"
+  ) {
+    return;
+  }
+
+  try {
+    const labelId = await resolveHumanModeBusinessLabelId(client, fullSessionName, {
+      createIfMissing: type === "add",
+    });
+    if (!labelId) return;
+
+    await withTimeout(
+      Promise.resolve(
+        client.addOrRemoveLabels(normalizedChatId, [{ labelId, type }])
+      ),
+      WPP_TIMEOUT_MS,
+      "addOrRemoveLabels"
+    );
+  } catch (error) {
+    console.warn(
+      `⚠️ Não foi possível ${type === "add" ? "aplicar" : "remover"} a etiqueta "${HUMAN_MODE_BUSINESS_LABEL_NAME}" no chat ${normalizedChatId}:`,
+      error
+    );
+  }
+}
+
+async function applyHumanModeBusinessLabel(
+  userId: string | number,
+  sessionName: string,
+  chatId: string
+) {
+  return updateHumanModeBusinessLabel(userId, sessionName, chatId, "add");
+}
+
+export async function removeHumanModeBusinessLabel(
+  userId: string | number,
+  sessionName: string,
+  chatId: string
+) {
+  return updateHumanModeBusinessLabel(userId, sessionName, chatId, "remove");
 }
 
 function emitSystemNote(
@@ -1774,6 +1981,8 @@ export function enableHumanTemporarily(
       messageToSend
     );
   }
+
+  void applyHumanModeBusinessLabel(userId, sessionName, chatId);
 
   try {
     emitToUser(userId, "human_state_changed", {
@@ -1875,6 +2084,8 @@ function tryDisableHumanByInactivity(
     clearTimeout(chatHumanTimer.get(key)!);
     chatHumanTimer.delete(key);
   }
+
+  void removeHumanModeBusinessLabel(userId, sessionName, chatId);
 
   // limpa estado de runtime (repetição/frustração) para evitar reativação imediata
   clearFallbackRuntime(Number(userId), sessionName, chatId);
@@ -2344,8 +2555,16 @@ async function attachEvents(
 
       // se ainda não entendeu, avisa e sai
       if (!body) {
+        const fallbackText = "Não entendi o áudio, pode resumir em texto?";
         try {
-          await withTimeout(client.sendText(chatId, "Não entendi o áudio, pode resumir em texto?"), WPP_TIMEOUT_MS, "sendText");
+          await withTimeout(client.sendText(chatId, fallbackText), WPP_TIMEOUT_MS, "sendText");
+          await appendConversationHistoryQuietly({
+            userId,
+            sessionName: shortName,
+            chatId,
+            role: "model",
+            text: fallbackText,
+          });
         } catch { }
         return;
       }
@@ -2386,21 +2605,28 @@ async function attachEvents(
         console.error("Erro ao avaliar fallback (mídia sem texto):", err);
       }
 
-      try {
-        const qualificationReminder = await getQualificationTextOnlyReminder({
-          userId,
-          chatId,
-        });
-        if (qualificationReminder) {
-          await withTimeout(
-            client.sendText(chatId, qualificationReminder),
-            WPP_TIMEOUT_MS,
-            "sendText"
-          );
+        try {
+          const qualificationReminder = await getQualificationTextOnlyReminder({
+            userId,
+            chatId,
+          });
+          if (qualificationReminder) {
+            await withTimeout(
+              client.sendText(chatId, qualificationReminder),
+              WPP_TIMEOUT_MS,
+              "sendText"
+            );
+            await appendConversationHistoryQuietly({
+              userId,
+              sessionName: shortName,
+              chatId,
+              role: "model",
+              text: qualificationReminder,
+            });
+          }
+        } catch (err) {
+          console.error("Erro ao avisar qualificação para mídia sem texto:", err);
         }
-      } catch (err) {
-        console.error("Erro ao avisar qualificação para mídia sem texto:", err);
-      }
 
       return;
     }
@@ -2482,7 +2708,17 @@ async function attachEvents(
       if (consentCommand) {
         try {
           const db = getDB();
+          await appendConversationHistoryQuietly({
+            userId,
+            sessionName: shortName,
+            chatId,
+            role: "user",
+            text: body,
+          });
+
           if (consentCommand.type === "opt_out") {
+            const confirmationText =
+              "Tudo certo. Vou respeitar sua preferencia e parar os envios automáticos para este número. Se quiser voltar, responda VOLTAR.";
             await upsertDispatchSuppression({
               userId,
               phone: phoneForCtx,
@@ -2498,12 +2734,21 @@ async function attachEvents(
             await withTimeout(
               client.sendText(
                 chatId,
-                "Tudo certo. Vou respeitar sua preferencia e parar os envios automáticos para este número. Se quiser voltar, responda VOLTAR."
+                confirmationText
               ),
               WPP_TIMEOUT_MS,
               "sendText"
             );
+            await appendConversationHistoryQuietly({
+              userId,
+              sessionName: shortName,
+              chatId,
+              role: "model",
+              text: confirmationText,
+            });
           } else {
+            const confirmationText =
+              "Perfeito. Este número voltou a poder receber comunicações automáticas.";
             await clearDispatchSuppression({
               userId,
               phone: phoneForCtx,
@@ -2518,11 +2763,18 @@ async function attachEvents(
             await withTimeout(
               client.sendText(
                 chatId,
-                "Perfeito. Este número voltou a poder receber comunicações automáticas."
+                confirmationText
               ),
               WPP_TIMEOUT_MS,
               "sendText"
             );
+            await appendConversationHistoryQuietly({
+              userId,
+              sessionName: shortName,
+              chatId,
+              role: "model",
+              text: confirmationText,
+            });
           }
         } catch (err) {
           console.error("Erro ao processar opt-out/opt-in de disparo:", err);
@@ -2545,6 +2797,14 @@ async function attachEvents(
           registerHumanActivity(userId, shortName, chatId);
         } catch { }
 
+        await appendConversationHistoryQuietly({
+          userId,
+          sessionName: shortName,
+          chatId,
+          role: "user",
+          text: body,
+        });
+
         messageBuffer.delete(chatKey);
 
         try {
@@ -2561,6 +2821,14 @@ async function attachEvents(
       // =================================================
       const aiEnabledForChat = await getChatAIState(userId, chatId);
       if (!aiEnabledForChat) {
+        await appendConversationHistoryQuietly({
+          userId,
+          sessionName: shortName,
+          chatId,
+          role: "user",
+          text: body,
+        });
+
         messageBuffer.delete(chatKey);
         try {
           await client.stopTyping(chatId);
@@ -2595,6 +2863,13 @@ async function attachEvents(
       try {
         if (await isInSilenceWindow(userId)) {
           console.log(` IA silenciada para user ${userId}`);
+          await appendConversationHistoryQuietly({
+            userId,
+            sessionName: shortName,
+            chatId,
+            role: "user",
+            text: body,
+          });
           messageBuffer.delete(chatKey);
           try {
             await client.stopTyping(chatId);
@@ -2618,6 +2893,14 @@ async function attachEvents(
         });
 
         if (qualificationResult.handled) {
+          await appendConversationHistoryQuietly({
+            userId,
+            sessionName: shortName,
+            chatId,
+            role: "user",
+            text: body,
+          });
+
           messageBuffer.delete(chatKey);
           try {
             await client.stopTyping(chatId);
@@ -2629,6 +2912,13 @@ async function attachEvents(
               WPP_TIMEOUT_MS,
               "sendText"
             );
+            await appendConversationHistoryQuietly({
+              userId,
+              sessionName: shortName,
+              chatId,
+              role: "model",
+              text: qualificationResult.responseText,
+            });
           }
           return;
         }
@@ -2640,6 +2930,16 @@ async function attachEvents(
       //  LIMITE DE PLANO IA
       // =================================================
       if (!(await canUseIA(userId))) {
+        const limitMessage =
+          "ALERTA Você atingiu o limite de mensagens IA do seu plano.\n\nFaça upgrade para continuar ";
+        await appendConversationHistoryQuietly({
+          userId,
+          sessionName: shortName,
+          chatId,
+          role: "user",
+          text: body,
+        });
+
         try {
           await client.stopTyping(chatId);
         } catch { }
@@ -2647,11 +2947,18 @@ async function attachEvents(
         await withTimeout(
           client.sendText(
             chatId,
-            "ALERTA Você atingiu o limite de mensagens IA do seu plano.\n\nFaça upgrade para continuar "
+            limitMessage
           ),
           WPP_TIMEOUT_MS,
           "sendText"
         );
+        await appendConversationHistoryQuietly({
+          userId,
+          sessionName: shortName,
+          chatId,
+          role: "model",
+          text: limitMessage,
+        });
         return;
       }
 
@@ -2938,7 +3245,7 @@ async function attachEvents(
               const persistedBotMessage = String(response || "").trim();
 
               if (persistedUserMessage && persistedBotMessage) {
-                await appendChatHistoryEntries({
+                await appendConversationHistoryEntries({
                   userId,
                   sessionName: shortName,
                   chatId,
@@ -3478,6 +3785,13 @@ async function sendSystemMessage(
     }
 
     await withTimeout(client.sendText(chatId, text), WPP_TIMEOUT_MS, "sendText");
+    await appendConversationHistoryQuietly({
+      userId: Number(userId),
+      sessionName,
+      chatId,
+      role: "model",
+      text,
+    });
   } catch (err) {
     console.log("ERRO Erro ao enviar mensagem do sistema:", err);
   }
