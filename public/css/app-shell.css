@@ -318,6 +318,28 @@ body.has-app-sidebar.app-screen-viewport {
     transition: padding-left 0.22s ease;
   }
 
+  /*
+   * O painel usa uma barra lateral fixa. Em janelas estreitas de desktop,
+   * depender apenas do padding do body deixava o conteúdo iniciar sob a
+   * barra em alguns navegadores/níveis de zoom. Posicionamos a área do
+   * painel explicitamente a partir da largura atual da navegação.
+   */
+  body.has-app-sidebar.app-dashboard-page {
+    padding-left: 0;
+  }
+
+  body.has-app-sidebar.app-dashboard-page > .topbar,
+  body.has-app-sidebar.app-dashboard-page > .container {
+    width: calc(100% - var(--app-shell-current-width) - var(--app-shell-gap));
+    margin-left: calc(var(--app-shell-current-width) + var(--app-shell-gap));
+  }
+
+  body.has-app-sidebar.app-dashboard-page > .container {
+    max-width: 1300px;
+    margin-right: 0;
+    min-width: 0;
+  }
+
   body.has-app-sidebar .container,
   body.has-app-sidebar .page-shell,
   body.has-app-sidebar .cobrancas-wrap,

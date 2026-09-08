@@ -19,7 +19,7 @@
 </head>
 
 <body
-  class="has-app-sidebar"
+  class="has-app-sidebar app-dashboard-page"
   data-sessions-count="<%= Array.isArray(sessions) ? sessions.length : 0 %>"
   data-has-prompt="<%= user.prompt && user.prompt.length > 10 ? 'true' : 'false' %>"
   data-first-msg-sent="<%= Number(user.onboarding_step || 0) >= 4 ? 'true' : 'false' %>"
