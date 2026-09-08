@@ -13,7 +13,7 @@
 }
 
 body.has-app-sidebar {
-  padding-left: calc(var(--app-shell-current-width) + var(--app-shell-gap));
+  padding-left: 0;
 }
 
 body.has-app-sidebar.app-shell-collapsed {
@@ -273,7 +273,7 @@ body.has-app-sidebar.app-shell-collapsed {
 
 body.has-app-sidebar.app-chat-page .wrap {
   width: calc(100vw - var(--app-shell-current-width) - var(--app-shell-gap));
-  transition: width 0.22s ease;
+  transition: left 0.22s ease, width 0.22s ease;
 }
 
 body.has-app-sidebar.app-screen-framed {
@@ -314,40 +314,28 @@ body.has-app-sidebar.app-screen-viewport {
 }
 
 @media (min-width: 1025px) {
-  body.has-app-sidebar {
-    transition: padding-left 0.22s ease;
-  }
-
   /*
-   * O painel usa uma barra lateral fixa. Em janelas estreitas de desktop,
-   * depender apenas do padding do body deixava o conteúdo iniciar sob a
-   * barra em alguns navegadores/níveis de zoom. Posicionamos a área do
-   * painel explicitamente a partir da largura atual da navegação.
+   * A navegação é fixa e não participa do fluxo da página. Cada raiz de
+   * conteúdo reserva a largura dela de forma explícita; assim nenhuma tela
+   * fica por baixo da barra, inclusive com zoom ou menu recolhido.
    */
-  body.has-app-sidebar.app-dashboard-page {
-    padding-left: 0;
-  }
-
-  body.has-app-sidebar.app-dashboard-page > .topbar,
-  body.has-app-sidebar.app-dashboard-page > .container {
+  body.has-app-sidebar > .topbar,
+  body.has-app-sidebar > .container,
+  body.has-app-sidebar > .page-shell,
+  body.has-app-sidebar > .cobrancas-wrap,
+  body.has-app-sidebar > .fallback-page,
+  body.has-app-sidebar > .user-layout,
+  body.has-app-sidebar > .crm-app,
+  body.has-app-sidebar > .page,
+  body.has-app-sidebar > .wrap {
     width: calc(100% - var(--app-shell-current-width) - var(--app-shell-gap));
-    margin-left: calc(var(--app-shell-current-width) + var(--app-shell-gap));
-  }
-
-  body.has-app-sidebar.app-dashboard-page > .container {
-    max-width: 1300px;
+    position: relative;
+    left: calc(var(--app-shell-current-width) + var(--app-shell-gap));
+    margin-left: 0;
     margin-right: 0;
     min-width: 0;
-  }
-
-  body.has-app-sidebar .container,
-  body.has-app-sidebar .page-shell,
-  body.has-app-sidebar .cobrancas-wrap,
-  body.has-app-sidebar .fallback-page,
-  body.has-app-sidebar .user-layout,
-  body.has-app-sidebar main.wrap {
-    margin-left: 0;
-    margin-right: auto;
+    box-sizing: border-box;
+    transition: left 0.22s ease, width 0.22s ease;
   }
 
   body.has-app-sidebar.app-shell-collapsed .app-shell-sidebar {
