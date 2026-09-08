@@ -1,5 +1,5 @@
 # Etapa 1: imagem base com Node.js e Chromium compatível com Puppeteer
-FROM node:18-slim
+FROM node:20-slim
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
