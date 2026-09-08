@@ -109,6 +109,39 @@ async function getColumnType(
   return dataType || null;
 }
 
+/**
+ * MySQL 5.7 and older MariaDB releases do not support
+ * `ADD COLUMN IF NOT EXISTS`. Check the information schema first so the
+ * startup migrations work on both older and current database servers.
+ */
+async function runCompatibleAddColumn(sql: string) {
+  const match = sql.match(
+    /^ALTER TABLE\s+(\w+)\s+ADD COLUMN IF NOT EXISTS\s+(\w+)\s+(.+)$/i
+  );
+
+  if (!match) {
+    await pool.query(sql);
+    return;
+  }
+
+  const [, tableName, columnName, columnDefinition] = match;
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT 1
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [tableName, columnName]
+  );
+
+  if ((rows as RowDataPacket[]).length > 0) return;
+
+  await pool.query(
+    `ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${columnDefinition}`
+  );
+}
+
 async function migrateChatHistoriesToSharedScope() {
   try {
     await pool.query(
@@ -1255,7 +1288,7 @@ export async function initDB() {
   }
 
   for (const sql of alters) {
-    await pool.query(sql);
+    await runCompatibleAddColumn(sql);
   }
 
   try {
