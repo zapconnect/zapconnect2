@@ -6449,9 +6449,9 @@ export function startHttpServer() {
     };
 
     server.once("error", onError);
-    server.listen(HTTP_PORT, () => {
+    server.listen(HTTP_PORT, "0.0.0.0", () => {
       server.off("error", onError);
-      console.log(`🚀 Server online em http://localhost:${HTTP_PORT}`);
+      console.log(`🚀 Server online na porta ${HTTP_PORT} (bind 0.0.0.0)`);
       resolve();
     });
   });
