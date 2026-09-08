@@ -1407,7 +1407,9 @@ app.get(/.*\.css$/, (req, res, next) => {
     const min = raw
       .replace(/\/\*[^!*][\s\S]*?\*\//g, "")
       .replace(/\s+/g, " ")
-      .replace(/\s*([{}:;,>~+])\s*/g, "$1")
+      // O operador + exige espaços dentro de calc(). Removê-los torna a
+      // declaração inválida apenas no CSS minificado de produção.
+      .replace(/\s*([{}:;,>~])\s*/g, "$1")
       .replace(/;}/g, "}")
       .trim();
     const buf = Buffer.from(min, "utf8");
