@@ -4,6 +4,7 @@ export interface User {
   name: string;
   email: string;
   email_normalized?: string | null;
+  personal_phone?: string | null;
   email_verified?: number;
   google_id?: string | null;
 

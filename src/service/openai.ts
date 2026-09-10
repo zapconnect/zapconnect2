@@ -160,5 +160,9 @@ export async function mainOpenAI({
   });
 
   const text = extractTextContent(response.choices?.[0]?.message?.content);
-  return text || "Sem resposta.";
+  if (!text) {
+    throw new Error("A IA retornou uma resposta vazia.");
+  }
+
+  return text;
 }

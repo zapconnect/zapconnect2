@@ -87,13 +87,6 @@ const extractGeminiDelta = (chunk: any) =>
     ?.map((p: any) => p?.text ?? "")
     .join("") ?? "";
 
-const isGeminiStreamTimeoutError = (
-  err: unknown
-): err is GeminiStreamTimeoutError =>
-  !!err &&
-  typeof err === "object" &&
-  (err as GeminiStreamTimeoutError).code === "gemini_stream_timeout";
-
 const closeGeminiStreamQuietly = (streamResult: any) => {
   try {
     const returnFn = streamResult?.stream?.return;
@@ -104,14 +97,6 @@ const closeGeminiStreamQuietly = (streamResult: any) => {
     }
   } catch {}
 };
-
-function buildGeminiTimeoutFallback(collected: string) {
-  const trimmed = String(collected || "").trim();
-  if (trimmed.length >= 50) {
-    return `${trimmed}\n\n(Resposta interrompida por demora da IA.)`;
-  }
-  return "A IA demorou muito para responder. Tente novamente.";
-}
 
 async function streamGeminiWithTimeout({
   chat,
@@ -568,27 +553,22 @@ export const mainGoogle = async ({
         const canStream = typeof (chat as any).sendMessageStream === "function";
 
         if (canStream && onStream) {
-          try {
-            text =
-              (await streamGeminiWithTimeout({
-                chat,
-                currentMessage,
-                onStream,
-              })) || "Sem resposta.";
-          } catch (streamErr) {
-            if (!isGeminiStreamTimeoutError(streamErr)) {
-              throw streamErr;
-            }
-            console.warn(`Gemini stream timeout (${chatKey})`);
-            text = buildGeminiTimeoutFallback(streamErr.collected);
-          }
+          text = await streamGeminiWithTimeout({
+            chat,
+            currentMessage,
+            onStream,
+          });
         } else {
           const result = await withTimeout(
             chat.sendMessage(currentMessage),
             GEMINI_RESPONSE_TIMEOUT_MS,
             "Gemini sendMessage"
           );
-          text = result.response?.text?.() || "Sem resposta.";
+          text = result.response?.text?.() || null;
+        }
+
+        if (!text?.trim()) {
+          throw new Error("A IA retornou uma resposta vazia.");
         }
       } catch (err: any) {
         lastErr = err;
@@ -624,24 +604,10 @@ export const mainGoogle = async ({
   } catch (err: any) {
     console.error("Erro IA tentativa:", err?.status, err?.message);
 
-    if (
-      isGeminiStreamTimeoutError(err) ||
-      String(err?.message || "").toLowerCase().includes("timeout")
-    ) {
-      return buildGeminiTimeoutFallback(
-        isGeminiStreamTimeoutError(err) ? err.collected : ""
-      );
-    }
-
-    if (err?.status === 429) {
-      return "A IA esta temporariamente indisponivel devido ao limite de uso. Tente novamente dentro de alguns minutos.";
-    }
-
-    if (err?.status === 503 || String(err?.message || "").toLowerCase().includes("high demand")) {
-      return "A IA esta com alta demanda agora. Tente novamente em alguns segundos.";
-    }
-
-    return "Ocorreu um erro inesperado ao tentar responder.";
+    // A camada de sessão registra a falha no painel e não envia mensagens de
+    // erro ao contato no WhatsApp. Propague o erro para que ela possa tomar
+    // essa decisão, em vez de convertê-lo em uma resposta da IA.
+    throw err;
   }
 };
 

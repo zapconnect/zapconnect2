@@ -198,6 +198,11 @@
     <label class="text-sm font-medium mb-1">Email*</label>
     <input id="email" type="email" placeholder="seu@email.com" class="w-full p-3 rounded-lg mb-4">
 
+    <!-- Número pessoal -->
+    <label class="text-sm font-medium mb-1">Número pessoal*</label>
+    <input id="personalPhone" type="tel" inputmode="tel" autocomplete="tel"
+      placeholder="55 11 99999-9999" class="w-full p-3 rounded-lg mb-4">
+
     <!-- Senha -->
     <div class="relative mb-4">
       <label class="text-sm font-medium mb-1 block">Senha*</label>
@@ -265,6 +270,7 @@
 
       const name = document.getElementById("name");
       const email = document.getElementById("email");
+      const personalPhone = document.getElementById("personalPhone");
       const password = document.getElementById("password");
       const confirmPassword = document.getElementById("confirmPassword");
 
@@ -277,6 +283,11 @@
 
       if (!email.value.trim()) {
         email.classList.add("input-error");
+        hasError = true;
+      }
+
+      if (!personalPhone.value.trim()) {
+        personalPhone.classList.add("input-error");
         hasError = true;
       }
 
@@ -321,6 +332,7 @@
           body: JSON.stringify({
             name: name.value.trim(),
             email: email.value.trim(),
+            personalPhone: personalPhone.value.trim(),
             password: password.value,
             deviceId
           })

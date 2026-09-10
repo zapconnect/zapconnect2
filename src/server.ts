@@ -5568,9 +5568,16 @@ async function findUserByEmailIdentity(email: string) {
 }
 
 app.post("/register", registerLimiter, async (req, res) => {
-  const { name, email, password, prompt } = req.body;
+  const { name, email, password, prompt, personalPhone } = req.body;
   const deviceId: string = typeof req.body?.deviceId === "string" ? req.body.deviceId.trim() : "";
-  if (requireFields(res, { name, email, password })) return;
+  if (requireFields(res, { name, email, password, personalPhone })) return;
+
+  const personalPhoneValidation = validatePhone(personalPhone);
+  if (!personalPhoneValidation.ok) {
+    return res.status(400).json({
+      error: "Informe um número pessoal válido, com DDD.",
+    });
+  }
 
   const db = getDB();
   const normalizedEmail = normalizeEmail(email);
@@ -5644,16 +5651,17 @@ app.post("/register", registerLimiter, async (req, res) => {
 
     const userResult = await db.run(
       `INSERT INTO users (
-        name, email, email_normalized, password, prompt, token, token_expires_at,
+        name, email, email_normalized, personal_phone, password, prompt, token, token_expires_at,
         plan, subscription_status, plan_expires_at, trial_started_at,
         email_verified, email_verify_token, email_verify_expires,
         signup_device_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         name,
         email,
         normalizedEmail,
+        personalPhoneValidation.sanitized,
         hash,
         prompt || "",
         session.token,

@@ -3130,6 +3130,7 @@ async function attachEvents(
 
           let response = "";
           let aiFailed = false;
+          let aiFailure: unknown = null;
 
           for (let i = 1; i <= MAX_RETRIES; i++) {
             try {
@@ -3152,37 +3153,36 @@ async function attachEvents(
                 }
               });
               break;
-            } catch (err) {
+            } catch (err: any) {
+              aiFailure = err;
+              console.warn(`Falha da IA na tentativa ${i}/${MAX_RETRIES}:`, err);
+
               if (i === MAX_RETRIES) {
                 aiFailed = true;
-                response = "ERRO Erro ao responder no momento.";
               }
             }
           }
 
           if (aiFailed) {
-            try {
-              const fbError = await checkFallbackTriggers({
-                userId,
-                sessionName: shortName,
-                chatId,
-                event: "ai_error",
-              });
+            const errorDetail = String(
+              (aiFailure as any)?.status ??
+                (aiFailure as any)?.code ??
+                (aiFailure as any)?.message ??
+                "Erro desconhecido"
+            ).slice(0, 300);
 
-              if (fbError.shouldFallback) {
-                await handleAutomaticFallback({
-                  decision: fbError,
-                  userId,
-                  sessionName: shortName,
-                  chatId,
-                  chatKey,
-                  client,
-                });
-                return;
-              }
-            } catch (err) {
-              console.error("Erro ao avaliar fallback (falha IA):", err);
-            }
+            console.error(
+              "Falha ao gerar resposta da IA; nenhuma mensagem sera enviada ao WhatsApp.",
+              { userId, sessionName: shortName, chatId, provider: AI_SELECTED, error: errorDetail }
+            );
+            emitSystemNote(userId, shortName, chatId, {
+              type: "ai_error",
+              title: "Falha da IA",
+              message:
+                "A IA nao conseguiu responder. Nenhuma mensagem foi enviada ao contato.",
+              detail: `Provedor: ${AI_SELECTED}. Erro: ${errorDetail}`,
+            });
+            return;
           }
 
           try {
