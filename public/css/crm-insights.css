@@ -1,0 +1,197 @@
+.crm-insights {
+  flex: 0 0 auto;
+  margin: 14px 18px 0;
+  padding: 16px;
+  border: 1px solid rgba(108, 100, 239, 0.28);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 0 0, rgba(108, 100, 239, 0.12), transparent 42%),
+    linear-gradient(145deg, rgba(22, 27, 48, 0.98), rgba(15, 21, 37, 0.96));
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+}
+
+.crm-insights-header,
+.crm-insights-stages-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.crm-insights-eyebrow {
+  display: inline-block;
+  margin-bottom: 3px;
+  color: #aaa4ff;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.crm-insights-header h2,
+.crm-insights-stages h3 {
+  margin: 0;
+  color: var(--text, #fff);
+}
+
+.crm-insights-header h2 { font-size: 17px; }
+.crm-insights-stages h3 { font-size: 12px; }
+
+.crm-insights-header p {
+  margin: 4px 0 0;
+  color: var(--muted, #aab0d9);
+  font-size: 11px;
+}
+
+.crm-insights-refresh {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+.crm-insights-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 9px;
+  margin-top: 13px;
+}
+
+.crm-insight-card {
+  min-width: 0;
+  min-height: 82px;
+  padding: 11px 12px;
+  border: 1px solid rgba(170, 176, 217, 0.14);
+  border-radius: 12px;
+  background: rgba(8, 13, 29, 0.4);
+}
+
+.crm-insight-card > span,
+.crm-insight-card > small {
+  display: block;
+  color: var(--muted, #aab0d9);
+}
+
+.crm-insight-card > span {
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crm-insight-card > strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: var(--text, #fff);
+  font-size: clamp(16px, 1.55vw, 22px);
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crm-insight-card > small {
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crm-insight-card-value > strong { color: #aaa4ff; }
+.crm-insight-card-alert > strong { color: #ff9b8f; }
+
+.crm-insights-stages { margin-top: 12px; }
+
+.crm-insights-stages-head > span {
+  color: var(--muted, #aab0d9);
+  font-size: 10px;
+}
+
+.crm-stage-summary-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 7px;
+}
+
+.crm-stage-summary-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px 8px;
+  min-width: 0;
+  padding: 7px 9px;
+  overflow: hidden;
+  border: 1px solid rgba(170, 176, 217, 0.1);
+  border-radius: 9px;
+  background: rgba(8, 13, 29, 0.28);
+}
+
+.crm-stage-summary-row::before {
+  position: absolute;
+  right: auto;
+  bottom: 0;
+  left: 0;
+  width: var(--stage-share, 0%);
+  height: 2px;
+  background: var(--stage-color, #6c64ef);
+  content: "";
+  opacity: 0.85;
+}
+
+.crm-stage-summary-name {
+  overflow: hidden;
+  color: var(--muted, #aab0d9);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crm-stage-summary-count {
+  color: var(--text, #fff);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.crm-stage-summary-value {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: var(--muted, #aab0d9);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crm-insights-empty,
+.crm-insights-status {
+  margin: 7px 0 0;
+  color: var(--muted, #aab0d9);
+  font-size: 10px;
+}
+
+.crm-insights-status { min-height: 12px; }
+.crm-insights-status.is-error { color: #ff9b8f; }
+
+@media (max-width: 1200px) {
+  .crm-insights-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 700px) {
+  .crm-insights { margin: 10px 12px 0; padding: 12px; }
+  .crm-insights-header { align-items: flex-start; }
+  .crm-insights-header h2 { font-size: 15px; }
+  .crm-insights-header p { max-width: 250px; line-height: 1.4; }
+  .crm-insights-refresh { padding: 7px 8px; }
+  .crm-insights-refresh { font-size: 0; }
+  .crm-insights-refresh i { font-size: 13px; }
+  .crm-insights-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+  .crm-insight-card { min-height: 76px; padding: 9px; }
+  .crm-insight-card > strong { font-size: 18px; }
+  .crm-stage-summary-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

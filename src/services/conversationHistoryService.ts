@@ -17,6 +17,7 @@ export async function appendConversationHistoryEntries(params: {
   await appendChatHistoryEntries(params);
   syncGoogleRuntimeHistory({
     userId: params.userId,
+    sessionName: params.sessionName,
     chatId: params.chatId,
     entries: params.entries,
   });
@@ -24,8 +25,9 @@ export async function appendConversationHistoryEntries(params: {
 
 export async function clearConversationHistory(params: {
   userId: number;
+  sessionName: string;
   chatId: string;
 }): Promise<void> {
-  clearGoogleRuntimeHistory(params.userId, params.chatId);
-  await clearChatHistory(params.userId, params.chatId);
+  clearGoogleRuntimeHistory(params.userId, params.sessionName, params.chatId);
+  await clearChatHistory(params.userId, params.sessionName, params.chatId);
 }

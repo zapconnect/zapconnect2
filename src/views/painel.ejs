@@ -12,8 +12,10 @@
 
   <link rel="stylesheet" href="/css/index.css">
   <link rel="stylesheet" href="/css/painel.css">
+  <link rel="stylesheet" href="/css/initial-ai-setup.css">
   <link rel="stylesheet" href="/css/app-shell.css">
   <script src="/js/app-shell.js" defer></script>
+  <script src="/js/initial-ai-setup.js" defer></script>
 
   <script src="/socket.io/socket.io.js"></script>
 </head>
@@ -26,6 +28,131 @@
   data-user-onboarding-step="<%= Number(user.onboarding_step || 0) %>"
 >
   <%- include("partials/app-sidebar", { activePage: "painel" }) %>
+
+  <% if (showInitialAiSetup) { %>
+    <% const initialSetupFirstName = String(user?.name || "").trim().split(/\s+/)[0] || ""; %>
+    <% const initialSetupConnectedSession = (sessions || []).find((session) => String(session.status || "").toLowerCase() === "connected"); %>
+    <div class="initial-ai-setup" id="initialAiSetup" aria-hidden="false">
+      <button class="initial-ai-setup-backdrop" type="button" data-initial-setup-later aria-label="Configurar depois"></button>
+      <section class="initial-ai-setup-dialog" role="dialog" aria-modal="true" aria-labelledby="initialSetupTitle">
+        <header class="initial-ai-setup-header">
+          <div class="initial-ai-setup-brand">
+            <span class="initial-ai-setup-icon"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i></span>
+            <div>
+              <span class="initial-ai-setup-kicker">Assistente de configuração</span>
+              <h1 id="initialSetupTitle">Vamos preparar seu primeiro agente</h1>
+            </div>
+          </div>
+          <button class="initial-ai-setup-close" type="button" data-initial-setup-later aria-label="Configurar depois">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+          </button>
+        </header>
+
+        <div class="initial-ai-setup-progress" aria-label="Etapas da configuração">
+          <span class="is-active" data-setup-progress="1">1. Seu negócio</span>
+          <span data-setup-progress="2">2. Atendimento</span>
+          <span data-setup-progress="3">3. Revisão</span>
+        </div>
+
+        <div class="initial-ai-setup-chat" id="initialSetupChat" role="log" aria-live="polite">
+          <span class="initial-ai-setup-avatar"><i class="fa-solid fa-robot" aria-hidden="true"></i></span>
+          <p id="initialSetupAssistantMessage">Oi<%= initialSetupFirstName ? `, ${initialSetupFirstName}` : "" %>! Vou ajudar a montar um agente para o seu negócio. Você revisa tudo antes de salvar.</p>
+        </div>
+
+        <div class="initial-ai-setup-body">
+          <section class="initial-setup-step" data-setup-panel="1">
+            <label for="initialSetupAgentName">Nome do agente</label>
+            <input id="initialSetupAgentName" type="text" maxlength="120" value="Atendimento principal" autocomplete="off" required>
+
+            <label for="initialSetupCompany">Nome da empresa</label>
+            <input id="initialSetupCompany" type="text" maxlength="120" autocomplete="organization" required placeholder="Ex.: Loja Central">
+
+            <label for="initialSetupBusiness">O que sua empresa oferece e quem costuma atender?</label>
+            <textarea id="initialSetupBusiness" rows="4" maxlength="1000" required placeholder="Conte sobre seus produtos ou serviços, seu público e as dúvidas que os clientes costumam trazer."></textarea>
+            <p class="initial-setup-hint">Inclua apenas informações que o agente pode usar como verdade.</p>
+          </section>
+
+          <section class="initial-setup-step" data-setup-panel="2" hidden>
+            <label for="initialSetupGoal">Qual deve ser o principal objetivo?</label>
+            <select id="initialSetupGoal">
+              <option value="Atender dúvidas e apresentar produtos ou serviços">Atender dúvidas e apresentar soluções</option>
+              <option value="Ajudar o cliente a concluir uma compra">Apoiar vendas</option>
+              <option value="Coletar informações e qualificar oportunidades">Qualificar oportunidades</option>
+              <option value="Orientar clientes que precisam de suporte">Prestar suporte</option>
+              <option value="Coletar dados para uma solicitação de agendamento">Receber pedidos de agendamento</option>
+            </select>
+
+            <label for="initialSetupTone">Tom de voz</label>
+            <select id="initialSetupTone">
+              <option value="cordial, claro e profissional">Cordial e profissional</option>
+              <option value="leve, próximo e informal, sem perder o respeito">Leve e informal</option>
+              <option value="objetivo, direto e educado">Objetivo e direto</option>
+              <option value="acolhedor, paciente e didático">Acolhedor e didático</option>
+            </select>
+
+            <label for="initialSetupRules">Há alguma regra ou limite importante?</label>
+            <textarea id="initialSetupRules" rows="3" maxlength="500" placeholder="Ex.: não conceder descontos; não confirmar disponibilidade sem consultar a equipe."></textarea>
+
+            <label for="initialSetupHandoff">Em que situação deve chamar uma pessoa?</label>
+            <textarea id="initialSetupHandoff" rows="2" maxlength="300" placeholder="Ex.: reclamações, dúvidas que não constam nas informações da empresa ou pedido explícito do cliente."></textarea>
+
+            <label for="initialSetupSession">Onde usar este agente?</label>
+            <select id="initialSetupSession">
+              <option value="" <%= initialSetupConnectedSession ? "" : "selected" %>>Aplicar como configuração padrão da conta</option>
+              <% (sessions || []).forEach((session) => { %>
+                <option value="<%= session.session_name %>" <%= initialSetupConnectedSession && initialSetupConnectedSession.session_name === session.session_name ? "selected" : "" %>>
+                  <%= session.session_name %> — <%= session.status === "connected" ? "conectada" : "não conectada" %>
+                </option>
+              <% }) %>
+            </select>
+            <p class="initial-setup-hint">O agente só responde pelo WhatsApp quando houver uma sessão conectada.</p>
+          </section>
+
+          <section class="initial-setup-step" data-setup-panel="3" hidden>
+            <div id="initialSetupGenerating" class="initial-setup-generating" hidden>
+              <i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
+              <strong>Estou organizando suas respostas em um perfil de atendimento…</strong>
+              <span>Isso pode levar alguns segundos.</span>
+            </div>
+            <div id="initialSetupReview" class="initial-setup-review" hidden>
+              <div class="initial-setup-review-heading">
+                <strong>Confira a proposta do agente</strong>
+                <span>Ela ainda não foi salva nem aplicada.</span>
+              </div>
+              <div id="initialSetupReviewFields" class="initial-setup-review-fields"></div>
+            </div>
+          </section>
+
+          <section id="initialSetupSuccess" class="initial-setup-success" hidden>
+            <span class="initial-setup-success-icon"><i class="fa-solid fa-check" aria-hidden="true"></i></span>
+            <h2>Seu agente está configurado</h2>
+            <p id="initialSetupSuccessMessage">A configuração foi salva na sua conta. Você pode conectá-la a uma sessão do WhatsApp quando estiver pronto.</p>
+            <div class="initial-setup-success-actions">
+              <a class="btn btn-primary" href="/painel#whatsapp-connection">Conectar WhatsApp</a>
+              <a class="btn btn-secondary" href="/ai-assistant">Ajustar configuração</a>
+            </div>
+          </section>
+        </div>
+
+        <footer class="initial-ai-setup-footer">
+          <p id="initialSetupStatus" class="initial-setup-status" role="status" aria-live="polite"></p>
+          <div class="initial-setup-actions" id="initialSetupActions">
+            <button class="initial-setup-later" type="button" data-initial-setup-later>Fazer depois</button>
+            <div class="initial-setup-actions-right">
+              <button class="btn btn-secondary" id="initialSetupBack" type="button" hidden>Voltar</button>
+              <button class="btn btn-primary" id="initialSetupNext" type="button">Continuar</button>
+              <button class="btn btn-primary" id="initialSetupGenerate" type="button" hidden>
+                <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Montar proposta
+              </button>
+              <button class="btn btn-primary" id="initialSetupSave" type="button" hidden disabled>
+                <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Salvar e ativar
+              </button>
+            </div>
+          </div>
+        </footer>
+      </section>
+    </div>
+  <% } %>
 
   <!-- ============================
 🔝 HEADER
@@ -97,7 +224,7 @@
             </div>
             <h3>Conectar WhatsApp</h3>
             <p>Crie sua primeira sessão, escaneie o QR Code e deixe o canal pronto para responder clientes.</p>
-            <a href="/painel#sessions-list" class="onboarding-step-link">Ir para sessões</a>
+            <a href="/painel#whatsapp-connection" class="onboarding-step-link">Ir para sessões</a>
           </article>
 
           <article class="onboarding-step-card step-pending" data-step-index="3">
@@ -273,98 +400,141 @@
         </div>
       </section>
 
-      <!-- 🤖 IA -->
-      <section class="card">
-        <h2><i class="fa-solid fa-robot"></i> IA Automática</h2>
+      <section class="card ai-automation-card" aria-labelledby="ia-automation-title">
+        <header class="ai-automation-header">
+          <div class="ai-automation-heading">
+            <span class="ai-automation-icon" aria-hidden="true">
+              <i class="fa-solid fa-robot"></i>
+            </span>
+            <div>
+              <span class="ai-automation-kicker">Atendimento inteligente</span>
+              <h2 id="ia-automation-title">IA Automática</h2>
+              <p>Controle quando a IA pode responder às conversas.</p>
+            </div>
+          </div>
 
-        <label class="switch">
-          <input type="checkbox" id="ia-toggle" <%=user.ia_enabled ? 'checked' : '' %>
-          onchange="toggleIA()"
-          >
-          <span class="slider"></span>
-        </label>
+          <label class="switch ai-automation-switch">
+            <input type="checkbox" id="ia-toggle" aria-label="Ativar IA automática" <%=user.ia_enabled ? 'checked' : '' %>
+              onchange="toggleIA()">
+            <span class="slider"></span>
+          </label>
+        </header>
 
-        <p class="muted">
-          Status:
-          <b id="ia-status">
+        <div class="ai-automation-status-row">
+          <span class="ai-automation-status-icon" aria-hidden="true">
+            <i class="fa-solid fa-shield-halved"></i>
+          </span>
+          <div class="ai-automation-status-copy">
+            <strong>Respostas automáticas</strong>
+            <span>O estado é aplicado às conversas da sua conta.</span>
+          </div>
+          <span id="ia-status" class="ai-setting-status <%= user.ia_enabled ? 'is-enabled' : 'is-disabled' %>" role="status" aria-live="polite">
             <%= user.ia_enabled ? 'Ativada' : 'Desativada' %>
-          </b>
-        </p>
+          </span>
+        </div>
 
-        <!-- 🌙 Horário de silêncio -->
         <div class="silence-wrap">
           <div class="silence-header">
-            <span class="ia-usage-label">🌙 Horário de silêncio</span>
-            <label class="switch switch-sm">
-              <input type="checkbox" id="silence-toggle" onchange="toggleSilence()">
-              <span class="slider"></span>
-            </label>
+            <div class="silence-heading">
+              <span class="silence-icon" aria-hidden="true"><i class="fa-solid fa-moon"></i></span>
+              <div class="silence-heading-copy">
+                <h3>Horário de silêncio</h3>
+                <p>Pause as respostas automáticas durante um intervalo.</p>
+              </div>
+            </div>
+
+            <div class="silence-controls">
+              <span id="silence-status" class="silence-status <%= user.ia_silence_start !== null && user.ia_silence_start !== undefined ? 'is-active' : 'is-inactive' %>" role="status" aria-live="polite">
+                <%= user.ia_silence_start !== null && user.ia_silence_start !== undefined ? 'Ativo' : 'Desativado' %>
+              </span>
+              <label class="switch switch-sm">
+                <input type="checkbox" id="silence-toggle" aria-label="Ativar horário de silêncio" onchange="toggleSilence()">
+                <span class="slider"></span>
+              </label>
+            </div>
           </div>
 
           <div id="silence-config" class="silence-config" style="display:none;">
-            <div class="silence-row">
-              <label>Das</label>
-              <select id="silence-start" class="silence-select">
-                <% for(let h=0; h<24; h++) { %>
-                  <option value="<%= h %>"><%= String(h).padStart(2,'0') %>:00</option>
-                <% } %>
-              </select>
-              <label>até</label>
-              <select id="silence-end" class="silence-select">
-                <% for(let h=0; h<24; h++) { %>
-                  <option value="<%= h %>"><%= String(h).padStart(2,'0') %>:00</option>
-                <% } %>
-              </select>
-              <button class="btn btn-accent btn-sm" onclick="saveSilence()">Salvar</button>
+            <div class="silence-config-title">
+              <i class="fa-regular fa-clock" aria-hidden="true"></i>
+              <strong>Defina o intervalo de pausa</strong>
             </div>
-            <p class="silence-hint">A IA não responderá automaticamente neste intervalo.</p>
+            <div class="silence-row">
+              <div class="silence-field">
+                <label for="silence-start">Início</label>
+                <select id="silence-start" class="silence-select">
+                  <% for(let h=0; h<24; h++) { %>
+                    <option value="<%= h %>"><%= String(h).padStart(2,'0') %>:00</option>
+                  <% } %>
+                </select>
+              </div>
+              <div class="silence-field">
+                <label for="silence-end">Fim</label>
+                <select id="silence-end" class="silence-select">
+                  <% for(let h=0; h<24; h++) { %>
+                    <option value="<%= h %>"><%= String(h).padStart(2,'0') %>:00</option>
+                  <% } %>
+                </select>
+              </div>
+              <button class="btn btn-accent btn-sm silence-save-button" onclick="saveSilence()">
+                <i class="fa-solid fa-check" aria-hidden="true"></i>
+                Salvar intervalo
+              </button>
+            </div>
+            <p class="silence-hint">Durante esse período, as mensagens continuam chegando, mas a IA não responde automaticamente.</p>
           </div>
         </div>
-
       </section>
 
-      <!-- 📱 Criar Sessão -->
-      <!-- 📱 Criar Sessão -->
-      <section class="card">
-        <h2><i class="fa-solid fa-plus"></i> Criar Sessão de whatsapp</h2>
+      <!-- 📱 Conexão guiada do WhatsApp -->
+      <section id="whatsapp-connection" class="card connection-card" aria-labelledby="whatsapp-connection-title">
+        <header class="connection-card-header">
+          <span class="connection-brand-icon"><i class="fa-brands fa-whatsapp" aria-hidden="true"></i></span>
+          <div>
+            <span class="connection-kicker">Conexão segura por QR Code</span>
+            <h2 id="whatsapp-connection-title">Conecte seu WhatsApp</h2>
+            <p>Vincule o número que sua equipe usará para atender pelo ZapConnect.</p>
+          </div>
+        </header>
 
-        <input id="session-name" class="textarea" placeholder="Ex: celular1">
+        <div class="connection-layout">
+          <div class="connection-form">
+            <label for="session-name">Nome para identificar esta conexão</label>
+            <input id="session-name" class="textarea connection-name-input" type="text" maxlength="220"
+              autocomplete="off" placeholder="Ex.: Atendimento principal">
+            <p class="connection-field-hint">Esse nome aparece na sua lista de sessões. Você pode conectar mais números conforme o limite do seu plano.</p>
 
-        <button class="btn btn-accent full" onclick="createSession()">
-          <i class="fa-solid fa-circle-check"></i>
-          Criar Sessão
-        </button>
+            <button id="session-create-btn" class="btn btn-accent full connection-create-button" type="button" onclick="createSession()">
+              <i class="fa-solid fa-qrcode" aria-hidden="true"></i>
+              Gerar QR Code
+            </button>
 
-        <!-- QR AREA -->
-        <div id="qr-preview" class="qr-area">
-
-          <!-- 🔄 LOADING -->
-          <div id="qr-loading" class="qr-loading" style="display: none;">
-            <i class="fa-solid fa-qrcode"></i>
-            <p>Gerando QR Code…</p>
+            <ol class="connection-steps" aria-label="Como conectar seu WhatsApp">
+              <li><span>1</span><div><strong>Abra o WhatsApp no celular</strong><small>Use o número que deseja conectar.</small></div></li>
+              <li><span>2</span><div><strong>Acesse Aparelhos conectados</strong><small>No menu do WhatsApp, toque em “Conectar aparelho”.</small></div></li>
+              <li><span>3</span><div><strong>Leia o QR Code</strong><small>Aponte a câmera para o código exibido aqui.</small></div></li>
+            </ol>
           </div>
 
-          <!-- ⏳ PLACEHOLDER -->
-          <div id="qr-placeholder" class="qr-placeholder">
-            <div class="qr-shimmer"></div>
-            <div class="qr-lines">
-              <span></span>
-              <span></span>
-              <span></span>
+          <div id="qr-preview" class="qr-area" style="display:none;" aria-live="polite">
+            <span class="qr-session-label" id="qr-session-label"></span>
+            <div id="connection-status" class="connection-status" role="status">A conexão será exibida aqui.</div>
+
+            <div id="qr-loading" class="qr-loading" style="display:none;">
+              <i class="fa-solid fa-qrcode" aria-hidden="true"></i>
+              <p>Preparando o pareamento…</p>
             </div>
+
+            <img id="qr-img" class="qr-img" style="display:none;" alt="QR Code temporário para conectar o WhatsApp">
+
+            <button id="qr-refresh" class="btn small btn-accent" type="button" style="display:none;" onclick="refreshQR()">
+              <i class="fa-solid fa-rotate" aria-hidden="true"></i>
+              Gerar outro QR Code
+            </button>
+
+            <p id="qr-timer" class="qr-info" aria-live="polite"></p>
+            <p class="qr-security-note"><i class="fa-solid fa-lock" aria-hidden="true"></i> O código é temporário e só pode ser acessado pela sua conta.</p>
           </div>
-
-          <!-- 📸 QR -->
-          <img id="qr-img" class="qr-img" style="display:none;">
-
-          <!-- 🔁 REFRESH -->
-          <button id="qr-refresh" class="btn small btn-accent" style="display:none;" onclick="refreshQR()">
-            <i class="fa-solid fa-rotate"></i>
-            Atualizar QR
-          </button>
-
-          <!-- ⏱️ TIMER -->
-          <p id="qr-timer" class="qr-info"></p>
         </div>
       </section>
 
@@ -378,7 +548,7 @@
 
     <!-- 📱 Sessões -->
     <section class="card">
-      <h2><i class="fa-solid fa-server"></i> Sessões</h2>
+      <h2><i class="fa-solid fa-server"></i> WhatsApps conectados</h2>
       <div id="sessions-list"></div>
     </section>
 
@@ -399,6 +569,18 @@
       </header>
 
       <form id="ai-config-form">
+        <div class="ai-config-scope-control">
+          <label for="ai-config-scope">Aplicar configuração em</label>
+          <div class="ai-config-scope-row">
+            <select id="ai-config-scope" name="aiConfigScope">
+              <option value="">Configuração geral (todas as sessões)</option>
+            </select>
+            <button id="ai-config-inherit" class="btn btn-secondary" type="button" hidden>
+              Usar configuração geral
+            </button>
+          </div>
+          <p id="ai-config-scope-hint" aria-live="polite">Esta configuração vale como padrão para todas as sessões.</p>
+        </div>
         <div class="ai-config-workspace">
           <nav class="ai-config-nav" aria-label="Áreas de configuração da IA" role="tablist">
             <button type="button" class="ai-config-nav-item active" role="tab" aria-selected="true" data-ai-config-section="identity">
@@ -581,6 +763,7 @@
     Desenvolvido por <a href="https://www.instagram.com/vini__n10?igsh=NzF4am94bjhmdHJ6" target="_blank">Vinicius Souza</a>
   </footer>
 
+  <script src="/js/session-state.js"></script>
   <script src="/js/index.js"></script>
   <script src="/js/config.js"></script>
 

@@ -142,7 +142,7 @@ async function runCompatibleAddColumn(sql: string) {
   );
 }
 
-async function migrateChatHistoriesToSharedScope() {
+async function migrateChatHistoriesToSessionScope() {
   try {
     await pool.query(
       "ALTER TABLE chat_histories MODIFY COLUMN session_name VARCHAR(255) NULL"
@@ -151,51 +151,45 @@ async function migrateChatHistoriesToSharedScope() {
     // coluna já está compatível
   }
 
-  const uniqueColumns = await getIndexColumns("chat_histories", "uniq_chat_history");
-  const alreadyShared =
-    uniqueColumns.length === 2 &&
-    uniqueColumns[0] === "user_id" &&
-    uniqueColumns[1] === "chat_id";
+  const sessionScopedIndex = [
+    "user_id",
+    "session_name",
+    "chat_id",
+    "session_scope_version",
+  ];
+  const newIndexColumns = await getIndexColumns(
+    "chat_histories",
+    "uniq_chat_history_session_scope"
+  );
+  const legacyIndexColumns = await getIndexColumns("chat_histories", "uniq_chat_history");
+  const hasSessionScopedIndex = [newIndexColumns, legacyIndexColumns].some(
+    (columns) =>
+      columns.length === sessionScopedIndex.length &&
+      columns.every((column, index) => column === sessionScopedIndex[index])
+  );
 
-  if (!alreadyShared) {
-    const [duplicates] = await pool.query<RowDataPacket[]>(
-      `SELECT user_id, chat_id, COUNT(*) AS total
-       FROM chat_histories
-       GROUP BY user_id, chat_id
-       HAVING COUNT(*) > 1
-       LIMIT 1`
-    );
-
-    if ((duplicates as RowDataPacket[]).length) {
-      const [cleanupResult] = await pool.query<ResultSetHeader>(
-        `DELETE older
-         FROM chat_histories older
-         INNER JOIN chat_histories newer
-           ON older.user_id = newer.user_id
-          AND older.chat_id = newer.chat_id
-          AND (
-            older.updated_at < newer.updated_at OR
-            (older.updated_at = newer.updated_at AND older.id < newer.id)
-          )`
-      );
-
-      if (cleanupResult.affectedRows) {
-        console.log(
-          `✅ chat_histories consolidado: ${cleanupResult.affectedRows} registro(s) antigo(s) removido(s) para unificar por user_id + chat_id`
-        );
-      }
-    }
-
-    try {
-      await pool.query("ALTER TABLE chat_histories DROP INDEX uniq_chat_history");
-    } catch {
-      // índice antigo já não existe
-    }
-
+  if (!hasSessionScopedIndex) {
+    // Add the new key before removing the old one. A failed migration therefore
+    // leaves the original uniqueness constraint intact for a safe retry.
+    // Preserve existing rows. If an unusual legacy schema contains duplicate
+    // rows for this exact scope, fail startup for operator review instead of
+    // deleting conversation data automatically.
     await pool.query(
-      "ALTER TABLE chat_histories ADD UNIQUE KEY uniq_chat_history (user_id, chat_id)"
+      "ALTER TABLE chat_histories ADD UNIQUE KEY uniq_chat_history_session_scope (user_id, session_name, chat_id, session_scope_version)"
     );
-    console.log("✅ chat_histories agora usa chave única por user_id + chat_id");
+  }
+
+  const refreshedLegacyColumns = await getIndexColumns("chat_histories", "uniq_chat_history");
+  const legacyIndexNeedsReplacement =
+    (refreshedLegacyColumns.length === 2 &&
+      refreshedLegacyColumns[0] === "user_id" &&
+      refreshedLegacyColumns[1] === "chat_id") ||
+    (refreshedLegacyColumns.length === 3 &&
+      refreshedLegacyColumns[0] === "user_id" &&
+      refreshedLegacyColumns[1] === "session_name" &&
+      refreshedLegacyColumns[2] === "chat_id");
+  if (legacyIndexNeedsReplacement) {
+    await pool.query("ALTER TABLE chat_histories DROP INDEX uniq_chat_history");
   }
 
   try {
@@ -203,8 +197,10 @@ async function migrateChatHistoriesToSharedScope() {
       "ALTER TABLE chat_histories DROP INDEX idx_chat_histories_user_session_chat"
     );
   } catch {
-    // índice legado pode não existir
+    // índice auxiliar legado pode não existir
   }
+
+  console.log("✅ chat_histories agora separa conversas por usuário, sessão e chat");
 }
 
 async function migrateChatHistoriesStorage() {
@@ -384,12 +380,13 @@ export async function initDB() {
       email_verify_token VARCHAR(255),
       email_verify_expires BIGINT,
 
-      ia_enabled TINYINT DEFAULT 1,
+      ia_enabled TINYINT DEFAULT 0,
       ia_messages_used INT DEFAULT 0,
       ia_messages_reset_at BIGINT,
       ia_silence_start INT DEFAULT NULL,
       ia_silence_end INT DEFAULT NULL,
       onboarding_step INT DEFAULT 0,
+      onboarding_assistant_done TINYINT DEFAULT 0,
       timezone_offset INT DEFAULT -180,
       default_ddi VARCHAR(4) DEFAULT '55',
       default_session_name VARCHAR(255) DEFAULT NULL,
@@ -469,7 +466,22 @@ export async function initDB() {
       user_id INT NOT NULL,
       session_name VARCHAR(255) NOT NULL,
       status VARCHAR(50) DEFAULT 'pending',
+      ai_config LONGTEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS ai_agents (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      name VARCHAR(120) NOT NULL,
+      ai_config LONGTEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      UNIQUE KEY uniq_ai_agent_user_name (user_id, name),
+      INDEX idx_ai_agent_user_updated (user_id, updated_at),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
@@ -983,8 +995,9 @@ export async function initDB() {
       session_name VARCHAR(255),
       chat_id VARCHAR(255) NOT NULL,
       history LONGBLOB NOT NULL,
+      session_scope_version TINYINT NOT NULL DEFAULT 0,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      UNIQUE KEY uniq_chat_history (user_id, chat_id),
+      UNIQUE KEY uniq_chat_history_session_scope (user_id, session_name, chat_id, session_scope_version),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
@@ -1230,6 +1243,8 @@ export async function initDB() {
     `ALTER TABLE flows ADD COLUMN IF NOT EXISTS active TINYINT DEFAULT 1`,
     `ALTER TABLE schedules ADD COLUMN IF NOT EXISTS preferred_session VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_normalized VARCHAR(255)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS ia_enabled TINYINT DEFAULT 0`,
+    `ALTER TABLE users ALTER COLUMN ia_enabled SET DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS personal_phone VARCHAR(32) DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS signup_device_id VARCHAR(255)`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255)`,
@@ -1241,6 +1256,7 @@ export async function initDB() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_email_last_sent TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_onboarding_done TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_step INT DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarding_assistant_done TINYINT DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS default_ddi VARCHAR(4) DEFAULT '55'`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS default_session_name VARCHAR(255) DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS billing_default_type VARCHAR(30) DEFAULT 'PIX'`,
@@ -1282,6 +1298,9 @@ export async function initDB() {
     `ALTER TABLE cobranca_notifications_queue ADD COLUMN IF NOT EXISTS regua_rule_id INT NOT NULL DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS chat_history_cleaned_at BIGINT DEFAULT NULL`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_config LONGTEXT`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_config LONGTEXT`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_agent_id INT DEFAULT NULL`,
+    `ALTER TABLE chat_histories ADD COLUMN IF NOT EXISTS session_scope_version TINYINT NOT NULL DEFAULT 0`,
     `ALTER TABLE kb_sources ADD COLUMN IF NOT EXISTS embedding_version INT DEFAULT 1`
   ];
 
@@ -1317,7 +1336,7 @@ export async function initDB() {
     // ignora se a chave da régua já existir
   }
 
-  await migrateChatHistoriesToSharedScope();
+  await migrateChatHistoriesToSessionScope();
   await migrateChatHistoriesStorage();
 
   const indexes = [

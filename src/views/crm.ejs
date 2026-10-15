@@ -9,6 +9,7 @@
   <%- include("partials/app-head-core") %>
   <!-- CSS -->
   <link rel="stylesheet" href="/css/crm.css">
+  <link rel="stylesheet" href="/css/crm-insights.css">
   <link rel="stylesheet" href="/css/app-shell.css">
   <script src="/js/app-shell.js" defer></script>
   <script src="/socket.io/socket.io.js"></script>
@@ -75,6 +76,64 @@
 
         </div>
       </header>
+
+      <section class="crm-insights" aria-labelledby="crmInsightsTitle" aria-busy="true">
+        <div class="crm-insights-header">
+          <div>
+            <span class="crm-insights-eyebrow">Visão comercial</span>
+            <h2 id="crmInsightsTitle">Resumo do pipeline</h2>
+            <p>Indicadores calculados a partir dos contatos e negócios do seu CRM.</p>
+          </div>
+          <button type="button" class="btn ghost crm-insights-refresh" id="crmSummaryRefresh">
+            <i class="fa-solid fa-rotate"></i>
+            Atualizar indicadores
+          </button>
+        </div>
+
+        <div class="crm-insights-grid">
+          <article class="crm-insight-card">
+            <span>Contatos</span>
+            <strong id="crmSummaryContacts">—</strong>
+            <small>Em toda a sua base</small>
+          </article>
+          <article class="crm-insight-card">
+            <span>Oportunidades abertas</span>
+            <strong id="crmSummaryOpenDeals">—</strong>
+            <small>Etapas diferentes de Fechado e Perdido</small>
+          </article>
+          <article class="crm-insight-card crm-insight-card-value">
+            <span>Valor do pipeline</span>
+            <strong id="crmSummaryPipelineValue">—</strong>
+            <small>Negócios ainda em andamento</small>
+          </article>
+          <article class="crm-insight-card">
+            <span>Negócios fechados</span>
+            <strong id="crmSummaryWonCount">—</strong>
+            <small id="crmSummaryWonValue">Valor fechado: —</small>
+          </article>
+          <article class="crm-insight-card crm-insight-card-alert">
+            <span>Follow-ups vencidos</span>
+            <strong id="crmSummaryOverdue">—</strong>
+            <small>Oportunidades abertas com data anterior a agora</small>
+          </article>
+          <article class="crm-insight-card">
+            <span>Próximos follow-ups</span>
+            <strong id="crmSummaryUpcoming">—</strong>
+            <small>Agendados para os próximos 7 dias</small>
+          </article>
+        </div>
+
+        <div class="crm-insights-stages">
+          <div class="crm-insights-stages-head">
+            <h3>Distribuição por etapa</h3>
+            <span id="crmSummaryUpdated"></span>
+          </div>
+          <div id="crmStageSummary" class="crm-stage-summary-list">
+            <p class="crm-insights-empty">Carregando etapas…</p>
+          </div>
+        </div>
+        <p class="crm-insights-status" id="crmSummaryStatus" role="status" aria-live="polite">Carregando indicadores…</p>
+      </section>
 
       <!-- =============================
          🔎 FILTROS

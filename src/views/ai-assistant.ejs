@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Assistente IA • ZapConnect</title>
+  <%- include("partials/app-head-core") %>
+  <link rel="stylesheet" href="/css/ai-assistant.css" />
+  <link rel="stylesheet" href="/css/app-shell.css" />
+  <script src="/js/app-shell.js" defer></script>
+  <script src="/js/ai-assistant.js" defer></script>
+</head>
+<body class="has-app-sidebar app-screen-viewport">
+  <%- include("partials/app-sidebar", { activePage: "ai-assistant" }) %>
+  <div class="assistant-page app-screen-scroll">
+    <header class="assistant-hero">
+      <div>
+        <span class="assistant-eyebrow"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Configuração guiada</span>
+        <h1>Assistente IA</h1>
+        <p>Descreva como sua IA deve atender. Revise o rascunho e aplique à conta ou a uma sessão específica.</p>
+      </div>
+      <a class="assistant-back-link" href="/painel"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Voltar ao painel</a>
+    </header>
+
+    <main class="assistant-content">
+      <section class="assistant-panel" aria-labelledby="assistant-request-title">
+        <div class="assistant-panel-heading">
+          <span class="assistant-icon"><i class="fa-solid fa-robot" aria-hidden="true"></i></span>
+          <div>
+            <h2 id="assistant-request-title">Monte sua configuração</h2>
+            <p>O assistente prepara uma proposta; nada é salvo sem sua confirmação.</p>
+          </div>
+        </div>
+
+        <div class="assistant-scope-row">
+          <label for="assistant-scope">Aplicar configuração em</label>
+          <select id="assistant-scope">
+            <option value="">Configuração geral da conta</option>
+          </select>
+        </div>
+        <p id="assistant-scope-hint" class="assistant-hint" aria-live="polite">A configuração geral é usada como padrão por todas as sessões.</p>
+        <p id="assistant-linked-agent-note" class="assistant-linked-note" hidden></p>
+
+        <div class="assistant-modes" role="group" aria-label="Ação do assistente">
+          <button type="button" class="active" aria-pressed="true" data-assistant-mode="create">Criar configuração</button>
+          <button type="button" aria-pressed="false" data-assistant-mode="adjust">Ajustar configuração atual</button>
+        </div>
+        <form id="assistant-request-form" class="assistant-request-form">
+          <label for="assistant-instruction">O que você precisa que a IA faça?</label>
+          <textarea id="assistant-instruction" rows="4" maxlength="2500" required placeholder="Ex.: Crie uma consultora para minha clínica, que acolha o paciente, tire dúvidas usando as informações cadastradas e ajude a agendar avaliações."></textarea>
+          <div class="assistant-request-footer">
+            <p id="assistant-status" class="assistant-status" aria-live="polite"></p>
+            <button id="assistant-generate" type="submit" class="assistant-button assistant-button-primary">
+              <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Gerar rascunho
+            </button>
+          </div>
+        </form>
+        <p class="assistant-privacy">Seu pedido e, ao ajustar, a configuração atual são enviados ao provedor de IA configurado no servidor. Revise o resultado antes de salvar.</p>
+      </section>
+
+      <section id="assistant-draft-panel" class="assistant-panel assistant-draft-panel" hidden aria-labelledby="assistant-draft-title">
+        <div class="assistant-panel-heading">
+          <span class="assistant-icon assistant-icon-green"><i class="fa-solid fa-clipboard-check" aria-hidden="true"></i></span>
+          <div>
+            <h2 id="assistant-draft-title">Revise a configuração</h2>
+            <p>Você pode editar qualquer campo. O atendimento só muda depois de salvar.</p>
+          </div>
+        </div>
+        <div id="assistant-draft-fields" class="assistant-draft-fields"></div>
+        <div class="assistant-save-row">
+          <p id="assistant-save-status" class="assistant-status" aria-live="polite"></p>
+          <button id="assistant-save" type="button" class="assistant-button assistant-button-primary">
+            <i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> Salvar configuração
+          </button>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

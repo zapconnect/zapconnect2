@@ -403,3 +403,21 @@ export const kbQueryLimiter = createRateLimiter({
   prefix: "kb_query",
   keyBuilder: async (req: any) => getAuthenticatedUserKey(req),
 });
+
+export const aiConfigAssistantLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxAttempts: 10,
+  blockDurationMs: 15 * 60 * 1000,
+  message: "O assistente foi usado muitas vezes. Aguarde 15 minutos e tente novamente.",
+  prefix: "ai_config_assistant",
+  keyBuilder: async (req: any) => getAuthenticatedUserKey(req),
+});
+
+export const aiAgentSimulationLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  maxAttempts: 30,
+  blockDurationMs: 15 * 60 * 1000,
+  message: "Muitas mensagens de simulação. Aguarde 15 minutos e tente novamente.",
+  prefix: "ai_agent_simulation",
+  keyBuilder: async (req: any) => getAuthenticatedUserKey(req),
+});

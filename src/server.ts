@@ -55,9 +55,11 @@ import {
   syncDripEnrollmentsForCrmStage,
   updateDripEnrollmentContactSnapshot,
 } from "./services/dripCampaignService";
+import { buildCrmDashboardSummary } from "./services/crmDashboard";
+import { shouldShowInitialAiSetup } from "./services/initialAiSetup";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
-import { getAiProviderSummary } from "./utils/aiProvider";
+import { getAiProviderSummary, getConfiguredAiProvider } from "./utils/aiProvider";
 import { normalizeEmail } from "./utils/email";
 import { validatePhone } from "./utils/phoneUtils";
 import {
@@ -110,6 +112,8 @@ import { setSocketServer } from "./lib/socketEmitter";
 import { logAudit } from "./utils/audit";
 import {
   disparoUserLimiter,
+  aiConfigAssistantLimiter,
+  aiAgentSimulationLimiter,
   kbQueryLimiter,
   kbUploadLimiter,
   kbUrlLimiter,
@@ -119,10 +123,20 @@ import {
   resendEmailLimiter,
 } from "./middlewares/rateLimiter";
 import { BASE_URL, buildPortInUseHelp, HTTP_PORT } from "./utils/appBaseUrl";
+import { isSafeSessionName } from "./utils/sessionName";
 import {
   buildPromptFromAiConfiguration,
+  getEditableAiConfiguration,
+  hasAiConfigurationContent,
+  hasUsableAiConfiguration,
   normalizeAiConfiguration,
+  parseAiConfiguration,
 } from "./services/aiConfiguration";
+import {
+  generateAiConfigurationDraft,
+  generateAiAgentSimulationReply,
+  AI_CONFIG_ASSISTANT_REQUEST_MAX_CHARS,
+} from "./services/aiConfigAssistant";
 // setupLogging é chamado em index.ts antes de carregar o servidor
 
 const MAX_CHAT_MESSAGES = Number(process.env.MAX_CHAT_MESSAGES || 500);
@@ -134,7 +148,7 @@ const MAX_KB_FILE_BYTES = 10 * 1024 * 1024; // 10MB
 let shuttingDown = false;
 let appReady = false;
 
-import { getDB, closeDB } from "./database";
+import { getDB, closeDB, withDBTransaction } from "./database";
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 const chatOpenSessionLocks = new Map<string, Promise<void>>();
@@ -1372,11 +1386,37 @@ app.get(
       `SELECT * FROM sessions WHERE user_id = ? ORDER BY id DESC`,
       [user.id]
     );
+    const assistantState = await db.get<{
+      onboarding_assistant_done: number | null;
+      ai_config: string | null;
+      prompt: string | null;
+      has_agent: number;
+      has_session_config: number;
+    }>(
+      `SELECT u.onboarding_assistant_done, u.ai_config, u.prompt,
+              EXISTS(SELECT 1 FROM ai_agents a WHERE a.user_id = u.id) AS has_agent,
+              EXISTS(SELECT 1 FROM sessions s
+                     WHERE s.user_id = u.id AND s.ai_config IS NOT NULL
+                       AND TRIM(s.ai_config) NOT IN ('', '{}')) AS has_session_config
+       FROM users u
+       WHERE u.id = ?
+       LIMIT 1`,
+      [user.id]
+    );
+    const hasConfiguredAccountAi =
+      hasAiConfigurationContent(parseAiConfiguration(assistantState?.ai_config)) ||
+      String(assistantState?.prompt || "").trim().length > 10;
+    const showInitialAiSetup = shouldShowInitialAiSetup({
+      completed: assistantState?.onboarding_assistant_done,
+      hasAgent: assistantState?.has_agent,
+      hasSessionConfig: assistantState?.has_session_config,
+      hasAccountConfig: hasConfiguredAccountAi,
+    });
 
     const API_URL =
       process.env.API_URL || `${req.protocol}://${req.get("host")}`;
 
-    res.render("painel", { user, sessions, API_URL });
+    res.render("painel", { user, sessions, API_URL, showInitialAiSetup });
   }
 );
 
@@ -1420,9 +1460,36 @@ app.get(/.*\.css$/, (req, res, next) => {
   }
 });
 
+// QR codes contêm credenciais temporárias do WhatsApp: servir somente ao dono da sessão.
+app.get("/qr/:file", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const file = String(req.params.file || "");
+  const match = file.match(/^USER(\d+)_([^/\\]+)\.png$/);
+  if (!match || Number(match[1]) !== Number(user.id)) {
+    return res.status(404).json({ error: "QR não encontrado" });
+  }
+
+  const sessionName = match[2];
+  if (!isSafeSessionName(sessionName)) {
+    return res.status(404).json({ error: "QR não encontrado" });
+  }
+
+  const db = getDB();
+  const session = await db.get(
+    `SELECT id FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+    [user.id, sessionName]
+  );
+  if (!session) return res.status(404).json({ error: "QR não encontrado" });
+
+  const qrPath = getQRPathFor(`USER${user.id}_${sessionName}`);
+  if (!fs.existsSync(qrPath)) {
+    return res.status(404).json({ error: "QR não gerado (ou já autenticado)" });
+  }
+
+  res.setHeader("Cache-Control", "no-store, private");
+  return res.sendFile(qrPath);
+});
 app.use(express.static(path.join(process.cwd(), "public")));
-// 📸 Servir QR Codes gerados pelo WPPConnect
-app.use("/qr", express.static(path.join(process.cwd(), "qr")));
 
 // =======================================
 // 🎨 EJS Configurado
@@ -1939,22 +2006,29 @@ io.on("connection", (socket) => {
    * =========================================================
    */
   // 🧹 LIMPAR HISTÓRICO DA CONVERSA USADO PELA IA POR CHAT
-  socket.on("ai:clear_history", async ({ chatId }) => {
+  socket.on("ai:clear_history", async ({ chatId, sessionName }) => {
     try {
       const userId = socket.data.userId as number | undefined;
-      if (!userId || !chatId) return;
+      const selectedSessionName = String(sessionName || "").trim();
+      if (!userId || !chatId || !selectedSessionName) return;
 
       const db = getDB();
-      const session = await db.get(
-        `SELECT session_name FROM sessions WHERE user_id = ? AND status = 'connected' LIMIT 1`,
-        [userId]
+      const session = await db.get<{ session_name: string }>(
+        `SELECT session_name FROM sessions
+         WHERE user_id = ? AND session_name = ?
+         LIMIT 1`,
+        [userId, selectedSessionName]
       );
 
       if (session?.session_name) {
         await stopChatSession(Number(userId), session.session_name, chatId);
+      } else {
+        socket.emit("ai:history_clear_error", { chatId, error: "Sessão não encontrada" });
+        return;
       }
       await clearConversationHistory({
         userId: Number(userId),
+        sessionName: selectedSessionName,
         chatId,
       });
 
@@ -2675,12 +2749,12 @@ app.get("/auth/google/callback", async (req, res) => {
         const result = await db.run(
           `
           INSERT INTO users (
-            name, email, email_normalized, password, prompt, token, token_expires_at,
+            name, email, email_normalized, password, prompt, ia_enabled, token, token_expires_at,
             plan, subscription_status, plan_expires_at, trial_started_at,
             email_verified, email_verify_token, email_verify_expires,
             signup_device_id, google_id
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `,
           [
             profile.name,
@@ -2688,6 +2762,7 @@ app.get("/auth/google/callback", async (req, res) => {
             normalizedEmail,
             generatedPassword,
             "",
+            0,
             session.token,
             session.expiresAt,
             "free",
@@ -2758,7 +2833,22 @@ app.get("/auth/me", authMiddleware, async (req, res) => {
     console.error("Erro ao carregar planConfig no /auth/me:", err);
   }
 
-  res.json({ user, planConfig });
+  const safeUser = {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    prompt: user.prompt,
+    ai_config: user.ai_config,
+    ia_enabled: user.ia_enabled,
+    ia_messages_used: user.ia_messages_used,
+    ia_messages_reset_at: user.ia_messages_reset_at,
+    ia_silence_start: user.ia_silence_start,
+    ia_silence_end: user.ia_silence_end,
+    email_verified: user.email_verified,
+    onboarding_step: user.onboarding_step,
+    plan: user.plan,
+  };
+  res.json({ user: safeUser, email_verified: safeUser.email_verified, planConfig });
 });
 
 app.get("/", (_req, res) => res.redirect("/painel"));
@@ -2816,6 +2906,62 @@ app.get("/chat", authMiddleware, subscriptionGuard, async (req, res) => {
 app.get("/crm", authMiddleware, (req, res) => {
   const user = (req as any).user;
   res.render("crm", { user });
+});
+
+app.get("/api/crm/summary", authMiddleware, async (req, res) => {
+  try {
+    const userId = Number((req as any).user?.id);
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return res.status(401).json({ ok: false, error: "Sessão inválida." });
+    }
+
+    const db = getDB();
+    const now = Date.now();
+    const nextSevenDays = now + 7 * 24 * 60 * 60 * 1000;
+    const metrics = await db.get<Record<string, unknown>>(
+      `SELECT
+         COUNT(*) AS totalContacts,
+         SUM(CASE WHEN LOWER(TRIM(COALESCE(stage, ''))) NOT IN ('fechado', 'perdido') THEN 1 ELSE 0 END) AS activeOpportunities,
+         COALESCE(SUM(CASE WHEN LOWER(TRIM(COALESCE(stage, ''))) NOT IN ('fechado', 'perdido') THEN COALESCE(deal_value, 0) ELSE 0 END), 0) AS activePipelineValue,
+         SUM(CASE WHEN LOWER(TRIM(COALESCE(stage, ''))) = 'fechado' THEN 1 ELSE 0 END) AS wonCount,
+         COALESCE(SUM(CASE WHEN LOWER(TRIM(COALESCE(stage, ''))) = 'fechado' THEN COALESCE(deal_value, 0) ELSE 0 END), 0) AS wonValue,
+         SUM(CASE WHEN follow_up_date IS NOT NULL AND follow_up_date < ? AND LOWER(TRIM(COALESCE(stage, ''))) NOT IN ('fechado', 'perdido') THEN 1 ELSE 0 END) AS overdueFollowUps,
+         SUM(CASE WHEN follow_up_date >= ? AND follow_up_date <= ? AND LOWER(TRIM(COALESCE(stage, ''))) NOT IN ('fechado', 'perdido') THEN 1 ELSE 0 END) AS upcomingFollowUps
+       FROM crm
+       WHERE user_id = ?`,
+      [now, now, nextSevenDays, userId]
+    );
+    const stageRows = await db.all<Record<string, unknown>>(
+      `SELECT COALESCE(NULLIF(TRIM(stage), ''), 'Novo') AS stage,
+              COUNT(*) AS contacts,
+              COALESCE(SUM(COALESCE(deal_value, 0)), 0) AS dealValue
+       FROM crm
+       WHERE user_id = ?
+       GROUP BY COALESCE(NULLIF(TRIM(stage), ''), 'Novo')`,
+      [userId]
+    );
+
+    return res.json({
+      ok: true,
+      generatedAt: now,
+      summary: buildCrmDashboardSummary(metrics || {}, stageRows),
+    });
+  } catch (err) {
+    console.error("Erro ao gerar resumo comercial do CRM:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Não foi possível carregar os indicadores do CRM.",
+    });
+  }
+});
+
+app.get("/ai-agents", authMiddleware, (req, res) => {
+  res.redirect("/ai-assistant");
+});
+
+app.get("/ai-assistant", authMiddleware, (req, res) => {
+  const user = (req as any).user;
+  res.render("ai-assistant", { user });
 });
 
 app.get("/api/crm/list", authMiddleware, async (req, res) => {
@@ -5651,12 +5797,12 @@ app.post("/register", registerLimiter, async (req, res) => {
 
     const userResult = await db.run(
       `INSERT INTO users (
-        name, email, email_normalized, personal_phone, password, prompt, token, token_expires_at,
+        name, email, email_normalized, personal_phone, password, prompt, ia_enabled, token, token_expires_at,
         plan, subscription_status, plan_expires_at, trial_started_at,
         email_verified, email_verify_token, email_verify_expires,
         signup_device_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         name,
         email,
@@ -5664,6 +5810,7 @@ app.post("/register", registerLimiter, async (req, res) => {
         personalPhoneValidation.sanitized,
         hash,
         prompt || "",
+        0,
         session.token,
         session.expiresAt,
         "free",
@@ -5818,14 +5965,16 @@ app.post("/auth/rotate-token", authMiddleware, async (req, res) => {
 
 
 app.post("/user/update-prompt", authMiddleware, async (req, res) => {
-  const { prompt } = req.body;
+  const prompt = typeof req.body?.prompt === "string" ? req.body.prompt : "";
 
   const user = (req as any).user; // vem do cookie
   const db = getDB();
 
   await db.run(
-    `UPDATE users SET prompt = ? WHERE id = ?`,
-    [prompt || "", user.id]
+    `UPDATE users
+     SET prompt = ?, ia_enabled = CASE WHEN ? = 1 THEN 1 ELSE ia_enabled END
+     WHERE id = ?`,
+    [prompt, prompt.trim().length > 10 ? 1 : 0, user.id]
   );
 
   await logAudit("prompt_update", user.id, "user", user.id, { length: (prompt || "").length });
@@ -5836,12 +5985,55 @@ app.post("/user/update-prompt", authMiddleware, async (req, res) => {
 app.post("/user/ai-config", authMiddleware, async (req, res) => {
   try {
     const user = (req as any).user;
-    const config = normalizeAiConfiguration(req.body?.config);
-    const prompt = buildPromptFromAiConfiguration(config);
     const db = getDB();
+    const sessionName = String(req.body?.sessionName || "").trim();
+
+    if (sessionName) {
+      const session = await db.get<{ id: number; ai_config: string | null }>(
+        `SELECT id, ai_config FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+        [user.id, sessionName]
+      );
+      if (!session) {
+        return res.status(404).json({ ok: false, error: "Sessão não encontrada" });
+      }
+
+      if (req.body?.inheritGlobal === true) {
+        await db.run(
+          `UPDATE sessions SET ai_config = NULL WHERE id = ? AND user_id = ?`,
+          [session.id, user.id]
+        );
+        await logAudit("session_ai_config_inherit", user.id, "session", session.id, {
+          sessionName,
+        });
+        return res.json({ ok: true, inherited: true });
+      }
+
+      const config = normalizeAiConfiguration(req.body?.config);
+      if (!hasAiConfigurationContent(config)) {
+        return res.status(400).json({ ok: false, error: "Preencha ao menos uma área da configuração" });
+      }
+
+      const prompt = buildPromptFromAiConfiguration(config);
+      await db.run(
+        `UPDATE sessions SET ai_config = ? WHERE id = ? AND user_id = ?`,
+        [JSON.stringify(config), session.id, user.id]
+      );
+      await db.run(`UPDATE users SET ia_enabled = 1 WHERE id = ?`, [user.id]);
+      await logAudit("session_ai_config_update", user.id, "session", session.id, {
+        sessionName,
+        promptLength: prompt.length,
+      });
+      return res.json({ ok: true, prompt, inherited: false, ia_enabled: 1 });
+    }
+
+    const config = normalizeAiConfiguration(req.body?.config);
+    if (!hasAiConfigurationContent(config)) {
+      return res.status(400).json({ ok: false, error: "Preencha ao menos uma área da configuração" });
+    }
+    const prompt = buildPromptFromAiConfiguration(config);
 
     await db.run(
-      `UPDATE users SET ai_config = ?, prompt = ? WHERE id = ?`,
+      `UPDATE users SET ai_config = ?, prompt = ?, ia_enabled = 1 WHERE id = ?`,
       [JSON.stringify(config), prompt, user.id]
     );
 
@@ -5849,10 +6041,594 @@ app.post("/user/ai-config", authMiddleware, async (req, res) => {
       promptLength: prompt.length,
     });
 
-    return res.json({ ok: true, prompt });
+    return res.json({ ok: true, prompt, ia_enabled: 1 });
   } catch (err) {
     console.error("Erro ao salvar configuração da IA:", err);
     return res.status(500).json({ ok: false, error: "Não foi possível salvar a configuração da IA" });
+  }
+});
+
+app.get("/user/ai-config", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const sessionName = String(req.query.sessionName || "").trim();
+    const db = getDB();
+    const accountConfig = getEditableAiConfiguration(user.ai_config, user.prompt);
+
+    if (!sessionName) {
+      return res.json({ ok: true, config: accountConfig, inherited: false });
+    }
+
+    const session = await db.get<{
+      ai_config: string | null;
+      ai_agent_id: number | null;
+      ai_agent_name: string | null;
+    }>(
+      `SELECT s.ai_config, s.ai_agent_id, a.name AS ai_agent_name
+       FROM sessions s
+       LEFT JOIN ai_agents a ON a.id = s.ai_agent_id AND a.user_id = s.user_id
+       WHERE s.user_id = ? AND s.session_name = ? LIMIT 1`,
+      [user.id, sessionName]
+    );
+    if (!session) return res.status(404).json({ ok: false, error: "Sessão não encontrada" });
+
+    const parsedSessionConfig = parseAiConfiguration(session.ai_config);
+    const hasSessionOverride = Boolean(
+      parsedSessionConfig && hasAiConfigurationContent(parsedSessionConfig)
+    );
+    return res.json({
+      ok: true,
+      config: hasSessionOverride ? parsedSessionConfig : accountConfig,
+      inherited: !hasSessionOverride,
+      linkedAgent: session.ai_agent_id && session.ai_agent_name
+        ? { id: Number(session.ai_agent_id), name: String(session.ai_agent_name) }
+        : null,
+    });
+  } catch (err) {
+    console.error("Erro ao carregar configuração da IA:", err);
+    return res.status(500).json({ ok: false, error: "Não foi possível carregar a configuração da IA" });
+  }
+});
+
+function getAiConfigAssistantFailure(error: any): { status: number; message: string } {
+  const code = String(error?.message || "");
+  const provider = getConfiguredAiProvider(process.env.AI_SELECTED);
+  const providerHost = provider === "GPT" ? "api.openai.com" : "generativelanguage.googleapis.com";
+  const credentialName = provider === "GPT" ? "OPENAI_KEY" : "GEMINI_KEY";
+  const modelName = provider === "GPT" ? "OPENAI_MODEL" : "GEMINI_MODEL";
+
+  const failures: Record<string, { status: number; message: string }> = {
+    AI_CONFIG_ASSISTANT_PROVIDER_NOT_CONFIGURED: {
+      status: 503,
+      message: `O provedor selecionado não está configurado no servidor. Confira ${credentialName}.`,
+    },
+    AI_CONFIG_ASSISTANT_NETWORK_ERROR: {
+      status: 503,
+      message: `O servidor não conseguiu alcançar o provedor de IA. Libere a saída HTTPS/DNS para ${providerHost}:443 e tente novamente.`,
+    },
+    AI_CONFIG_ASSISTANT_TIMEOUT: {
+      status: 504,
+      message: "O provedor de IA demorou para responder. Tente novamente em instantes.",
+    },
+    AI_CONFIG_ASSISTANT_QUOTA_EXCEEDED: {
+      status: 429,
+      message: "A cota ou o limite de requisições do provedor de IA foi atingido. Verifique o plano e os limites da API.",
+    },
+    AI_CONFIG_ASSISTANT_INVALID_CREDENTIALS: {
+      status: 503,
+      message: `A credencial ${credentialName} foi recusada. Gere uma chave válida no painel do provedor e atualize a configuração do servidor.`,
+    },
+    AI_CONFIG_ASSISTANT_API_ACCESS_DENIED: {
+      status: 503,
+      message: provider === "GPT"
+        ? "A API da OpenAI negou o acesso. Confira se a chave e o projeto têm acesso à API e se as restrições da chave permitem chamadas deste servidor."
+        : "A API Gemini negou o acesso. Confira no Google AI Studio se a chave está habilitada para a Gemini API e se o tipo e as restrições dela permitem chamadas deste servidor.",
+    },
+    AI_CONFIG_ASSISTANT_MODEL_UNAVAILABLE: {
+      status: 503,
+      message: `O modelo configurado não está disponível para esta chave. Confira ${modelName}.`,
+    },
+    AI_CONFIG_ASSISTANT_PROVIDER_ERROR: {
+      status: 502,
+      message: "O provedor de IA recusou a solicitação. Verifique o modelo e as permissões configuradas.",
+    },
+    AI_CONFIG_ASSISTANT_INPUT_TOO_LARGE: {
+      status: 413,
+      message: "A configuração atual é muito extensa para ser ajustada pelo assistente. Reduza o conteúdo e tente novamente.",
+    },
+    AI_CONFIG_ASSISTANT_INVALID_RESPONSE: {
+      status: 502,
+      message: "O provedor não retornou uma configuração válida. Tente reformular o pedido.",
+    },
+    AI_CONFIG_ASSISTANT_EMPTY_RESPONSE: {
+      status: 502,
+      message: "O provedor não retornou uma configuração válida. Tente reformular o pedido.",
+    },
+  };
+  const knownFailure = failures[code];
+  if (knownFailure) {
+    console.warn("Falha no assistente de configuração de IA", { provider, category: code });
+    return knownFailure;
+  }
+
+  console.error("Falha inesperada no assistente de configuração de IA", {
+    provider,
+    errorName: String(error?.name || "Error").slice(0, 80),
+  });
+  return {
+    status: 500,
+    message: "Não foi possível processar a configuração. Tente novamente.",
+  };
+}
+
+app.post("/user/ai-config/assist", authMiddleware, aiConfigAssistantLimiter, async (req, res) => {
+  const user = (req as any).user;
+  const mode = req.body?.mode;
+  const instruction = typeof req.body?.instruction === "string"
+    ? req.body.instruction.trim()
+    : "";
+  const sessionName = String(req.body?.sessionName || "").trim();
+
+  if (mode !== "create" && mode !== "adjust") {
+    return res.status(400).json({ ok: false, error: "Escolha criar ou ajustar a configuração." });
+  }
+  if (!instruction || instruction.length > AI_CONFIG_ASSISTANT_REQUEST_MAX_CHARS) {
+    return res.status(400).json({
+      ok: false,
+      error: `Descreva o que você precisa (até ${AI_CONFIG_ASSISTANT_REQUEST_MAX_CHARS} caracteres).`,
+    });
+  }
+  if (sessionName && !isSafeSessionName(sessionName)) {
+    return res.status(400).json({ ok: false, error: "Nome de sessão inválido." });
+  }
+
+  try {
+    if (sessionName) {
+      const session = await getDB().get<{ id: number }>(
+        `SELECT id FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+        [user.id, sessionName]
+      );
+      if (!session) return res.status(404).json({ ok: false, error: "Sessão não encontrada." });
+    }
+
+    const config = await generateAiConfigurationDraft({
+      instruction,
+      mode,
+      currentConfig: req.body?.config,
+    });
+    await logAudit("ai_config_assist_draft", user.id, "user", user.id, {
+      mode,
+      scope: sessionName ? "session" : "account",
+    });
+    return res.json({ ok: true, config });
+  } catch (err: any) {
+    const failure = getAiConfigAssistantFailure(err);
+    return res.status(failure.status).json({ ok: false, error: failure.message });
+  }
+});
+
+const AI_AGENT_NAME_MAX_CHARS = 120;
+const AI_AGENT_MAX_PER_USER = 100;
+
+app.post("/api/onboarding/assistant/complete", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const sessionName = typeof req.body?.sessionName === "string"
+    ? req.body.sessionName.trim()
+    : "";
+  const config = normalizeAiConfiguration(req.body?.config);
+
+  if (!name || name.length > AI_AGENT_NAME_MAX_CHARS) {
+    return res.status(400).json({ ok: false, error: "Informe um nome válido para o agente." });
+  }
+  if (!hasAiConfigurationContent(config)) {
+    return res.status(400).json({ ok: false, error: "A proposta de configuração está vazia." });
+  }
+  if (sessionName && !isSafeSessionName(sessionName)) {
+    return res.status(400).json({ ok: false, error: "A sessão selecionada é inválida." });
+  }
+
+  try {
+    const completion = await withDBTransaction(async (db) => {
+      const account = await db.get<{
+        ai_config: string | null;
+        prompt: string | null;
+      }>(
+        `SELECT ai_config, prompt FROM users WHERE id = ? LIMIT 1 FOR UPDATE`,
+        [user.id]
+      );
+      if (!account) throw new Error("ONBOARDING_ACCOUNT_NOT_FOUND");
+
+      const agentCount = await db.get<{ total: number }>(
+        `SELECT COUNT(*) AS total FROM ai_agents WHERE user_id = ?`,
+        [user.id]
+      );
+      if (Number(agentCount?.total || 0) >= AI_AGENT_MAX_PER_USER) {
+        throw new Error("ONBOARDING_AGENT_LIMIT_REACHED");
+      }
+
+      let sessionId: number | null = null;
+      if (sessionName) {
+        const session = await db.get<{
+          id: number;
+          ai_config: string | null;
+          ai_agent_id: number | null;
+        }>(
+          `SELECT id, ai_config, ai_agent_id FROM sessions
+           WHERE user_id = ? AND session_name = ?
+           LIMIT 1 FOR UPDATE`,
+          [user.id, sessionName]
+        );
+        if (!session) throw new Error("ONBOARDING_SESSION_NOT_FOUND");
+        if (session.ai_agent_id || String(session.ai_config || "").trim()) {
+          throw new Error("ONBOARDING_SESSION_ALREADY_CONFIGURED");
+        }
+        sessionId = Number(session.id);
+      }
+
+      const now = Date.now();
+      const inserted = await db.run(
+        `INSERT INTO ai_agents (user_id, name, ai_config, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [user.id, name, JSON.stringify(config), now, now]
+      );
+      const agentId = Number(inserted.insertId || 0);
+      if (!agentId) throw new Error("ONBOARDING_AGENT_CREATE_FAILED");
+
+      const hasExistingAccountConfig =
+        hasAiConfigurationContent(parseAiConfiguration(account.ai_config)) ||
+        String(account.prompt || "").trim().length > 10;
+      const appliedToAccount = !hasExistingAccountConfig;
+      if (appliedToAccount) {
+        await db.run(
+          `UPDATE users SET ai_config = ?, prompt = ? WHERE id = ?`,
+          [JSON.stringify(config), buildPromptFromAiConfiguration(config), user.id]
+        );
+      }
+
+      if (sessionId !== null) {
+        await db.run(
+          `UPDATE sessions SET ai_agent_id = ? WHERE id = ? AND user_id = ?`,
+          [agentId, sessionId, user.id]
+        );
+      }
+
+      await db.run(
+        `UPDATE users SET onboarding_assistant_done = 1, ia_enabled = 1 WHERE id = ?`,
+        [user.id]
+      );
+
+      return { agentId, appliedToAccount, sessionLinked: sessionId !== null };
+    });
+
+    await logAudit("onboarding_ai_assistant_complete", user.id, "ai_agent", completion.agentId, {
+      appliedToAccount: completion.appliedToAccount,
+      sessionLinked: completion.sessionLinked,
+    });
+    return res.status(201).json({ ok: true, ...completion });
+  } catch (err: any) {
+    const code = String(err?.message || "");
+    if (code === "ONBOARDING_AGENT_LIMIT_REACHED") {
+      return res.status(409).json({ ok: false, error: `Sua conta já atingiu o limite de ${AI_AGENT_MAX_PER_USER} agentes.` });
+    }
+    if (code === "ONBOARDING_SESSION_NOT_FOUND") {
+      return res.status(404).json({ ok: false, error: "A sessão selecionada não está mais disponível." });
+    }
+    if (code === "ONBOARDING_SESSION_ALREADY_CONFIGURED") {
+      return res.status(409).json({ ok: false, error: "Essa sessão já tem uma configuração. Escolha outra sessão ou use a configuração padrão da conta." });
+    }
+    if (err?.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ ok: false, error: "Já existe um agente com esse nome na sua conta." });
+    }
+    console.error("Erro ao concluir assistente inicial de IA:", err);
+    return res.status(500).json({ ok: false, error: "Não foi possível salvar a configuração inicial." });
+  }
+});
+
+app.post("/api/onboarding/assistant/dismiss", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    await getDB().run(
+      `UPDATE users SET onboarding_assistant_done = 1 WHERE id = ?`,
+      [user.id]
+    );
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Erro ao dispensar assistente inicial de IA:", err);
+    return res.status(500).json({ ok: false, error: "Não foi possível salvar essa escolha." });
+  }
+});
+
+app.get("/api/ai-agents", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const db = getDB();
+    const [agentRows, sessionRows] = await Promise.all([
+      db.all<{
+        id: number;
+        name: string;
+        ai_config: string;
+        created_at: number;
+        updated_at: number;
+        assigned_sessions: number;
+      }>(
+        `SELECT a.id, a.name, a.ai_config, a.created_at, a.updated_at,
+                (SELECT COUNT(*) FROM sessions s
+                 WHERE s.user_id = a.user_id AND s.ai_agent_id = a.id) AS assigned_sessions
+         FROM ai_agents a
+         WHERE a.user_id = ?
+         ORDER BY a.updated_at DESC, a.id DESC`,
+        [user.id]
+      ),
+      db.all<{
+        id: number;
+        session_name: string;
+        status: string;
+        ai_agent_id: number | null;
+      }>(
+        `SELECT id, session_name, status, ai_agent_id
+         FROM sessions WHERE user_id = ? ORDER BY id DESC`,
+        [user.id]
+      ),
+    ]);
+
+    const agents = agentRows.map((row) => ({
+      id: Number(row.id),
+      name: String(row.name || ""),
+      config: parseAiConfiguration(row.ai_config),
+      createdAt: Number(row.created_at || 0),
+      updatedAt: Number(row.updated_at || 0),
+      assignedSessions: Number(row.assigned_sessions || 0),
+    }));
+    return res.json({
+      ok: true,
+      agents,
+      sessions: sessionRows.map((row) => ({
+        id: Number(row.id),
+        sessionName: String(row.session_name || ""),
+        status: String(row.status || ""),
+        agentId: row.ai_agent_id == null ? null : Number(row.ai_agent_id),
+      })),
+      maxAgents: AI_AGENT_MAX_PER_USER,
+    });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Não foi possível carregar os agentes." });
+  }
+});
+
+app.post("/api/ai-agents/draft", authMiddleware, aiConfigAssistantLimiter, async (req, res) => {
+  const user = (req as any).user;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const instruction = typeof req.body?.instruction === "string" ? req.body.instruction.trim() : "";
+  if (!name || name.length > AI_AGENT_NAME_MAX_CHARS) {
+    return res.status(400).json({ ok: false, error: `O nome precisa ter entre 1 e ${AI_AGENT_NAME_MAX_CHARS} caracteres.` });
+  }
+  if (!instruction || instruction.length > AI_CONFIG_ASSISTANT_REQUEST_MAX_CHARS) {
+    return res.status(400).json({ ok: false, error: "Descreva o agente em até 2.500 caracteres." });
+  }
+
+  try {
+    const db = getDB();
+    const count = await db.get<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM ai_agents WHERE user_id = ?`,
+      [user.id]
+    );
+    if (Number(count?.total || 0) >= AI_AGENT_MAX_PER_USER) {
+      return res.status(409).json({ ok: false, error: `Sua conta já atingiu o limite de ${AI_AGENT_MAX_PER_USER} agentes.` });
+    }
+
+    const config = await generateAiConfigurationDraft({ instruction, mode: "create" });
+    return res.json({ ok: true, draft: { name, config } });
+  } catch (err: any) {
+    const failure = getAiConfigAssistantFailure(err);
+    return res.status(failure.status).json({ ok: false, error: failure.message });
+  }
+});
+
+app.post("/api/ai-agents", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const config = normalizeAiConfiguration(req.body?.config);
+  if (!name || name.length > AI_AGENT_NAME_MAX_CHARS) {
+    return res.status(400).json({ ok: false, error: `O nome precisa ter entre 1 e ${AI_AGENT_NAME_MAX_CHARS} caracteres.` });
+  }
+  if (!hasAiConfigurationContent(config)) {
+    return res.status(400).json({ ok: false, error: "O rascunho está vazio. Gere ou preencha uma configuração antes de salvar." });
+  }
+  try {
+    const db = getDB();
+    const count = await db.get<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM ai_agents WHERE user_id = ?`,
+      [user.id]
+    );
+    if (Number(count?.total || 0) >= AI_AGENT_MAX_PER_USER) {
+      return res.status(409).json({ ok: false, error: `Sua conta já atingiu o limite de ${AI_AGENT_MAX_PER_USER} agentes.` });
+    }
+    const now = Date.now();
+    const result = await db.run(
+      `INSERT INTO ai_agents (user_id, name, ai_config, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [user.id, name, JSON.stringify(config), now, now]
+    );
+    const id = Number(result.insertId || 0);
+    await db.run(`UPDATE users SET ia_enabled = 1 WHERE id = ?`, [user.id]);
+    await logAudit("ai_agent_create", user.id, "ai_agent", id, { scope: "account" });
+    return res.status(201).json({
+      ok: true,
+      agent: { id, name, config, createdAt: now, updatedAt: now, assignedSessions: 0 },
+    });
+  } catch (err: any) {
+    if (err?.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ ok: false, error: "Você já tem um agente com esse nome." });
+    }
+    return res.status(500).json({ ok: false, error: "Não foi possível salvar o agente." });
+  }
+});
+
+app.patch("/api/ai-agents/:id", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  if (!Number.isSafeInteger(id) || id <= 0 || !name || name.length > AI_AGENT_NAME_MAX_CHARS) {
+    return res.status(400).json({ ok: false, error: "Agente ou nome inválido." });
+  }
+  try {
+    const db = getDB();
+    const result = await db.run(
+      `UPDATE ai_agents SET name = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+      [name, Date.now(), id, user.id]
+    );
+    if (!result.affectedRows) return res.status(404).json({ ok: false, error: "Agente não encontrado." });
+    await logAudit("ai_agent_rename", user.id, "ai_agent", id, {});
+    return res.json({ ok: true, id, name });
+  } catch (err: any) {
+    if (err?.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ ok: false, error: "Você já tem um agente com esse nome." });
+    }
+    return res.status(500).json({ ok: false, error: "Não foi possível renomear o agente." });
+  }
+});
+
+app.post("/api/ai-agents/:id/adjust", authMiddleware, aiConfigAssistantLimiter, async (req, res) => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  const instruction = typeof req.body?.instruction === "string" ? req.body.instruction.trim() : "";
+  if (!Number.isSafeInteger(id) || id <= 0 || !instruction || instruction.length > AI_CONFIG_ASSISTANT_REQUEST_MAX_CHARS) {
+    return res.status(400).json({ ok: false, error: "Agente inválido ou instrução fora do limite de 2.500 caracteres." });
+  }
+  try {
+    const db = getDB();
+    const row = await db.get<{ name: string; ai_config: string }>(
+      `SELECT name, ai_config FROM ai_agents WHERE id = ? AND user_id = ? LIMIT 1`,
+      [id, user.id]
+    );
+    if (!row) return res.status(404).json({ ok: false, error: "Agente não encontrado." });
+    const currentConfig = parseAiConfiguration(row.ai_config);
+    if (!currentConfig) return res.status(409).json({ ok: false, error: "A configuração salva do agente está inválida." });
+    const config = await generateAiConfigurationDraft({ instruction, mode: "adjust", currentConfig });
+    return res.json({ ok: true, draft: { id, name: row.name, config } });
+  } catch (err: any) {
+    const failure = getAiConfigAssistantFailure(err);
+    return res.status(failure.status).json({ ok: false, error: failure.message });
+  }
+});
+
+app.put("/api/ai-agents/:id/config", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  const config = normalizeAiConfiguration(req.body?.config);
+  if (!Number.isSafeInteger(id) || id <= 0 || !hasAiConfigurationContent(config)) {
+    return res.status(400).json({ ok: false, error: "Agente ou configuração inválida." });
+  }
+  try {
+    const result = await getDB().run(
+      `UPDATE ai_agents SET ai_config = ?, updated_at = ? WHERE id = ? AND user_id = ?`,
+      [JSON.stringify(config), Date.now(), id, user.id]
+    );
+    if (!result.affectedRows) return res.status(404).json({ ok: false, error: "Agente não encontrado." });
+    await getDB().run(`UPDATE users SET ia_enabled = 1 WHERE id = ?`, [user.id]);
+    await logAudit("ai_agent_adjust", user.id, "ai_agent", id, {});
+    return res.json({ ok: true, config });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Não foi possível salvar o ajuste." });
+  }
+});
+
+app.delete("/api/ai-agents/:id", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ ok: false, error: "Agente inválido." });
+  try {
+    const db = getDB();
+    const agent = await db.get<{ id: number }>(
+      `SELECT id FROM ai_agents WHERE id = ? AND user_id = ? LIMIT 1`,
+      [id, user.id]
+    );
+    if (!agent) return res.status(404).json({ ok: false, error: "Agente não encontrado." });
+    const assigned = await db.get<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM sessions WHERE user_id = ? AND ai_agent_id = ?`,
+      [user.id, id]
+    );
+    if (Number(assigned?.total || 0) > 0) {
+      return res.status(409).json({ ok: false, error: "Desvincule o agente das sessões antes de excluí-lo." });
+    }
+    await db.run(`DELETE FROM ai_agents WHERE id = ? AND user_id = ?`, [id, user.id]);
+    await logAudit("ai_agent_delete", user.id, "ai_agent", id, {});
+    return res.json({ ok: true });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Não foi possível excluir o agente." });
+  }
+});
+
+app.patch("/api/sessions/ai-agent", authMiddleware, async (req, res) => {
+  const user = (req as any).user;
+  const sessionName = typeof req.body?.sessionName === "string" ? req.body.sessionName.trim() : "";
+  const rawAgentId = req.body?.agentId;
+  let agentId: number | null = null;
+  if (rawAgentId !== null && rawAgentId !== undefined && rawAgentId !== "") {
+    const parsed = Number(rawAgentId);
+    if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+      return res.status(400).json({ ok: false, error: "Agente inválido." });
+    }
+    agentId = parsed;
+  }
+  if (!isSafeSessionName(sessionName)) {
+    return res.status(400).json({ ok: false, error: "Nome de sessão inválido." });
+  }
+  try {
+    const db = getDB();
+    const session = await db.get<{ id: number }>(
+      `SELECT id FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+      [user.id, sessionName]
+    );
+    if (!session) return res.status(404).json({ ok: false, error: "Sessão não encontrada." });
+    if (agentId !== null) {
+      const agent = await db.get<{ id: number }>(
+        `SELECT id FROM ai_agents WHERE user_id = ? AND id = ? LIMIT 1`,
+        [user.id, agentId]
+      );
+      if (!agent) return res.status(404).json({ ok: false, error: "Agente não encontrado nesta conta." });
+    }
+    await db.run(
+      `UPDATE sessions SET ai_agent_id = ? WHERE id = ? AND user_id = ?`,
+      [agentId, session.id, user.id]
+    );
+    await logAudit("session_ai_agent_assign", user.id, "session", session.id, {
+      sessionName,
+      assigned: agentId !== null,
+    });
+    return res.json({ ok: true, sessionName, agentId });
+  } catch {
+    return res.status(500).json({ ok: false, error: "Não foi possível vincular o agente à sessão." });
+  }
+});
+
+app.post("/api/ai-agents/:id/simulate", authMiddleware, aiAgentSimulationLimiter, async (req, res) => {
+  const user = (req as any).user;
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ ok: false, error: "Agente inválido." });
+  try {
+    const agent = await getDB().get<{ ai_config: string }>(
+      `SELECT ai_config FROM ai_agents WHERE id = ? AND user_id = ? LIMIT 1`,
+      [id, user.id]
+    );
+    const config = parseAiConfiguration(agent?.ai_config);
+    if (!config) return res.status(404).json({ ok: false, error: "Agente não encontrado." });
+    const reply = await generateAiAgentSimulationReply({ config, messages: req.body?.messages });
+    await logAudit("ai_agent_simulate", user.id, "ai_agent", id, {});
+    return res.json({ ok: true, reply });
+  } catch (err: any) {
+    if (err?.message === "AI_AGENT_SIMULATION_INVALID_MESSAGES") {
+      return res.status(400).json({ ok: false, error: "Envie uma mensagem de cliente para continuar a simulação." });
+    }
+    if (err?.message === "AI_CONFIG_ASSISTANT_PROVIDER_NOT_CONFIGURED") {
+      return res.status(503).json({ ok: false, error: "O provedor de IA configurado no servidor não está disponível." });
+    }
+    if (String(err?.message || "").startsWith("AI_CONFIG_ASSISTANT_")) {
+      const failure = getAiConfigAssistantFailure(err);
+      return res.status(failure.status).json({ ok: false, error: failure.message });
+    }
+    return res.status(502).json({ ok: false, error: "Não foi possível simular a resposta agora." });
   }
 });
 
@@ -5887,12 +6663,20 @@ app.post(
   subscriptionGuard,
   async (req, res) => {
     const { sessionName } = req.body;
-    if (!sessionName) {
+    if (!isSafeSessionName(sessionName)) {
       return res.status(400).json({ error: "sessionName é obrigatório" });
     }
 
     const user = (req as any).user;
     const db = getDB();
+
+    const existingSession = await db.get(
+      `SELECT id FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+      [user.id, sessionName]
+    );
+    if (existingSession) {
+      return res.status(409).json({ error: "Já existe uma sessão com esse nome" });
+    }
 
     // ===============================
     // 🔐 LIMITE DE SESSÕES POR PLANO
@@ -5941,7 +6725,8 @@ app.get("/sessions/list", authMiddleware, async (req, res) => {
 
   const db = getDB();
   const sessions = await db.all(
-    `SELECT * FROM sessions WHERE user_id = ? ORDER BY id DESC`,
+    `SELECT id, session_name, status, created_at
+     FROM sessions WHERE user_id = ? ORDER BY id DESC`,
     [user.id]
   );
 
@@ -5950,21 +6735,34 @@ app.get("/sessions/list", authMiddleware, async (req, res) => {
 
 
 // Buscar QR
-app.get("/sessions/qr/:userId/:sessionName", async (req, res) => {
+app.get("/sessions/qr/:userId/:sessionName", authMiddleware, async (req, res) => {
   const { userId, sessionName } = req.params;
-  const qrPath = getQRPathFor(`USER${userId}_${sessionName}`);
+  const user = (req as any).user;
+  if (Number(userId) !== Number(user.id) || !isSafeSessionName(sessionName)) {
+    return res.status(404).json({ error: "QR não encontrado" });
+  }
+
+  const db = getDB();
+  const session = await db.get(
+    `SELECT id FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+    [user.id, sessionName]
+  );
+  if (!session) return res.status(404).json({ error: "QR não encontrado" });
+
+  const qrPath = getQRPathFor(`USER${user.id}_${sessionName}`);
 
   if (!fs.existsSync(qrPath)) {
     return res.status(404).json({ error: "QR não gerado (ou já autenticado)" });
   }
 
+  res.setHeader("Cache-Control", "no-store, private");
   res.sendFile(qrPath);
 });
 
 // Apagar Sessão
 app.delete("/sessions/delete", authMiddleware, async (req, res) => {
   const { sessionName } = req.body;
-  if (!sessionName)
+  if (!isSafeSessionName(sessionName))
     return res.status(400).json({ error: "sessionName é obrigatório" });
 
   const user = (req as any).user;
@@ -5977,15 +6775,12 @@ app.delete("/sessions/delete", authMiddleware, async (req, res) => {
 
 
 // Reiniciar Sessão
-app.post("/sessions/restart", async (req, res) => {
-  const { token, sessionName } = req.body;
-  if (requireFields(res, { token, sessionName })) return;
-
-  const user = await findUserByToken(token);
-  if (!user) return res.status(404).json({ error: "token inválido" });
-  if (isSessionExpired(user)) {
-    return res.status(401).json({ error: "Sessão expirada" });
+app.post("/sessions/restart", authMiddleware, async (req, res) => {
+  const { sessionName } = req.body;
+  if (!isSafeSessionName(sessionName)) {
+    return res.status(400).json({ error: "sessionName inválido" });
   }
+  const user = (req as any).user;
 
   const db = getDB();
   const session = await db.get<{ status: string }>(
@@ -5995,6 +6790,12 @@ app.post("/sessions/restart", async (req, res) => {
 
   if (!session) {
     return res.status(404).json({ error: "Sessão não encontrada" });
+  }
+
+  if (req.body?.refreshOnly === true && session.status !== "pending") {
+    return res.status(409).json({
+      error: "Só é possível gerar outro QR enquanto a sessão aguarda autenticação.",
+    });
   }
 
   if (session.status === "banned") {
@@ -6052,6 +6853,30 @@ app.post("/user/ia-silence", authMiddleware, async (req, res) => {
   }
 });
 
+async function hasUserAiConfiguration(userId: number): Promise<boolean> {
+  const db = getDB();
+  const account = await db.get<{ ai_config: string | null; prompt: string | null }>(
+    `SELECT ai_config, prompt FROM users WHERE id = ? LIMIT 1`,
+    [userId]
+  );
+  const [sessions, agents] = await Promise.all([
+    db.all<{ ai_config: string | null }>(
+      `SELECT ai_config FROM sessions WHERE user_id = ? AND ai_config IS NOT NULL`,
+      [userId]
+    ),
+    db.all<{ ai_config: string | null }>(
+      `SELECT ai_config FROM ai_agents WHERE user_id = ?`,
+      [userId]
+    ),
+  ]);
+
+  return hasUsableAiConfiguration({
+    accountConfig: account?.ai_config,
+    legacyPrompt: account?.prompt,
+    scopedConfigs: [...sessions, ...agents].map((row) => row.ai_config),
+  });
+}
+
 // 🔁 Toggle IA Automática
 app.post("/user/toggle-ia", authMiddleware, async (req, res) => {
   const { enabled } = req.body;
@@ -6063,6 +6888,13 @@ app.post("/user/toggle-ia", authMiddleware, async (req, res) => {
   const user = (req as any).user; // 👈 vem do cookie
 
   const db = getDB();
+  if (enabled && !(await hasUserAiConfiguration(Number(user.id)))) {
+    return res.status(409).json({
+      ok: false,
+      error: "Configure e salve a IA antes de ativar as respostas automáticas.",
+    });
+  }
+
   await db.run(
     `UPDATE users SET ia_enabled = ? WHERE id = ?`,
     [enabled ? 1 : 0, user.id]
@@ -6114,10 +6946,10 @@ export async function restoreSessionsOnStartup() {
   const db = getDB();
 
   const sessions = await db.all(
-    `SELECT * FROM sessions WHERE status = 'connected'`
+    `SELECT * FROM sessions WHERE status IN ('connected', 'reconnecting')`
   );
 
-  console.log(`🔄 Restaurando ${sessions.length} sessões conectadas...`);
+  console.log(`🔄 Restaurando ${sessions.length} sessões que precisam de reconexão...`);
 
   const concurrency = Math.max(1, Number(process.env.RESTORE_CONCURRENCY || 3));
   const executing = new Set<Promise<void>>();

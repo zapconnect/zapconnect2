@@ -2728,7 +2728,10 @@ btnClearAi.addEventListener("click", () => {
     const confirmed = confirm("Resetar o contexto da IA para este chat?\n\nA IA esquecerá tudo que foi dito e começará do zero.");
     if (!confirmed) return;
 
-    socket.emit("ai:clear_history", { chatId: currentChat });
+    socket.emit("ai:clear_history", {
+        chatId: currentChat,
+        sessionName: window.SESSION_NAME
+    });
 
     // Feedback visual imediato
     btnClearAi.textContent = "⏳ Resetando...";
@@ -2743,6 +2746,13 @@ socket.on("ai:history_cleared", ({ chatId }) => {
             btnClearAi.disabled = false;
         }, 2000);
     }
+});
+
+socket.on("ai:history_clear_error", ({ chatId, error }) => {
+    if (currentChat !== chatId) return;
+    btnClearAi.textContent = "🧹 Resetar IA";
+    btnClearAi.disabled = false;
+    notify(error || "Não foi possível resetar o contexto da IA.", "error");
 });
 
 /* ==========================================================

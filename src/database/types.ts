@@ -14,6 +14,7 @@ export interface User {
   ai_config?: string | null;
   ia_enabled: number; // 0 ou 1 (boolean no banco)
   onboarding_step?: number | null;
+  onboarding_assistant_done?: number | null;
 
   token: string;
   token_expires_at?: number | null;

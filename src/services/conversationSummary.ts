@@ -73,9 +73,10 @@ export async function summarizeConversationToCrm({
     const row = await db.get<{ history: Buffer | string | null }>(
       `SELECT history
        FROM chat_histories
-       WHERE user_id = ? AND chat_id = ?
+       WHERE user_id = ? AND session_name = ? AND chat_id = ?
+         AND session_scope_version = 1
        LIMIT 1`,
-      [userId, chatId]
+      [userId, sessionName, chatId]
     );
     if (!row?.history) return;
 

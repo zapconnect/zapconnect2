@@ -14,6 +14,12 @@ window.USER_ONBOARDING_STEP = Number(painelBootstrapDataset.userOnboardingStep |
 // ===============================
 let qrTimer = null;
 let currentUser = null;
+let activeConnectionSessionName = "";
+let sessionListRequestSequence = 0;
+let aiConfigScope = "";
+let aiConfigBaseline = "";
+let aiConfigInherited = false;
+let aiConfigLinkedAgent = null;
 let lastScheduleLogId = 0;
 const ONBOARDING_DISMISS_KEY = "zap_onboarding_dismissed";
 
@@ -144,24 +150,132 @@ function selectAiConfigSection(section) {
     });
 }
 
-function openAiConfigModal() {
-    const modal = document.getElementById("ai-config-modal");
-    if (!modal) return;
+function getAiConfigSignature(config) {
+    return JSON.stringify(parseAiConfig(config) || createEmptyAiConfig());
+}
 
-    const savedConfig = parseAiConfig(currentUser?.ai_config);
-    const config = savedConfig || createEmptyAiConfig();
+function updateAiConfigScopeOptions() {
+    const select = document.getElementById("ai-config-scope");
+    if (!select) return;
 
-    // Clientes antigos não perdem a configuração que já tinham antes do novo painel.
-    if (!savedConfig && String(currentUser?.prompt || "").trim()) {
-        config.advancedInstructions = currentUser.prompt;
+    const selected = select.value;
+    select.replaceChildren(new Option("Configuração geral (todas as sessões)", ""));
+    (window._cachedSessions || []).forEach(session => {
+        if (!session?.session_name) return;
+        select.add(new Option(`Sessão: ${session.session_name}`, session.session_name));
+    });
+    if ([...select.options].some(option => option.value === selected)) {
+        select.value = selected;
+    }
+}
+
+function updateAiConfigScopeHint(inherited, linkedAgent = null) {
+    const hint = document.getElementById("ai-config-scope-hint");
+    const inheritButton = document.getElementById("ai-config-inherit");
+    aiConfigInherited = Boolean(inherited);
+    aiConfigLinkedAgent = linkedAgent;
+
+    if (hint) {
+        hint.textContent = linkedAgent
+            ? `Esta sessão usa o agente “${String(linkedAgent.name || "").slice(0, 120)}”. Ele tem prioridade nas respostas; a configuração abaixo fica como fallback.`
+            : !aiConfigScope
+            ? "Esta configuração vale como padrão para todas as sessões."
+            : inherited
+                ? "Esta sessão está herdando a configuração geral. Salvar cria uma configuração própria."
+                : "Esta sessão tem uma configuração própria de IA.";
+    }
+    if (inheritButton) inheritButton.hidden = !aiConfigScope || aiConfigInherited;
+}
+
+async function loadAiConfigurationScope(sessionName = "") {
+    const query = sessionName ? `?sessionName=${encodeURIComponent(sessionName)}` : "";
+    const res = await fetch(API + "/user/ai-config" + query, { credentials: "include" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "Não foi possível carregar a configuração.");
+
+    aiConfigScope = sessionName;
+    const config = parseAiConfig(data.config) || createEmptyAiConfig();
+    setAiConfigForm(config);
+    aiConfigBaseline = getAiConfigSignature(config);
+    updateAiConfigScopeHint(data.inherited, data.linkedAgent || null);
+}
+
+async function changeAiConfigScope() {
+    const select = document.getElementById("ai-config-scope");
+    if (!select) return;
+    const nextScope = select.value;
+    const currentSignature = getAiConfigSignature(getAiConfigFromForm());
+    if (currentSignature !== aiConfigBaseline && !confirm("Descartar as alterações ainda não salvas e trocar a sessão?")) {
+        select.value = aiConfigScope;
+        return;
     }
 
-    setAiConfigForm(config);
+    select.disabled = true;
+    try {
+        await loadAiConfigurationScope(nextScope);
+    } catch (err) {
+        select.value = aiConfigScope;
+        notify(err?.message || "Não foi possível carregar a configuração da sessão.", "error");
+    } finally {
+        select.disabled = false;
+    }
+}
+
+async function inheritGlobalAiConfiguration() {
+    if (!aiConfigScope) return;
+    if (getAiConfigSignature(getAiConfigFromForm()) !== aiConfigBaseline &&
+        !confirm("Descartar as alterações ainda não salvas e voltar à configuração geral?")) return;
+
+    const button = document.getElementById("ai-config-inherit");
+    if (button) button.disabled = true;
+    try {
+        const res = await fetch(API + "/user/ai-config", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionName: aiConfigScope, inheritGlobal: true })
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "Não foi possível restaurar a configuração geral.");
+        await loadAiConfigurationScope(aiConfigScope);
+        notify("A sessão voltou a usar a configuração geral.", "success");
+    } catch (err) {
+        notify(err?.message || "Erro ao restaurar a configuração geral.", "error");
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function openAiConfigModal() {
+    const modal = document.getElementById("ai-config-modal");
+    if (!modal) return;
+    updateAiConfigScopeOptions();
+    const scopeSelect = document.getElementById("ai-config-scope");
+    if (scopeSelect) scopeSelect.value = "";
+    try {
+        await loadAiConfigurationScope("");
+    } catch (err) {
+        notify(err?.message || "Não foi possível carregar a configuração da IA.", "error");
+        return;
+    }
     selectAiConfigSection("identity");
     modal.hidden = false;
     modal.setAttribute("aria-hidden", "false");
     document.body.classList.add("ai-config-open");
     setTimeout(() => document.getElementById("ai-assistant-name")?.focus(), 0);
+}
+
+function updateIaAutomationUi(enabled) {
+    const isEnabled = Boolean(enabled);
+    const checkbox = document.getElementById("ia-toggle");
+    const status = document.getElementById("ia-status");
+    if (checkbox) checkbox.checked = isEnabled;
+    if (status) {
+        status.innerText = isEnabled ? "Ativada" : "Desativada";
+        status.classList.toggle("is-enabled", isEnabled);
+        status.classList.toggle("is-disabled", !isEnabled);
+    }
+    if (currentUser) currentUser.ia_enabled = isEnabled ? 1 : 0;
 }
 
 function closeAiConfigModal() {
@@ -193,7 +307,10 @@ async function saveAiConfiguration(event) {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ config })
+            body: JSON.stringify({
+                config,
+                ...(aiConfigScope ? { sessionName: aiConfigScope } : {})
+            })
         });
         const data = await res.json();
 
@@ -201,15 +318,20 @@ async function saveAiConfiguration(event) {
             throw new Error(data.error || "Não foi possível salvar a configuração.");
         }
 
-        if (currentUser) {
+        if (currentUser && !aiConfigScope) {
             currentUser.ai_config = JSON.stringify(config);
             currentUser.prompt = data.prompt || currentUser.prompt;
         }
-        window.HAS_PROMPT = String(data.prompt || "").trim().length > 10;
+        updateIaAutomationUi(data.ia_enabled === undefined ? true : Number(data.ia_enabled) === 1);
+        aiConfigBaseline = getAiConfigSignature(config);
+        updateAiConfigScopeHint(false, aiConfigLinkedAgent);
+        if (!aiConfigScope) {
+            window.HAS_PROMPT = String(data.prompt || "").trim().length > 10;
+        }
         renderAiConfigSummary();
         renderOnboardingChecklist();
         closeAiConfigModal();
-        notify("Configuração da IA salva com sucesso.", "success");
+        notify("Configuração da IA salva e respostas automáticas ativadas.", "success");
     } catch (err) {
         notify(err?.message || "Erro ao salvar a configuração da IA.", "error");
     } finally {
@@ -226,6 +348,8 @@ function initAiConfigModal() {
 
     form.addEventListener("submit", saveAiConfiguration);
     form.addEventListener("input", updateAiConfigProgress);
+    document.getElementById("ai-config-scope")?.addEventListener("change", changeAiConfigScope);
+    document.getElementById("ai-config-inherit")?.addEventListener("click", inheritGlobalAiConfiguration);
     document.querySelectorAll("[data-ai-config-section]").forEach(button => {
         button.addEventListener("click", () => selectAiConfigSection(button.dataset.aiConfigSection));
     });
@@ -266,18 +390,17 @@ function hideQrUI() {
     const img = document.getElementById("qr-img");
     const refresh = document.getElementById("qr-refresh");
     const timer = document.getElementById("qr-timer");
-    const placeholder = document.getElementById("qr-placeholder");
 
-    if (box) {
-        box.style.display = "block";
-        box.classList.remove("hidden");
-    }
+    if (box) box.style.display = "none";
     if (loading) loading.style.display = "none";
-    if (img) img.style.display = "none";
+    if (img) {
+        img.style.display = "none";
+        img.removeAttribute("src");
+    }
     if (refresh) refresh.style.display = "none";
     if (timer) timer.innerText = "";
-    if (placeholder) placeholder.style.display = "flex";
     clearInterval(qrTimer);
+    qrTimer = null;
 }
 
 // ===============================
@@ -634,6 +757,16 @@ function renderSessionUsage(sessions = []) {
     remaining.style.color = left === 0 ? "#fca5a5" : "";
 }
 
+function setSilenceStatus(message, state = "inactive") {
+    const status = document.getElementById("silence-status");
+    if (!status) return;
+
+    status.textContent = message;
+    status.classList.toggle("is-active", state === "active");
+    status.classList.toggle("is-pending", state === "pending");
+    status.classList.toggle("is-inactive", state === "inactive");
+}
+
 function renderSilenceConfig(user) {
     const toggle  = document.getElementById("silence-toggle");
     const config  = document.getElementById("silence-config");
@@ -645,7 +778,7 @@ function renderSilenceConfig(user) {
     const hassilence = user.ia_silence_start !== null && user.ia_silence_start !== undefined;
 
     toggle.checked = hassilence;
-    if (config) config.style.display = hassilence ? "block" : "none";
+    if (config) config.style.display = hassilence ? "flex" : "none";
 
     if (hassilence && selStart && selEnd) {
         selStart.value = String(user.ia_silence_start ?? 22);
@@ -654,12 +787,21 @@ function renderSilenceConfig(user) {
         selStart.value = "22";
         selEnd.value   = "8";
     }
+
+    if (hassilence && selStart && selEnd) {
+        const formatHour = value => `${String(value).padStart(2, "0")}:00`;
+        setSilenceStatus(`Ativo · ${formatHour(selStart.value)}–${formatHour(selEnd.value)}`, "active");
+    } else {
+        setSilenceStatus("Desativado", "inactive");
+    }
 }
 
 function toggleSilence() {
     const toggle = document.getElementById("silence-toggle");
     const config = document.getElementById("silence-config");
-    if (config) config.style.display = toggle.checked ? "block" : "none";
+    if (!toggle) return;
+    if (config) config.style.display = toggle.checked ? "flex" : "none";
+    setSilenceStatus(toggle.checked ? "Defina o intervalo" : "Desativado", toggle.checked ? "pending" : "inactive");
 
     if (!toggle.checked) {
         // Desativar silêncio imediatamente
@@ -687,6 +829,7 @@ async function saveSilence() {
         const data = await res.json();
         if (data.ok) {
             const fmt = h => String(h).padStart(2,"0") + ":00";
+            setSilenceStatus(`Ativo · ${fmt(start)}–${fmt(end)}`, "active");
             notify(`Silêncio ativo: ${fmt(start)} – ${fmt(end)} ✅`, "success");
         } else {
             notify(data.error || "Erro ao salvar", "error");
@@ -774,32 +917,48 @@ async function logout() {
 // 📱 CRIAR SESSÃO
 // ===============================
 async function createSession() {
-    const name = document.getElementById("session-name").value.trim();
+    const input = document.getElementById("session-name");
+    const button = document.getElementById("session-create-btn");
+    const name = input?.value.trim() || "";
 
     if (!name) {
-        notify("Informe o nome da sessão", "warning");
+        notify("Informe um nome para identificar esta conexão", "warning");
+        input?.focus();
         return;
     }
 
-    showQrLoading();
+    activeConnectionSessionName = name;
+    showQrLoading(name);
+    if (button) button.disabled = true;
 
-    const res = await fetch(API + "/sessions/create", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionName: name })
-    });
+    try {
+        const res = await fetch(API + "/sessions/create", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionName: name })
+        });
+        const data = await res.json().catch(() => ({}));
 
-    const data = await res.json();
+        if (!res.ok || data.error) {
+            setConnectionStatus("error", data.error || "Não foi possível iniciar a conexão. Tente novamente.");
+            const loading = document.getElementById("qr-loading");
+            if (loading) loading.style.display = "none";
+            notify(data.error || "Não foi possível iniciar a conexão", "error");
+            return;
+        }
 
-    if (data.error) {
-        hideQrLoading();
-        notify(data.error, "error");
-        return;
+        notify("Sessão criada. Agora conecte pelo QR Code.", "success");
+        if (input) input.value = "";
+        await listSessions();
+    } catch (err) {
+        setConnectionStatus("error", "Não foi possível iniciar a conexão. Verifique sua internet e tente novamente.");
+        const loading = document.getElementById("qr-loading");
+        if (loading) loading.style.display = "none";
+        notify("Erro ao iniciar a conexão do WhatsApp", "error");
+    } finally {
+        if (button) button.disabled = false;
     }
-
-    notify("Sessão criada com sucesso", "success");
-    listSessions();
 }
 
 
@@ -808,19 +967,22 @@ async function createSession() {
 // 📋 LISTAR SESSÕES
 // ===============================
 async function listSessions() {
-    const res = await fetch(API + "/sessions/list", {
-        credentials: "include"
-    });
-
-    const { sessions } = await res.json();
+    const requestSequence = ++sessionListRequestSequence;
+    const res = await fetch(API + "/sessions/list", { credentials: "include" });
+    if (!res.ok) throw new Error("Não foi possível carregar as conexões do WhatsApp.");
+    const payload = await res.json();
+    if (requestSequence !== sessionListRequestSequence) return;
+    const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
 
     // Cache global para goToChat verificar
     window._cachedSessions = sessions || [];
+    updateAiConfigScopeOptions();
     window.SESSIONS_COUNT = window._cachedSessions.length;
     renderSessionUsage(window._cachedSessions);
     renderOnboardingChecklist();
 
     const box = document.getElementById("sessions-list");
+    if (!box) return;
     box.innerHTML = "";
 
   if (!sessions.length) {
@@ -843,6 +1005,7 @@ async function listSessions() {
         const isBanned      = s.status === "banned";
         const isReauthRequired = s.status === "reauth_required";
         const isReconnecting = s.status === "reconnecting";
+        const isConnecting   = s.status === "connecting";
         const isPending      = s.status === "pending";
         const isCircuitOpen  = s.status === "circuit_open";
 
@@ -850,6 +1013,7 @@ async function listSessions() {
                          : isBanned      ? "badge-banned"
                          : isReauthRequired ? "badge-circuit-open"
                          : isReconnecting ? "badge-reconnecting"
+                         : isConnecting  ? "badge-reconnecting"
                          : isCircuitOpen  ? "badge-circuit-open"
                          : isPending      ? "badge-pending"
                          : "badge-disconnected";
@@ -858,6 +1022,7 @@ async function listSessions() {
                          : isBanned      ? "Possivel banimento"
                          : isReauthRequired ? "Autenticacao manual"
                          : isReconnecting ? "Reconectando..."
+                         : isConnecting  ? "Conectando..."
                          : isCircuitOpen  ? "Ação necessária"
                          : isPending      ? "Aguardando QR"
                          : "Desconectado";
@@ -870,6 +1035,13 @@ async function listSessions() {
 
         const div = document.createElement("div");
         div.className = "session-card";
+        const sessionNameText = escapeSessionHtml(s.session_name);
+        const sessionNameArg = escapeSessionHtml(
+            JSON.stringify(String(s.session_name || ""))
+                .replace(/</g, "\\u003c")
+                .replace(/\u2028/g, "\\u2028")
+                .replace(/\u2029/g, "\\u2029")
+        );
 
         div.innerHTML = `
             <div class="session-left">
@@ -877,21 +1049,27 @@ async function listSessions() {
                     <i class="fa-brands fa-whatsapp"></i>
                 </div>
                 <div class="session-info">
-                    <div class="session-name">${s.session_name}</div>
+                    <div class="session-name">${sessionNameText}</div>
                     <span class="session-badge ${badgeClass}">${badgeLabel}</span>
                     ${sessionNote}
                 </div>
             </div>
             <div class="session-actions">
-                ${!isConnected && !isBanned ? `
+                ${isPending ? `
                 <button class="btn-session-action btn-reconnect"
-                    onclick="restartSession('${s.session_name}')"
+                    onclick="showSessionQr(${sessionNameArg})"
+                    title="Abrir QR Code desta conexão">
+                    <i class="fa-solid fa-qrcode"></i>
+                    Abrir QR
+                </button>` : !isConnected && !isBanned && !isConnecting ? `
+                <button class="btn-session-action btn-reconnect"
+                    onclick="restartSession(${sessionNameArg})"
                     title="Reconectar">
                     <i class="fa-solid fa-rotate"></i>
                     Reconectar
                 </button>` : ""}
                 <button class="btn-session-action btn-delete"
-                    onclick="deleteSession('${s.session_name}')"
+                    onclick="deleteSession(${sessionNameArg})"
                     title="Apagar sessão">
                     <i class="fa-solid fa-trash"></i>
                 </button>
@@ -901,14 +1079,35 @@ async function listSessions() {
     box.appendChild(div);
   });
 
-  // Se alguma sessão está conectada, esconder QR/placeholder
-  const hasConnected = sessions.some(s => s.status === "connected");
-  if (hasConnected) hideQrUI();
+  if (activeConnectionSessionName) {
+      const activeSession = sessions.find(s => s.session_name === activeConnectionSessionName);
+      if (!activeSession) {
+          activeConnectionSessionName = "";
+          hideQrUI();
+      } else if (activeSession.status === "connected") {
+          showConnectionSuccess(activeSession.session_name);
+      } else if (["disconnected", "reauth_required", "circuit_open"].includes(activeSession.status)) {
+          showConnectionInterrupted(activeSession.session_name);
+      } else if (["reconnecting", "connecting"].includes(activeSession.status)) {
+          setConnectionStatus("info", "Reconectando ao WhatsApp. Aguarde a atualização do status.");
+      } else if (activeSession.status === "pending") {
+          setConnectionStatus("info", "Aguardando leitura do QR Code do WhatsApp.");
+      }
+  }
 
   checkConnectionAlert(sessions);
 }
 
-async function restartSession(name) {
+function escapeSessionHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+async function restartSession(name, options = {}) {
     const session = (window._cachedSessions || []).find(s => s.session_name === name);
     if (session?.status === "banned") {
         notify(
@@ -918,23 +1117,29 @@ async function restartSession(name) {
         );
         return;
     }
-    if (!confirm(`Reconectar a sessão "${name}"?`)) return;
+    if (!options.skipConfirm && !confirm(`Reconectar a sessão "${name}"?`)) return;
 
     try {
+        activeConnectionSessionName = name;
+        showQrLoading(name);
         const res = await fetch(API + "/sessions/restart", {
             method: "POST",
             credentials: "include",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sessionName: name, token: currentUser?.token })
+            body: JSON.stringify({ sessionName: name, refreshOnly: Boolean(options.skipConfirm) })
         });
-        const data = await res.json();
-        if (data.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
             notify("Reconectando sessão...", "success");
-            setTimeout(listSessions, 1500);
+            setTimeout(() => listSessions().catch(() => {}), 1500);
         } else {
+            setConnectionStatus("error", data.error || "Não foi possível reiniciar a conexão.");
+            document.getElementById("qr-loading")?.style.setProperty("display", "none");
             notify(data.error || "Erro ao reconectar", "error");
         }
     } catch {
+        setConnectionStatus("error", "Não foi possível reiniciar a conexão. Tente novamente.");
+        document.getElementById("qr-loading")?.style.setProperty("display", "none");
         notify("Erro ao reconectar sessão", "error");
     }
 }
@@ -945,14 +1150,22 @@ async function restartSession(name) {
 async function deleteSession(name) {
     if (!confirm("Apagar sessão?")) return;
 
-    await fetch(API + "/sessions/delete", {
-        method: "DELETE",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionName: name })
-    });
-
-    listSessions();
+    try {
+        const res = await fetch(API + "/sessions/delete", {
+            method: "DELETE",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionName: name })
+        });
+        if (!res.ok) throw new Error("Não foi possível excluir a sessão.");
+        if (activeConnectionSessionName === name) {
+            activeConnectionSessionName = "";
+            hideQrUI();
+        }
+        await listSessions();
+    } catch {
+        notify("Não foi possível apagar a sessão", "error");
+    }
 }
 
 
@@ -962,57 +1175,87 @@ async function deleteSession(name) {
 // ===============================
 // 📸 QR CODE — VIA SOCKET (ÚNICO E CORRETO)
 // ===============================
-socket.on("session:qr", ({ userId, sessionName, full }) => {
-    console.log("📡 QR recebido:", full);
-
+socket.on("session:qr", ({ userId, sessionName }) => {
     if (!currentUser) return;
     if (String(userId) !== String(currentUser.id)) return;
+    if (!sessionName) return;
+    if (activeConnectionSessionName && activeConnectionSessionName !== sessionName) return;
+    activeConnectionSessionName = sessionName;
 
     const box = document.getElementById("qr-preview");
     const img = document.getElementById("qr-img");
     const refresh = document.getElementById("qr-refresh");
     const timerText = document.getElementById("qr-timer");
-    const placeholder = document.getElementById("qr-placeholder");
+    const sessionLabel = document.getElementById("qr-session-label");
 
     if (!box || !img) return;
 
-    // mostrar container
-    box.classList.remove("hidden");
     box.style.display = "block";
+    if (sessionLabel) sessionLabel.textContent = `Conectando: ${sessionName}`;
+    setConnectionStatus("info", "Leia este QR Code com o WhatsApp do celular que deseja conectar.");
 
-    // esconder loading IMEDIATAMENTE
     const loading = document.getElementById("qr-loading");
     if (loading) loading.style.display = "none";
-    if (placeholder) placeholder.style.display = "none";
-
-    // mostrar imagem
     img.style.display = "block";
+    const qrFile = `USER${currentUser.id}_${sessionName}.png`;
+    img.onload = () => {
+        if (activeConnectionSessionName !== sessionName) return;
+        setConnectionStatus("info", "Leia este QR Code com o WhatsApp do celular que deseja conectar.");
+    };
+    img.onerror = () => {
+        if (activeConnectionSessionName !== sessionName) return;
+        img.style.display = "none";
+        setConnectionStatus("warning", "Não foi possível carregar o QR Code. Aguarde alguns segundos ou abra o QR novamente.");
+    };
+    img.src = `/qr/${encodeURIComponent(qrFile)}?t=${Date.now()}`;
 
-    // forçar reload do QR
-    img.src = `/qr/${full}.png?t=${Date.now()}`;
-
-
-
-    // botão refresh
-    if (refresh) refresh.style.display = "inline-block";
-
-    // contador visual
     let seconds = 60;
     clearInterval(qrTimer);
 
     if (timerText) {
-        timerText.innerText = `⏳ QR expira em ${seconds}s`;
+        timerText.innerText = `QR Code temporário · expira em ${seconds}s`;
 
         qrTimer = setInterval(() => {
             seconds--;
             if (seconds <= 0) {
                 clearInterval(qrTimer);
-                timerText.innerText = "⚠️ QR expirado. Gere novamente.";
+                qrTimer = null;
+                timerText.innerText = "Este QR Code expirou. Gere outro para continuar.";
+                setConnectionStatus("warning", "O código expirou antes do pareamento.");
+                if (refresh) refresh.style.display = "inline-flex";
             } else {
-                timerText.innerText = `⏳ QR expira em ${seconds}s`;
+                timerText.innerText = `QR Code temporário · expira em ${seconds}s`;
             }
         }, 1000);
     }
+});
+
+socket.on("session:stateChange", ({ userId, sessionName, state }) => {
+    if (!currentUser || String(userId) !== String(currentUser.id)) return;
+    if (!sessionName || sessionName !== activeConnectionSessionName) return;
+
+    const connectionState = window.ZapConnectSessionState?.classify(state) || "unknown";
+    if (connectionState === "disconnected") {
+        showConnectionInterrupted(sessionName);
+        listSessions().catch(() => {});
+    } else if (connectionState === "connected") {
+        showConnectionSuccess(sessionName);
+        listSessions().catch(() => {});
+    } else if (connectionState === "connecting") {
+        setConnectionStatus("info", "QR lido. Finalizando a conexão com o WhatsApp…");
+    } else if (connectionState === "qr") {
+        setConnectionStatus("info", "QR pronto. Leia o código com o WhatsApp do celular.");
+    }
+});
+
+socket.on("server:online", ({ userId }) => {
+    if (!currentUser || String(userId) !== String(currentUser.id)) return;
+    listSessions().catch(() => {});
+});
+
+socket.on("server:offline", ({ userId }) => {
+    if (!currentUser || String(userId) !== String(currentUser.id)) return;
+    listSessions().catch(() => {});
 });
 
 socket.on("sessions:changed", ({ userId }) => {
@@ -1073,11 +1316,24 @@ socket.on("session:reauthRequired", ({ userId, message }) => {
 
 
 
-function refreshQR() {
-    const img = document.getElementById("qr-img");
-    if (img) {
-        img.src = img.src.split("?")[0] + "?t=" + Date.now();
+async function refreshQR() {
+    if (!activeConnectionSessionName) {
+        notify("Selecione uma conexão para gerar outro QR Code", "warning");
+        return;
     }
+    const session = (window._cachedSessions || []).find(item => item.session_name === activeConnectionSessionName);
+    if (!session || session.status === "connected") {
+        notify("Esta conexão já está ativa ou não está mais disponível", "warning");
+        return;
+    }
+    if (session.status !== "pending") {
+        notify("Para reconectar esta sessão, use o botão Reconectar na lista de sessões.", "warning");
+        return;
+    }
+    const refresh = document.getElementById("qr-refresh");
+    if (refresh) refresh.disabled = true;
+    await restartSession(activeConnectionSessionName, { skipConfirm: true });
+    if (refresh) refresh.disabled = false;
 }
 
 // ===============================
@@ -1097,13 +1353,12 @@ async function toggleIA() {
     const data = await res.json();
 
     if (!data.ok) {
-        notify("Erro ao alterar o estado da IA", "error");
+        notify(data.error || "Erro ao alterar o estado da IA", "warning");
         checkbox.checked = !enabled;
         return;
     }
 
-    document.getElementById("ia-status").innerText =
-        enabled ? "Ativada" : "Desativada";
+    updateIaAutomationUi(enabled);
 
     notify(
         enabled ? "IA ativada com sucesso" : "IA desativada",
@@ -1144,33 +1399,40 @@ function setOnlineStatus(isOnline) {
     }
 }
 
-function showQrLoading() {
+function showQrLoading(sessionName = activeConnectionSessionName) {
     const box = document.getElementById("qr-preview");
     const loading = document.getElementById("qr-loading");
     const img = document.getElementById("qr-img");
-    const placeholder = document.getElementById("qr-placeholder");
+    const refresh = document.getElementById("qr-refresh");
+    const timer = document.getElementById("qr-timer");
 
     if (box) {
-        box.classList.remove("hidden");
         box.style.display = "block";
     }
 
     if (loading) loading.style.display = "flex";
     if (img) img.style.display = "none";
-    if (placeholder) placeholder.style.display = "none";
+    if (refresh) refresh.style.display = "none";
+    if (timer) timer.textContent = "";
+    clearInterval(qrTimer);
+    qrTimer = null;
+    if (sessionName) activeConnectionSessionName = sessionName;
+    setConnectionStatus("info", "Preparando a conexão segura com o WhatsApp…");
+    const sessionLabel = document.getElementById("qr-session-label");
+    if (sessionLabel && activeConnectionSessionName) {
+        sessionLabel.textContent = `Conectando: ${activeConnectionSessionName}`;
+    }
 }
 
 function showQrImage(src) {
     const loading = document.getElementById("qr-loading");
     const img = document.getElementById("qr-img");
-    const placeholder = document.getElementById("qr-placeholder");
     const timer = document.getElementById("qr-timer");
 
     if (!img) return;
 
     img.onload = () => {
         if (loading) loading.style.display = "none";
-        if (placeholder) placeholder.style.display = "none";
         if (timer) timer.innerText = "";
         clearInterval(qrTimer);
         qrTimer = null;
@@ -1178,6 +1440,85 @@ function showQrImage(src) {
     };
 
     img.src = src;
+}
+
+function setConnectionStatus(state, message) {
+    const status = document.getElementById("connection-status");
+    if (!status) return;
+    status.className = `connection-status connection-status--${state}`;
+    status.textContent = message;
+}
+
+function showConnectionSuccess(sessionName) {
+    const box = document.getElementById("qr-preview");
+    const loading = document.getElementById("qr-loading");
+    const img = document.getElementById("qr-img");
+    const refresh = document.getElementById("qr-refresh");
+    const timer = document.getElementById("qr-timer");
+    const label = document.getElementById("qr-session-label");
+    if (box) box.style.display = "block";
+    if (loading) loading.style.display = "none";
+    if (img) {
+        img.style.display = "none";
+        img.removeAttribute("src");
+    }
+    if (refresh) refresh.style.display = "none";
+    if (timer) timer.textContent = "";
+    if (label) label.textContent = `Conectado: ${sessionName}`;
+    clearInterval(qrTimer);
+    qrTimer = null;
+    setConnectionStatus("success", "WhatsApp conectado. Sua sessão já pode receber atendimentos pelo ZapConnect.");
+}
+
+function showConnectionInterrupted(sessionName) {
+    const box = document.getElementById("qr-preview");
+    const loading = document.getElementById("qr-loading");
+    const img = document.getElementById("qr-img");
+    const refresh = document.getElementById("qr-refresh");
+    const timer = document.getElementById("qr-timer");
+    const label = document.getElementById("qr-session-label");
+    if (box) box.style.display = "block";
+    if (loading) loading.style.display = "none";
+    if (img) {
+        img.style.display = "none";
+        img.removeAttribute("src");
+    }
+    if (refresh) refresh.style.display = "none";
+    if (timer) timer.textContent = "Use “Reconectar” na lista de sessões para tentar novamente.";
+    if (label) label.textContent = `Conexão: ${sessionName}`;
+    clearInterval(qrTimer);
+    qrTimer = null;
+    setConnectionStatus("warning", "A conexão foi interrompida. Use Reconectar na lista de sessões para tentar novamente.");
+}
+
+function showSessionQr(sessionName) {
+    const session = (window._cachedSessions || []).find(item => item.session_name === sessionName);
+    if (!session || session.status === "connected") return;
+
+    activeConnectionSessionName = sessionName;
+    showQrLoading(sessionName);
+    const img = document.getElementById("qr-img");
+    if (!img || !currentUser) return;
+
+    img.onload = () => {
+        if (activeConnectionSessionName !== sessionName) return;
+        const loading = document.getElementById("qr-loading");
+        const refresh = document.getElementById("qr-refresh");
+        const timer = document.getElementById("qr-timer");
+        if (loading) loading.style.display = "none";
+        if (refresh) refresh.style.display = "inline-flex";
+        if (timer) timer.textContent = "Se o código não for aceito, gere outro QR Code.";
+        img.style.display = "block";
+        setConnectionStatus("info", "Leia este QR Code com o WhatsApp do celular que deseja conectar.");
+    };
+    img.onerror = () => {
+        if (activeConnectionSessionName !== sessionName) return;
+        const loading = document.getElementById("qr-loading");
+        if (loading) loading.style.display = "none";
+        setConnectionStatus("info", "Aguardando o QR Code. Ele aparecerá automaticamente quando estiver pronto.");
+    };
+    const qrFile = `USER${currentUser.id}_${sessionName}.png`;
+    img.src = `/qr/${encodeURIComponent(qrFile)}?t=${Date.now()}`;
 }
 function hideQrLoading() {
     const loading = document.getElementById("qr-loading");

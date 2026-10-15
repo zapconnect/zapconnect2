@@ -2,8 +2,6 @@
 //  WPP MANAGER MULTI-SESSÃO COMPLETO + STATUS EM TEMPO REAL
 // ===============================
 import wppconnect from "@wppconnect-team/wppconnect";
-import terminalKit from "terminal-kit";
-import qrcode from "qrcode";
 import axios from "axios";
 import fs from "fs";
 import path from "path";
@@ -30,6 +28,8 @@ import {
   type FallbackReason,
 } from "./services/fallbackService";
 import { generateAIResponse } from "./services/aiHandler";
+import { resolveAiPrompt } from "./services/aiConfiguration";
+import { isSafeSessionName } from "./utils/sessionName";
 import { getChatAI } from "./services/chatAiService";
 import {
   getQualificationTextOnlyReminder,
@@ -490,8 +490,6 @@ async function getChatAIState(userId: number, chatId: string): Promise<boolean> 
 }
 
 
-
-const term = terminalKit.terminal;
 
 const AI_SELECTED = resolveRuntimeAiProvider(process.env.AI_SELECTED);
 const MAX_RETRIES = 3;
@@ -1239,7 +1237,7 @@ async function getFlowActionIaMessageCount(ctx: FlowContext): Promise<number> {
   }
 
   try {
-    const history = await loadRecentHistory(ctx.userId, ctx.chatId, 32);
+    const history = await loadRecentHistory(ctx.userId, ctx.sessionName, ctx.chatId, 32);
     ctx.iaMessageCount = history.filter((entry) => entry.role === "model").length;
   } catch {
     ctx.iaMessageCount = 0;
@@ -2359,6 +2357,7 @@ async function safeRmDir(dir: string) {
 // DELETAR SESSÃO COMPLETA
 // ===========================
 export async function deleteWppSession(userId: number, sessionName: string) {
+  if (!isSafeSessionName(sessionName)) return false;
   const full = `USER${userId}_${sessionName}`;
   const TOKENS_DIR = process.env.TOKENS_DIR || "/app/tokens";
   const sessionDir = path.join(TOKENS_DIR, full);
@@ -3097,9 +3096,24 @@ async function attachEvents(
 
           const db = await getDB();
 
-          const userConfig = await db.get(
-            `SELECT prompt, ia_enabled FROM users WHERE id = ?`,
-            [userId]
+          const userConfig = await db.get<{
+            prompt: string | null;
+            ai_config: string | null;
+            ia_enabled: number;
+            session_ai_config: string | null;
+            session_agent_config: string | null;
+          }>(
+            `SELECT u.prompt, u.ai_config, u.ia_enabled,
+                    s.ai_config AS session_ai_config,
+                    agent.ai_config AS session_agent_config
+             FROM users u
+             LEFT JOIN sessions s
+               ON s.user_id = u.id AND s.session_name = ?
+             LEFT JOIN ai_agents agent
+               ON agent.id = s.ai_agent_id AND agent.user_id = u.id
+             WHERE u.id = ?
+             LIMIT 1`,
+            [shortName, userId]
           );
 
           // ERRO IA GLOBAL DESLIGADA
@@ -3110,7 +3124,12 @@ async function attachEvents(
             return;
           }
 
-          const prompt = userConfig?.prompt || "";
+          const prompt = resolveAiPrompt({
+            agentConfig: userConfig?.session_agent_config,
+            sessionConfig: userConfig?.session_ai_config,
+            accountConfig: userConfig?.ai_config,
+            legacyPrompt: userConfig?.prompt,
+          });
 
           // =================================================
           // DIGITANDO DIGITANDO (SÓ AQUI! DEPOIS DE CONFIRMAR QUE VAI RESPONDER)
@@ -3471,6 +3490,12 @@ async function doCreateWppSession(
         `UPDATE sessions SET status = 'pending' WHERE user_id = ? AND session_name = ?`,
         [userId, shortName]
       );
+    } else if (String(existingSession.status || "").toLowerCase() === "connected") {
+      // A sessão só deve permanecer conectada depois de o cliente confirmar o estado inChat.
+      await db.run(
+        `UPDATE sessions SET status = 'reconnecting' WHERE user_id = ? AND session_name = ?`,
+        [userId, shortName]
+      );
     }
   } catch (err) {
     console.warn("Não foi possível garantir sessão no banco:", err);
@@ -3491,6 +3516,9 @@ async function doCreateWppSession(
 
   let client: wppconnect.Whatsapp | null = null;
   let autoRecoveryBlockedState: string | null = null;
+  let autoStartupConnectedStateSeen = false;
+  let manualLoginRequired = false;
+  let manualQrAuthenticated = false;
 
   const createOptions: any = {
     session: full,
@@ -3498,19 +3526,27 @@ async function doCreateWppSession(
     //  ADICIONE ISSO
     autoClose: 0, // DESATIVA AUTO CLOSE TOTALMENTE
 
+    // O Chromium do Windows deve usar os argumentos padrão do Puppeteer.
+    // As flags de sandbox e memória compartilhada abaixo são necessárias em containers Linux;
+    // --no-zygote e --single-process podem comprometer a inicialização em builds de desktop.
+    browserArgs: process.platform === "linux"
+      ? [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+        ]
+      : [],
+
     puppeteerOptions: {
       headless: true,
       userDataDir: sessionDir,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--no-zygote",
-        "--single-process",
-      ],
     },
-    catchQR: async (base64Qrimg, asciiQR, attempts, urlCode) => {
+    // A restauração automática não pode ficar esperando um QR que ela própria não exibe.
+    waitForLogin: !automaticStart,
+    // QR e link codes são credenciais temporárias; não os escreva no log do WPPConnect.
+    logQR: false,
+    catchQR: async (base64Qrimg, _asciiQR, attempts) => {
       console.log(` QR (${full}) tentativa ${attempts}`);
       if (automaticStart) {
         autoRecoveryBlockedState = autoRecoveryBlockedState || "notLogged";
@@ -3532,33 +3568,75 @@ async function doCreateWppSession(
         emitToUser(userId, "session:qr", { userId, sessionName: shortName, full });
       } catch { }
 
-      if (urlCode) term(await qrcode.toString(urlCode, { type: "terminal" }));
     },
     statusFind: async (status) => {
       console.log(" STATUS FIND DISPAROU:", status);
 
-      const db = await getDB();
-
-      if (automaticStart && status === "notLogged") {
-        autoRecoveryBlockedState = autoRecoveryBlockedState || status;
+      if (status === "notLogged") {
+        if (automaticStart) {
+          autoRecoveryBlockedState = autoRecoveryBlockedState || status;
+        } else {
+          manualLoginRequired = true;
+          manualQrAuthenticated = false;
+        }
+        // O WPPConnect pode emitir inChat antes de confirmar a autenticação.
+        // notLogged precisa invalidar o connected provisório em qualquer fluxo.
+        await updateSessionStatus(userId, shortName, automaticStart ? "reconnecting" : "pending");
+        try {
+          emitToUser(userId, "server:offline", { userId });
+        } catch { }
         return;
       }
 
-      if (["inChat", "qrReadSuccess", "connected"].includes(status)) {
-        console.log(" WHATSAPP CONECTADO — EMITINDO server:online");
-        autoRecoveryBlockedState = null;
-        resetReconnectTracking(full);
+      const db = await getDB();
 
+      if (["inChat", "connected"].includes(status)) {
+        if (!automaticStart && manualLoginRequired && !manualQrAuthenticated) {
+          await db.run(
+            `UPDATE sessions SET status = 'pending' WHERE user_id = ? AND session_name = ?`,
+            [userId, shortName]
+          );
+          return;
+        }
+
+        if (automaticStart) {
+          // Confirma a restauração só depois de create() concluir sem solicitar novo QR.
+          autoStartupConnectedStateSeen = true;
+          await db.run(
+            `UPDATE sessions SET status = 'reconnecting' WHERE user_id = ? AND session_name = ?`,
+            [userId, shortName]
+          );
+        } else {
+          console.log(" WHATSAPP CONECTADO — EMITINDO server:online");
+          resetReconnectTracking(full);
+          await db.run(
+            `UPDATE sessions SET status = 'connected' WHERE user_id = ? AND session_name = ?`,
+            [userId, shortName]
+          );
+
+          try {
+            emitToUser(userId, "server:online", { userId });
+          } catch (err) {
+            console.error("ERRO ERRO AO EMITIR server:online", err);
+          }
+        }
+      }
+
+      if (status === "qrReadSuccess") {
+        if (!automaticStart) manualQrAuthenticated = true;
+        // O QR ter sido lido ainda não confirma que a sessão entrou no chat.
         await db.run(
-          `UPDATE sessions SET status = 'connected' WHERE user_id = ? AND session_name = ?`,
+          `UPDATE sessions SET status = 'connecting' WHERE user_id = ? AND session_name = ?`,
           [userId, shortName]
         );
-
         try {
-          emitToUser(userId, "server:online", { userId });
-        } catch (err) {
-          console.error("ERRO ERRO AO EMITIR server:online", err);
-        }
+          emitToUser(userId, "session:stateChange", {
+            userId,
+            sessionName: shortName,
+            full,
+            state: "connecting",
+          });
+        } catch { }
       }
 
       if (["browserClose", "disconnectedMobile", "serverClose"].includes(status)) {
@@ -3579,14 +3657,60 @@ async function doCreateWppSession(
     }
   };
 
-  // só define a versão se o operador informar uma string válida (ex: 2.3000.1036983405);
-  // evita versões inválidas como "2.3000.10305x" que geram warnings no WPPConnect.
+  // Só fixa uma versão quando o operador informou os três componentes numéricos.
+  // Sem override válido, desativa o default antigo do WPPConnect e carrega a versão atual.
   const envWaVersion = process.env.WA_VERSION;
-  if (envWaVersion && /^[0-9]+\\.[0-9]+\\.[0-9]+/.test(envWaVersion)) {
-    createOptions.whatsappVersion = envWaVersion;
+  createOptions.whatsappVersion = envWaVersion && /^\d+\.\d+\.\d+$/.test(envWaVersion)
+    ? envWaVersion
+    : undefined;
+
+  try {
+    client = await wppconnect.create(createOptions);
+  } catch (err) {
+    // Evita deixar um status conectado persistido quando o Chromium não inicia.
+    await updateSessionStatus(userId, shortName, "disconnected");
+    try {
+      emitToUser(userId, "server:offline", { userId });
+    } catch { }
+    throw err;
   }
 
-  client = await wppconnect.create(createOptions);
+  let autoStartupAuthConfirmed = false;
+  if (automaticStart && !autoRecoveryBlockedState && typeof client?.isLoggedIn === "function") {
+    try {
+      autoStartupAuthConfirmed = Boolean(await withTimeout(
+        Promise.resolve(client.isLoggedIn()),
+        5000,
+        "startup authentication check"
+      ));
+      if (!autoStartupAuthConfirmed) autoRecoveryBlockedState = "notLogged";
+    } catch {
+      // Se não foi possível confirmar a autenticação, não declare a sessão conectada.
+      autoStartupConnectedStateSeen = false;
+    }
+  }
+
+  if (!automaticStart && manualQrAuthenticated && typeof client?.isLoggedIn === "function") {
+    try {
+      const loggedIn = await withTimeout(
+        Promise.resolve(client.isLoggedIn()),
+        5000,
+        "manual authentication check"
+      );
+      if (loggedIn) {
+        await updateSessionStatus(userId, shortName, "connected");
+        manualLoginRequired = false;
+        manualQrAuthenticated = false;
+        try {
+          emitToUser(userId, "server:online", { userId });
+        } catch { }
+      } else {
+        await updateSessionStatus(userId, shortName, "connecting");
+      }
+    } catch {
+      await updateSessionStatus(userId, shortName, "connecting");
+    }
+  }
 
   if (automaticStart && autoRecoveryBlockedState) {
     const recoveryProbe = await probeAutoRecoveryBlock(
@@ -3616,28 +3740,33 @@ async function doCreateWppSession(
     return { sessionName: full };
   }
 
+  if (automaticStart && autoStartupConnectedStateSeen && autoStartupAuthConfirmed) {
+    await updateSessionStatus(userId, shortName, "connected");
+    resetReconnectTracking(full);
+    try {
+      emitToUser(userId, "server:online", { userId });
+    } catch { }
+  } else if (automaticStart) {
+    await updateSessionStatus(userId, shortName, "disconnected");
+    try {
+      emitToUser(userId, "server:offline", { userId });
+    } catch { }
+  }
+
   await attachEvents(client, userId, shortName);
 
   client.onStateChange(async (state) => {
     console.log(` Estado da sessão ${full}:`, state);
-
-    //  Emitir estado exato (conexão, reconexão, etc.)
-    try {
-      emitToUser(userId, "session:stateChange", {
-        userId,
-        sessionName: shortName,
-        full,
-        state,
-      });
-    } catch { }
+    let stateForUi: unknown = state;
 
     // ===========================
     //  AUTO RECONNECT
     // ===========================
     try {
-      const normalizedState = String(state || "").toLowerCase();
+      const normalizedState = String(state || "").trim().toLowerCase().replace(/[\s_-]/g, "");
+      const isConnectedState = normalizedState === "connected" || normalizedState === "inchat";
 
-      if (bannedSessions.has(full) && !normalizedState.includes("connected")) {
+      if (bannedSessions.has(full) && !isConnectedState) {
         return;
       }
 
@@ -3678,10 +3807,46 @@ async function doCreateWppSession(
       }
 
       // reset tentativas quando conectar
-      if (normalizedState.includes("connected")) {
-        resetReconnectTracking(full);
+      if (isConnectedState) {
+        let loggedIn = false;
+        try {
+          loggedIn = typeof client?.isLoggedIn === "function"
+            ? await withTimeout(Promise.resolve(client.isLoggedIn()), 5000, "state authentication check")
+            : false;
+        } catch { }
+
+        if (loggedIn) {
+          resetReconnectTracking(full);
+          await updateSessionStatus(userId, shortName, "connected");
+          manualLoginRequired = false;
+          manualQrAuthenticated = false;
+          try {
+            emitToUser(userId, "server:online", { userId });
+          } catch { }
+        } else {
+          stateForUi = manualLoginRequired && !manualQrAuthenticated ? "notLogged" : "connecting";
+          await updateSessionStatus(
+            userId,
+            shortName,
+            manualLoginRequired && !manualQrAuthenticated ? "pending" : "connecting"
+          );
+          try {
+            emitToUser(userId, "server:offline", { userId });
+          } catch { }
+        }
       }
     } catch { }
+    finally {
+      // Só informe connected à interface depois de confirmar autenticação no WhatsApp.
+      try {
+        emitToUser(userId, "session:stateChange", {
+          userId,
+          sessionName: shortName,
+          full,
+          state: stateForUi,
+        });
+      } catch { }
+    }
   });
 
 
@@ -3697,6 +3862,9 @@ export async function createWppSession(
   shortName: string,
   options: CreateWppSessionOptions = {}
 ): Promise<{ sessionName: string; exists?: boolean }> {
+  if (!isSafeSessionName(shortName)) {
+    throw new Error("Nome de sessão inválido");
+  }
   const full = `USER${userId}_${shortName}`;
   clearScheduledReconnect(full);
 

@@ -115,6 +115,63 @@ export function parseAiConfiguration(value: unknown): AiConfiguration | null {
   }
 }
 
+export function hasAiConfigurationContent(config: unknown): boolean {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return false;
+
+  const fields = config as Record<string, unknown>;
+  return CONFIG_FIELDS.some((field) => {
+    const value = fields[field];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+export function hasUsableAiConfiguration(params: {
+  accountConfig?: unknown;
+  legacyPrompt?: unknown;
+  scopedConfigs?: unknown[];
+}): boolean {
+  if (hasAiConfigurationContent(parseAiConfiguration(params.accountConfig))) return true;
+  if (String(params.legacyPrompt ?? "").trim().length > 10) return true;
+  return (params.scopedConfigs || []).some((config) =>
+    hasAiConfigurationContent(parseAiConfiguration(config))
+  );
+}
+
+export function getEditableAiConfiguration(
+  configValue: unknown,
+  legacyPrompt: unknown
+): AiConfiguration {
+  const config = parseAiConfiguration(configValue);
+  if (config && hasAiConfigurationContent(config)) return config;
+  return normalizeAiConfiguration({ advancedInstructions: legacyPrompt });
+}
+
+export function resolveAiPrompt(params: {
+  agentConfig?: unknown;
+  sessionConfig?: unknown;
+  accountConfig?: unknown;
+  legacyPrompt?: unknown;
+}): string {
+  // Um perfil vinculado à sessão deve prevalecer sobre overrides legados.
+  const agentConfig = parseAiConfiguration(params.agentConfig);
+  if (agentConfig && hasAiConfigurationContent(agentConfig)) {
+    return buildPromptFromAiConfiguration(agentConfig);
+  }
+
+  const sessionConfig = parseAiConfiguration(params.sessionConfig);
+  if (sessionConfig && hasAiConfigurationContent(sessionConfig)) {
+    return buildPromptFromAiConfiguration(sessionConfig);
+  }
+
+  const legacyPrompt = String(params.legacyPrompt ?? "").trim();
+  if (legacyPrompt) return legacyPrompt;
+
+  const accountConfig = parseAiConfiguration(params.accountConfig);
+  return accountConfig && hasAiConfigurationContent(accountConfig)
+    ? buildPromptFromAiConfiguration(accountConfig)
+    : "";
+}
+
 function addSection(sections: string[], title: string, items: Array<[string, string]>) {
   const filledItems = items.filter(([, value]) => value);
   if (!filledItems.length) return;

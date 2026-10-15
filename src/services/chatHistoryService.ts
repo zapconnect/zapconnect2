@@ -79,15 +79,17 @@ function trimHistory(
 
 async function readStoredHistory(
   userId: number,
+  sessionName: string,
   chatId: string
 ): Promise<PersistedChatHistoryEntry[]> {
   const db = getDB();
   const row = await db.get<{ history: Buffer | string | null }>(
     `SELECT history
      FROM chat_histories
-     WHERE user_id = ? AND chat_id = ?
+     WHERE user_id = ? AND session_name = ? AND chat_id = ?
+       AND session_scope_version = 1
      LIMIT 1`,
-    [userId, chatId]
+    [userId, sessionName, chatId]
   );
 
   if (!row?.history) return [];
@@ -109,13 +111,14 @@ async function readStoredHistory(
 
 export async function loadRecentHistory(
   userId: number,
+  sessionName: string,
   chatId: string,
   limit = 10
 ): Promise<PersistedChatHistoryEntry[]> {
   const safeLimit = Math.max(0, Math.floor(limit));
   if (!safeLimit) return [];
 
-  const history = await readStoredHistory(userId, chatId);
+  const history = await readStoredHistory(userId, sessionName, chatId);
   if (!history.length) return [];
 
   return history.slice(-safeLimit);
@@ -155,10 +158,11 @@ export async function appendChatHistoryEntries(params: {
     const existingRow = await db.get<{ history: Buffer | string | null }>(
       `SELECT history
        FROM chat_histories
-       WHERE user_id = ? AND chat_id = ?
+       WHERE user_id = ? AND session_name = ? AND chat_id = ?
+         AND session_scope_version = 1
        LIMIT 1
        FOR UPDATE`,
-      [params.userId, params.chatId]
+      [params.userId, params.sessionName, params.chatId]
     );
 
     let history: PersistedChatHistoryEntry[] = [];
@@ -182,11 +186,14 @@ export async function appendChatHistoryEntries(params: {
 
     await db.run(
       `
-      INSERT INTO chat_histories (user_id, session_name, chat_id, history)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO chat_histories (
+        user_id, session_name, chat_id, history, session_scope_version
+      )
+      VALUES (?, ?, ?, ?, 1)
       ON DUPLICATE KEY UPDATE
         history = VALUES(history),
         session_name = VALUES(session_name),
+        session_scope_version = 1,
         updated_at = CURRENT_TIMESTAMP
       `,
       [
@@ -201,13 +208,14 @@ export async function appendChatHistoryEntries(params: {
 
 export async function clearChatHistory(
   userId: number,
+  sessionName: string,
   chatId: string
 ): Promise<void> {
   const db = getDB();
   await db.run(
     `DELETE FROM chat_histories
-     WHERE user_id = ? AND chat_id = ?
+     WHERE user_id = ? AND session_name = ? AND chat_id = ?
      LIMIT 1`,
-    [userId, chatId]
+    [userId, sessionName, chatId]
   );
 }

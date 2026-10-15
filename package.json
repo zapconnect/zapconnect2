@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "echo \"skip build\"",
+    "test": "node --import tsx --test tests/*.test.ts",
     "start": "tsx src/index.ts",
     "pm2:start": "pm2 start src/index.ts --name zapconnect --interpreter tsx",
     "pm2:stop": "pm2 delete zapconnect"

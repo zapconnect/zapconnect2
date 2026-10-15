@@ -12,6 +12,7 @@ import {
   clearTimerSafely,
   describeLRUCache,
 } from "../utils/lru";
+import { createSessionChatKey } from "../utils/sessionChatKey";
 
 dotenv.config();
 
@@ -75,12 +76,7 @@ const historyCleanupMarkers = createLRUCache<number, number>(
 );
 const historyCleanupInFlight = new Map<number, Promise<void>>();
 
-const normalizeUserId = (userId: number | string) => String(userId).trim();
-
-const buildChatKey = (
-  userId: number | string,
-  chatId: string
-) => `USER${normalizeUserId(userId)}::${chatId}`;
+const buildChatKey = createSessionChatKey;
 
 const extractGeminiDelta = (chunk: any) =>
   chunk?.candidates?.[0]?.content?.parts
@@ -214,11 +210,13 @@ const mapPersistedEntriesToGeminiHistory = (
 const getCachedOrStoredHistory = async ({
   chatKey,
   userId,
+  sessionName,
   chatId,
   history,
 }: {
   chatKey: string;
   userId: number | string;
+  sessionName: string;
   chatId: string;
   history?: AIHistoryTurn[];
 }): Promise<ChatHistory | null> => {
@@ -233,7 +231,7 @@ const getCachedOrStoredHistory = async ({
     }
   }
 
-  const stored = await loadHistoryFromDB({ userId, chatId });
+  const stored = await loadHistoryFromDB({ userId, sessionName, chatId });
   if (stored?.length) {
     setCachedHistory(chatKey, stored);
     return stored;
@@ -300,9 +298,11 @@ const queuePersist = ({
 
 async function loadHistoryFromDB({
   userId,
+  sessionName,
   chatId,
 }: {
   userId: number | string;
+  sessionName: string;
   chatId: string;
 }): Promise<ChatHistory | null> {
   try {
@@ -311,9 +311,10 @@ async function loadHistoryFromDB({
     const row = await db.get<{ history: Buffer | string | null }>(
       `SELECT history
        FROM chat_histories
-       WHERE user_id = ? AND chat_id = ?
+       WHERE user_id = ? AND session_name = ? AND chat_id = ?
+         AND session_scope_version = 1
        LIMIT 1`,
-      [numericUserId, chatId]
+      [numericUserId, sessionName, chatId]
     );
     if (!row?.history) return null;
     const parsed = await decodeCompressedJson<unknown>(row.history);
@@ -343,11 +344,14 @@ async function persistHistory({
     const compressedHistory = await encodeCompressedJson(trimmed);
     await db.run(
       `
-      INSERT INTO chat_histories (user_id, session_name, chat_id, history)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO chat_histories (
+        user_id, session_name, chat_id, history, session_scope_version
+      )
+      VALUES (?, ?, ?, ?, 1)
       ON DUPLICATE KEY UPDATE
         history = VALUES(history),
         session_name = VALUES(session_name),
+        session_scope_version = 1,
         updated_at = CURRENT_TIMESTAMP
       `,
       [numericUserId, sessionName, chatId, compressedHistory]
@@ -363,18 +367,21 @@ const getOrCreateChatSession = async ({
   chatKey,
   systemInstruction,
   userId,
+  sessionName,
   chatId,
   history: bootstrapHistory,
 }: {
   chatKey: string;
   systemInstruction?: string | null;
   userId: number;
+  sessionName: string;
   chatId: string;
   history?: AIHistoryTurn[];
 }): Promise<ChatSession> => {
   let history = await getCachedOrStoredHistory({
     chatKey,
     userId,
+    sessionName,
     chatId,
     history: bootstrapHistory,
   });
@@ -508,7 +515,7 @@ export const mainGoogle = async ({
   sessionName: string;
   onStream?: (delta: string) => Promise<void> | void;
 }): Promise<string> => {
-  const chatKey = buildChatKey(userId, chatId);
+  const chatKey = buildChatKey(userId, sessionName, chatId);
 
   const shouldRetry = (err: any) => {
     const status = err?.status || err?.code || err?.response?.status;
@@ -540,6 +547,7 @@ export const mainGoogle = async ({
       systemInstruction,
       history,
       userId: Number(userId),
+      sessionName,
       chatId,
     });
 
@@ -584,7 +592,7 @@ export const mainGoogle = async ({
     }
 
     const updatedHistory =
-      (await getCachedOrStoredHistory({ chatKey, userId, chatId })) ||
+      (await getCachedOrStoredHistory({ chatKey, userId, sessionName, chatId })) ||
       [];
     updatedHistory.push(
       { role: "user", parts: [{ text: userMessage || currentMessage }] },
@@ -599,7 +607,7 @@ export const mainGoogle = async ({
       history: updatedHistory,
     });
 
-    console.log(`Gemini resposta (${chatKey}):`, text);
+    console.log("Gemini resposta gerada com sucesso");
     return text;
   } catch (err: any) {
     console.error("Erro IA tentativa:", err?.status, err?.message);
@@ -622,13 +630,14 @@ export function getGoogleRuntimeCacheStats() {
 
 export function syncGoogleRuntimeHistory(params: {
   userId: number | string;
+  sessionName: string;
   chatId: string;
   entries: PersistedChatHistoryEntry[];
 }) {
   const normalizedEntries = mapPersistedEntriesToGeminiHistory(params.entries);
   if (!normalizedEntries.length) return;
 
-  const chatKey = buildChatKey(params.userId, params.chatId);
+  const chatKey = buildChatKey(params.userId, params.sessionName, params.chatId);
   const cachedHistory = getCachedHistory(chatKey);
   if (!cachedHistory?.length) return;
 
@@ -643,9 +652,10 @@ export function syncGoogleRuntimeHistory(params: {
 
 export function clearGoogleRuntimeHistory(
   userId: number | string,
+  sessionName: string,
   chatId: string
 ) {
-  const chatKey = buildChatKey(userId, chatId);
+  const chatKey = buildChatKey(userId, sessionName, chatId);
   activeChats.delete(chatKey);
   persistQueue.delete(chatKey);
 }
@@ -655,14 +665,13 @@ export const stopChatSession = async (
   sessionName: string,
   chatId: string
 ): Promise<void> => {
-  void sessionName;
-  const chatKey = buildChatKey(userId, chatId);
+  const chatKey = buildChatKey(userId, sessionName, chatId);
 
   if (activeChats.has(chatKey)) {
     activeChats.delete(chatKey);
-    console.log(`Chat encerrado -> ${chatKey}`);
+    console.log("Chat encerrado");
   } else {
-    console.log(`Nenhuma sessao ativa encontrada para -> ${chatKey}`);
+    console.log("Nenhuma sessão ativa encontrada");
   }
 
   await flushPersist(chatKey);

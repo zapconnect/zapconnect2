@@ -412,11 +412,13 @@ async function getRagContext(params: {
 
 async function getPersistedHistoryContext(
   userId: number,
+  sessionName: string,
   chatId: string
 ): Promise<AIHistoryTurn[]> {
   try {
     const history = await loadRecentHistory(
       userId,
+      sessionName,
       chatId,
       PERSISTED_HISTORY_LIMIT
     );
@@ -465,7 +467,7 @@ export async function generateAIResponse({
 
   const rawConversationText = buffer.join("\n").trim();
   const crmContextPromise = getCrmContext(userId, chatId);
-  const persistedHistoryPromise = getPersistedHistoryContext(userId, chatId);
+  const persistedHistoryPromise = getPersistedHistoryContext(userId, sessionName, chatId);
   const lang = detectLanguageSimple(rawConversationText);
   const langInstr =
     lang === "pt" ? "portugues" :

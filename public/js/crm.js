@@ -415,6 +415,126 @@ const tagPillsWrap = document.getElementById("tagPills");
 const minValueInput = document.getElementById("minValueInput");
 const followUpCheck = document.getElementById("followUpCheck");
 const crmResultCount = document.getElementById("crmResultCount");
+const crmSummaryRefreshBtn = document.getElementById("crmSummaryRefresh");
+
+let isCrmSummaryLoading = false;
+
+function formatCrmCurrency(value) {
+    const amount = Number(value);
+    return new Intl.NumberFormat("pt-BR", {
+        style: "currency",
+        currency: "BRL",
+        maximumFractionDigits: 2,
+    }).format(Number.isFinite(amount) ? amount : 0);
+}
+
+function setCrmSummaryText(id, value) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = String(value);
+}
+
+async function loadCrmSummary() {
+    const section = document.querySelector(".crm-insights");
+    const status = document.getElementById("crmSummaryStatus");
+    const stageList = document.getElementById("crmStageSummary");
+    if (!section || !status || isCrmSummaryLoading) return;
+
+    isCrmSummaryLoading = true;
+    section.setAttribute("aria-busy", "true");
+    status.classList.remove("is-error");
+    status.textContent = "Atualizando indicadores…";
+    if (crmSummaryRefreshBtn) crmSummaryRefreshBtn.disabled = true;
+
+    try {
+        const response = await fetch("/api/crm/summary", {
+            headers: { Accept: "application/json" },
+        });
+        const payload = await response.json();
+        if (!response.ok || payload?.ok !== true || !payload.summary) {
+            throw new Error(payload?.error || "Não foi possível carregar os indicadores.");
+        }
+
+        const summary = payload.summary;
+        setCrmSummaryText("crmSummaryContacts", Number(summary.totalContacts || 0).toLocaleString("pt-BR"));
+        setCrmSummaryText("crmSummaryOpenDeals", Number(summary.activeOpportunities || 0).toLocaleString("pt-BR"));
+        setCrmSummaryText("crmSummaryPipelineValue", formatCrmCurrency(summary.activePipelineValue));
+        setCrmSummaryText("crmSummaryWonCount", Number(summary.wonCount || 0).toLocaleString("pt-BR"));
+        setCrmSummaryText("crmSummaryWonValue", `Valor fechado: ${formatCrmCurrency(summary.wonValue)}`);
+        setCrmSummaryText("crmSummaryOverdue", Number(summary.overdueFollowUps || 0).toLocaleString("pt-BR"));
+        setCrmSummaryText("crmSummaryUpcoming", Number(summary.upcomingFollowUps || 0).toLocaleString("pt-BR"));
+
+        if (stageList) {
+            const rows = Array.isArray(summary.stageBreakdown) ? summary.stageBreakdown : [];
+            if (!rows.length) {
+                const empty = document.createElement("p");
+                empty.className = "crm-insights-empty";
+                empty.textContent = "Ainda não há contatos no pipeline.";
+                stageList.replaceChildren(empty);
+            } else {
+                const total = Math.max(0, Number(summary.totalContacts) || 0);
+                const fragment = document.createDocumentFragment();
+                const stageColors = {
+                    novo: "var(--p-novo)",
+                    qualificando: "var(--p-qualificando)",
+                    negociacao: "var(--p-negociacao)",
+                    fechado: "var(--p-fechado)",
+                    perdido: "var(--p-perdido)",
+                };
+
+                rows.forEach((row) => {
+                    const stage = String(row?.stage || "Novo");
+                    const count = Math.max(0, Number(row?.contacts) || 0);
+                    const share = total > 0 ? Math.min(100, Math.max(0, (count / total) * 100)) : 0;
+                    const key = stageToSlug(stage);
+                    const item = document.createElement("div");
+                    item.className = "crm-stage-summary-row";
+                    item.style.setProperty("--stage-share", `${share}%`);
+                    item.style.setProperty("--stage-color", stageColors[key] || "var(--accent)");
+
+                    const name = document.createElement("span");
+                    name.className = "crm-stage-summary-name";
+                    name.textContent = stage;
+                    const contactCount = document.createElement("strong");
+                    contactCount.className = "crm-stage-summary-count";
+                    contactCount.textContent = count.toLocaleString("pt-BR");
+                    const value = document.createElement("span");
+                    value.className = "crm-stage-summary-value";
+                    value.textContent = formatCrmCurrency(row?.dealValue);
+
+                    item.append(name, contactCount, value);
+                    fragment.append(item);
+                });
+
+                stageList.replaceChildren(fragment);
+            }
+        }
+
+        const generatedAt = Number(payload.generatedAt);
+        const updatedAt = document.getElementById("crmSummaryUpdated");
+        if (updatedAt) {
+            updatedAt.textContent = Number.isFinite(generatedAt)
+                ? `Atualizado às ${new Date(generatedAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
+                : "";
+        }
+        status.textContent = "Indicadores atualizados com os dados atuais do CRM.";
+    } catch (error) {
+        console.error("Falha ao carregar resumo comercial do CRM:", error);
+        status.classList.add("is-error");
+        status.textContent = error?.message || "Indicadores indisponíveis. Tente atualizar novamente.";
+        if (stageList && !stageList.childElementCount) {
+            const empty = document.createElement("p");
+            empty.className = "crm-insights-empty";
+            empty.textContent = "Não foi possível carregar a distribuição por etapa.";
+            stageList.replaceChildren(empty);
+        }
+    } finally {
+        isCrmSummaryLoading = false;
+        section.setAttribute("aria-busy", "false");
+        if (crmSummaryRefreshBtn) crmSummaryRefreshBtn.disabled = false;
+    }
+}
+
+crmSummaryRefreshBtn?.addEventListener("click", () => void loadCrmSummary());
 
 // Filtros
 const filterNovo = document.getElementById("filterNovo");
@@ -820,6 +940,8 @@ async function loadClients(reset = false) {
     mergeClientsPage(incomingClients, reset || currentPage === 1);
     currentPage = data.page || currentPage;
     totalPages = data.totalPages || 1;
+
+    if (reset || currentPage === 1) void loadCrmSummary();
 
     toggleLoadMore();
     renderFilterPills();
