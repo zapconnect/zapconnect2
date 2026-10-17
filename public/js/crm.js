@@ -1658,6 +1658,115 @@ Object.entries(stageMap).forEach(([checkboxId, stage]) => {
   });
 });
 
+// Permite recolher etapas fora de foco para ampliar os cards das demais colunas.
+const CRM_COLLAPSED_COLUMNS_KEY = "zapconnect:crm-collapsed-columns";
+
+function readCollapsedCrmColumns() {
+  try {
+    const saved = JSON.parse(window.localStorage?.getItem(CRM_COLLAPSED_COLUMNS_KEY) || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
+
+function setCrmColumnCollapsed(column, isCollapsed) {
+  if (!column) return;
+  const toggle = column.querySelector("[data-column-toggle]");
+  const stage = column.dataset.stage || "etapa";
+  const label = isCollapsed ? `Expandir coluna ${stage}` : `Minimizar coluna ${stage}`;
+
+  column.classList.toggle("is-collapsed", isCollapsed);
+  toggle?.setAttribute("aria-expanded", String(!isCollapsed));
+  toggle?.setAttribute("aria-label", label);
+  toggle?.setAttribute("title", isCollapsed ? "Expandir coluna" : "Minimizar coluna");
+  const icon = toggle?.querySelector("i");
+  if (icon) icon.className = `fa-solid ${isCollapsed ? "fa-angles-right" : "fa-angles-left"}`;
+}
+
+const savedCollapsedCrmColumns = readCollapsedCrmColumns();
+kanbanBoard?.querySelectorAll(".kanban-column").forEach((column) => {
+  setCrmColumnCollapsed(column, savedCollapsedCrmColumns.includes(column.dataset.stage));
+});
+
+kanbanBoard?.addEventListener("click", (event) => {
+  const toggle = event.target.closest("[data-column-toggle]");
+  if (!toggle) return;
+
+  const column = toggle.closest(".kanban-column");
+  if (!column) return;
+  setCrmColumnCollapsed(column, !column.classList.contains("is-collapsed"));
+
+  try {
+    const collapsedStages = Array.from(kanbanBoard.querySelectorAll(".kanban-column.is-collapsed"))
+      .map((item) => item.dataset.stage)
+      .filter(Boolean);
+    window.localStorage?.setItem(CRM_COLLAPSED_COLUMNS_KEY, JSON.stringify(collapsedStages));
+  } catch {
+    // O recolhimento continua funcional se o navegador bloquear o armazenamento local.
+  }
+});
+
+// Recolhe os painéis auxiliares para deixar mais espaço para o Kanban.
+const CRM_COLLAPSED_SECTIONS_KEY = "zapconnect:crm-collapsed-sections";
+const crmCollapsibleSections = [
+  {
+    key: "insights",
+    section: document.querySelector(".crm-insights"),
+    content: document.getElementById("crmInsightsContent"),
+    toggle: document.getElementById("crmInsightsToggle"),
+    label: "visão comercial",
+  },
+  {
+    key: "filters",
+    section: document.querySelector(".crm-filters-bar"),
+    content: document.getElementById("crmFiltersContent"),
+    toggle: document.getElementById("crmFiltersToggle"),
+    label: "filtros",
+  },
+];
+
+function readCollapsedCrmSections() {
+  try {
+    const saved = JSON.parse(window.localStorage?.getItem(CRM_COLLAPSED_SECTIONS_KEY) || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
+
+const savedCollapsedCrmSections = readCollapsedCrmSections();
+
+function setCrmSectionCollapsed(item, isCollapsed) {
+  if (!item.section || !item.content || !item.toggle) return;
+
+  const label = `${isCollapsed ? "Expandir" : "Minimizar"} ${item.label}`;
+  item.section.classList.toggle("is-collapsed", isCollapsed);
+  item.content.hidden = isCollapsed;
+  item.toggle.setAttribute("aria-expanded", String(!isCollapsed));
+  item.toggle.setAttribute("aria-label", label);
+  item.toggle.setAttribute("title", label);
+
+  const icon = item.toggle.querySelector("i");
+  if (icon) icon.className = `fa-solid ${isCollapsed ? "fa-chevron-down" : "fa-chevron-up"}`;
+}
+
+crmCollapsibleSections.forEach((item) => {
+  setCrmSectionCollapsed(item, savedCollapsedCrmSections.includes(item.key));
+  item.toggle?.addEventListener("click", () => {
+    setCrmSectionCollapsed(item, !item.section?.classList.contains("is-collapsed"));
+
+    try {
+      const collapsedSections = crmCollapsibleSections
+        .filter((section) => section.section?.classList.contains("is-collapsed"))
+        .map((section) => section.key);
+      window.localStorage?.setItem(CRM_COLLAPSED_SECTIONS_KEY, JSON.stringify(collapsedSections));
+    } catch {
+      // O controle continua funcional se o navegador bloquear o armazenamento local.
+    }
+  });
+});
+
 
 
 // ------------------------------------------------------

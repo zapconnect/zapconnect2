@@ -84,110 +84,142 @@
             <h2 id="crmInsightsTitle">Resumo do pipeline</h2>
             <p>Indicadores calculados a partir dos contatos e negócios do seu CRM.</p>
           </div>
-          <button type="button" class="btn ghost crm-insights-refresh" id="crmSummaryRefresh">
-            <i class="fa-solid fa-rotate"></i>
-            Atualizar indicadores
-          </button>
-        </div>
-
-        <div class="crm-insights-grid">
-          <article class="crm-insight-card">
-            <span>Contatos</span>
-            <strong id="crmSummaryContacts">—</strong>
-            <small>Em toda a sua base</small>
-          </article>
-          <article class="crm-insight-card">
-            <span>Oportunidades abertas</span>
-            <strong id="crmSummaryOpenDeals">—</strong>
-            <small>Etapas diferentes de Fechado e Perdido</small>
-          </article>
-          <article class="crm-insight-card crm-insight-card-value">
-            <span>Valor do pipeline</span>
-            <strong id="crmSummaryPipelineValue">—</strong>
-            <small>Negócios ainda em andamento</small>
-          </article>
-          <article class="crm-insight-card">
-            <span>Negócios fechados</span>
-            <strong id="crmSummaryWonCount">—</strong>
-            <small id="crmSummaryWonValue">Valor fechado: —</small>
-          </article>
-          <article class="crm-insight-card crm-insight-card-alert">
-            <span>Follow-ups vencidos</span>
-            <strong id="crmSummaryOverdue">—</strong>
-            <small>Oportunidades abertas com data anterior a agora</small>
-          </article>
-          <article class="crm-insight-card">
-            <span>Próximos follow-ups</span>
-            <strong id="crmSummaryUpcoming">—</strong>
-            <small>Agendados para os próximos 7 dias</small>
-          </article>
-        </div>
-
-        <div class="crm-insights-stages">
-          <div class="crm-insights-stages-head">
-            <h3>Distribuição por etapa</h3>
-            <span id="crmSummaryUpdated"></span>
-          </div>
-          <div id="crmStageSummary" class="crm-stage-summary-list">
-            <p class="crm-insights-empty">Carregando etapas…</p>
+          <div class="crm-insights-actions">
+            <button type="button" class="btn ghost crm-insights-refresh" id="crmSummaryRefresh">
+              <i class="fa-solid fa-rotate"></i>
+              Atualizar indicadores
+            </button>
+            <button
+              type="button"
+              class="btn ghost crm-section-toggle"
+              id="crmInsightsToggle"
+              aria-expanded="true"
+              aria-controls="crmInsightsContent"
+              aria-label="Minimizar visão comercial"
+              title="Minimizar visão comercial"
+            >
+              <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>
+            </button>
           </div>
         </div>
-        <p class="crm-insights-status" id="crmSummaryStatus" role="status" aria-live="polite">Carregando indicadores…</p>
+
+        <div class="crm-insights-content" id="crmInsightsContent">
+          <div class="crm-insights-grid">
+            <article class="crm-insight-card">
+              <span>Contatos</span>
+              <strong id="crmSummaryContacts">—</strong>
+              <small>Em toda a sua base</small>
+            </article>
+            <article class="crm-insight-card">
+              <span>Oportunidades abertas</span>
+              <strong id="crmSummaryOpenDeals">—</strong>
+              <small>Etapas diferentes de Fechado e Perdido</small>
+            </article>
+            <article class="crm-insight-card crm-insight-card-value">
+              <span>Valor do pipeline</span>
+              <strong id="crmSummaryPipelineValue">—</strong>
+              <small>Negócios ainda em andamento</small>
+            </article>
+            <article class="crm-insight-card">
+              <span>Negócios fechados</span>
+              <strong id="crmSummaryWonCount">—</strong>
+              <small id="crmSummaryWonValue">Valor fechado: —</small>
+            </article>
+            <article class="crm-insight-card crm-insight-card-alert">
+              <span>Follow-ups vencidos</span>
+              <strong id="crmSummaryOverdue">—</strong>
+              <small>Oportunidades abertas com data anterior a agora</small>
+            </article>
+            <article class="crm-insight-card">
+              <span>Próximos follow-ups</span>
+              <strong id="crmSummaryUpcoming">—</strong>
+              <small>Agendados para os próximos 7 dias</small>
+            </article>
+          </div>
+
+          <div class="crm-insights-stages">
+            <div class="crm-insights-stages-head">
+              <h3>Distribuição por etapa</h3>
+              <span id="crmSummaryUpdated"></span>
+            </div>
+            <div id="crmStageSummary" class="crm-stage-summary-list">
+              <p class="crm-insights-empty">Carregando etapas…</p>
+            </div>
+          </div>
+          <p class="crm-insights-status" id="crmSummaryStatus" role="status" aria-live="polite">Carregando indicadores…</p>
+        </div>
       </section>
 
       <!-- =============================
          🔎 FILTROS
     ============================== -->
       <div class="crm-filters-bar">
-        <div class="crm-search-row">
-          <label class="crm-search-field" for="crmSearch">
-            <i class="fa-solid fa-magnifying-glass"></i>
-            <input
-              id="crmSearch"
-              class="crm-search-input"
-              placeholder="Buscar cliente ou número..."
-              oninput="updateFilter('text', this.value)"
-            >
-          </label>
+        <div class="crm-filters-header">
+          <strong>Filtros</strong>
           <span id="crmResultCount" class="crm-result-count">0 clientes</span>
-        </div>
-
-        <div class="crm-filter-group">
-          <span class="crm-filter-label">Stages</span>
-          <div class="filter-pills" id="stagePills"></div>
-        </div>
-
-        <div class="crm-filter-group">
-          <span class="crm-filter-label">Tags</span>
-          <div class="filter-pills" id="tagPills"></div>
-        </div>
-
-        <div class="crm-filter-extras">
-          <label class="crm-extra-field" for="minValueInput">
-            <span>Valor mínimo</span>
-            <input
-              type="number"
-              id="minValueInput"
-              min="0"
-              step="0.01"
-              placeholder="0"
-              onchange="updateFilter('minValue', this.value)"
-            >
-          </label>
-
-          <label class="crm-checkbox-field" for="followUpCheck">
-            <input
-              type="checkbox"
-              id="followUpCheck"
-              onchange="updateFilter('hasFollowUp', this.checked)"
-            >
-            <span>Com follow-up</span>
-          </label>
-
-          <button type="button" class="btn ghost btn-clear-filters" onclick="clearAllFilters()">
-            <i class="fa-solid fa-rotate-left"></i>
-            Limpar tudo
+          <button
+            type="button"
+            class="btn ghost crm-section-toggle"
+            id="crmFiltersToggle"
+            aria-expanded="true"
+            aria-controls="crmFiltersContent"
+            aria-label="Minimizar filtros"
+            title="Minimizar filtros"
+          >
+            <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>
           </button>
+        </div>
+
+        <div class="crm-filters-content" id="crmFiltersContent">
+          <div class="crm-search-row">
+            <label class="crm-search-field" for="crmSearch">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input
+                id="crmSearch"
+                class="crm-search-input"
+                placeholder="Buscar cliente ou número..."
+                oninput="updateFilter('text', this.value)"
+              >
+            </label>
+          </div>
+
+          <div class="crm-filter-group">
+            <span class="crm-filter-label">Stages</span>
+            <div class="filter-pills" id="stagePills"></div>
+          </div>
+
+          <div class="crm-filter-group">
+            <span class="crm-filter-label">Tags</span>
+            <div class="filter-pills" id="tagPills"></div>
+          </div>
+
+          <div class="crm-filter-extras">
+            <label class="crm-extra-field" for="minValueInput">
+              <span>Valor mínimo</span>
+              <input
+                type="number"
+                id="minValueInput"
+                min="0"
+                step="0.01"
+                placeholder="0"
+                onchange="updateFilter('minValue', this.value)"
+              >
+            </label>
+
+            <label class="crm-checkbox-field" for="followUpCheck">
+              <input
+                type="checkbox"
+                id="followUpCheck"
+                onchange="updateFilter('hasFollowUp', this.checked)"
+              >
+              <span>Com follow-up</span>
+            </label>
+
+            <button type="button" class="btn ghost btn-clear-filters" onclick="clearAllFilters()">
+              <i class="fa-solid fa-rotate-left"></i>
+              Limpar tudo
+            </button>
+          </div>
         </div>
       </div>
 
@@ -200,9 +232,12 @@
         <div class="kanban-column" data-stage="Novo">
           <div class="kanban-column-header">
             <span class="dot dot-novo"></span>
-            <span>Novo</span>
+            <span class="kanban-column-title">Novo</span>
             <span class="count" id="count-Novo">0</span>
             <span class="col-value" id="value-Novo"></span>
+            <button class="kanban-column-toggle" type="button" data-column-toggle aria-expanded="true" aria-label="Minimizar coluna Novo" title="Minimizar coluna">
+              <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
+            </button>
           </div>
           <div class="kanban-dropzone" data-stage="Novo"></div>
         </div>
@@ -211,9 +246,12 @@
         <div class="kanban-column" data-stage="Qualificando">
           <div class="kanban-column-header">
             <span class="dot dot-qualificando"></span>
-            <span>Qualificando</span>
+            <span class="kanban-column-title">Qualificando</span>
             <span class="count" id="count-Qualificando">0</span>
             <span class="col-value" id="value-Qualificando"></span>
+            <button class="kanban-column-toggle" type="button" data-column-toggle aria-expanded="true" aria-label="Minimizar coluna Qualificando" title="Minimizar coluna">
+              <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
+            </button>
           </div>
           <div class="kanban-dropzone" data-stage="Qualificando"></div>
         </div>
@@ -222,9 +260,12 @@
         <div class="kanban-column" data-stage="Negociação">
           <div class="kanban-column-header">
             <span class="dot dot-negociacao"></span>
-            <span>Negociação</span>
+            <span class="kanban-column-title">Negociação</span>
             <span class="count" id="count-Negociação">0</span>
             <span class="col-value" id="value-Negociação"></span>
+            <button class="kanban-column-toggle" type="button" data-column-toggle aria-expanded="true" aria-label="Minimizar coluna Negociação" title="Minimizar coluna">
+              <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
+            </button>
           </div>
           <div class="kanban-dropzone" data-stage="Negociação"></div>
         </div>
@@ -233,9 +274,12 @@
         <div class="kanban-column" data-stage="Fechado">
           <div class="kanban-column-header">
             <span class="dot dot-fechado"></span>
-            <span>Fechado</span>
+            <span class="kanban-column-title">Fechado</span>
             <span class="count" id="count-Fechado">0</span>
             <span class="col-value" id="value-Fechado"></span>
+            <button class="kanban-column-toggle" type="button" data-column-toggle aria-expanded="true" aria-label="Minimizar coluna Fechado" title="Minimizar coluna">
+              <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
+            </button>
           </div>
           <div class="kanban-dropzone" data-stage="Fechado"></div>
         </div>
@@ -244,9 +288,12 @@
         <div class="kanban-column" data-stage="Perdido">
           <div class="kanban-column-header">
             <span class="dot dot-perdido"></span>
-            <span>Perdido</span>
+            <span class="kanban-column-title">Perdido</span>
             <span class="count" id="count-Perdido">0</span>
             <span class="col-value" id="value-Perdido"></span>
+            <button class="kanban-column-toggle" type="button" data-column-toggle aria-expanded="true" aria-label="Minimizar coluna Perdido" title="Minimizar coluna">
+              <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
+            </button>
           </div>
           <div class="kanban-dropzone" data-stage="Perdido"></div>
         </div>
