@@ -11,6 +11,7 @@ import { isInSilenceWindow } from "../services/silenceUtils";
 import { getFollowUpSettings, getFollowUpItemById, generateFollowUpMessage, scheduleNextWarmFollowUp, markFollowUpItem, addFollowUpAttempt, getNextFollowUpWindowTimestamp } from "../services/followUpService";
 import { assertSessionCanSend, recordSessionSend, SessionRateLimitError } from "../utils/humanDelay";
 import { withTimeout } from "../utils/withTimeout";
+import { getWhatsAppClientSendTimeout } from "../services/metaWhatsApp";
 import { ensureChat, getClient } from "../wppManager";
 
 const IDLE_MS = Math.max(5_000, Number(process.env.FOLLOW_UP_WORKER_IDLE_MS || 15_000));
@@ -310,7 +311,7 @@ async function processItem(id: number) {
     const target = await ensureChat(client, number);
     if (await cancelIfContactChanged(item)) return;
     if (!(await ensureStillProcessing(item.id))) return;
-    await withTimeout(client.sendText(target, message), SEND_TIMEOUT_MS, "follow-up sendText");
+    await withTimeout(client.sendText(target, message), getWhatsAppClientSendTimeout(client, SEND_TIMEOUT_MS), "follow-up sendText");
     sentAt = Date.now();
     recordSessionSend(sessionKey);
     await markFollowUpItem(item.id, "sent", { sentAt });

@@ -447,9 +447,38 @@ export async function initDB() {
       user_id INT NOT NULL,
       session_name VARCHAR(255) NOT NULL,
       status VARCHAR(50) DEFAULT 'pending',
+      provider VARCHAR(30) NOT NULL DEFAULT 'qr',
+      meta_phone_number_id VARCHAR(100) DEFAULT NULL,
+      meta_waba_id VARCHAR(100) DEFAULT NULL,
+      meta_access_token_enc MEDIUMTEXT DEFAULT NULL,
+      meta_display_phone_number VARCHAR(40) DEFAULT NULL,
       ai_config LONGTEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS meta_messages (
+      id BIGINT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      session_name VARCHAR(255) NOT NULL,
+      chat_id VARCHAR(255) NOT NULL,
+      message_id VARCHAR(255) NOT NULL,
+      direction VARCHAR(10) NOT NULL,
+      body LONGTEXT,
+      message_type VARCHAR(40) DEFAULT 'text',
+      media_id VARCHAR(255) DEFAULT NULL,
+      mimetype VARCHAR(160) DEFAULT NULL,
+      contact_name VARCHAR(255) DEFAULT NULL,
+      delivery_status VARCHAR(30) DEFAULT NULL,
+      failed_reason TEXT,
+      timestamp_ms BIGINT NOT NULL,
+      updated_at_ms BIGINT DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uniq_meta_message_user (user_id, session_name, message_id),
+      INDEX idx_meta_messages_chat (user_id, session_name, chat_id, timestamp_ms),
+      INDEX idx_meta_messages_inbound_window (user_id, session_name, chat_id, direction, timestamp_ms)
     )
     `,
 
@@ -1335,6 +1364,11 @@ export async function initDB() {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_config LONGTEXT`,
     `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_config LONGTEXT`,
     `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_agent_id INT DEFAULT NULL`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS provider VARCHAR(30) NOT NULL DEFAULT 'qr'`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS meta_phone_number_id VARCHAR(100) DEFAULT NULL`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS meta_waba_id VARCHAR(100) DEFAULT NULL`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS meta_access_token_enc MEDIUMTEXT DEFAULT NULL`,
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS meta_display_phone_number VARCHAR(40) DEFAULT NULL`,
     `ALTER TABLE chat_histories ADD COLUMN IF NOT EXISTS session_scope_version TINYINT NOT NULL DEFAULT 0`,
     `ALTER TABLE kb_sources ADD COLUMN IF NOT EXISTS embedding_version INT DEFAULT 1`,
     `ALTER TABLE follow_up_items ADD COLUMN IF NOT EXISTS cycle_id BIGINT NOT NULL DEFAULT 0`

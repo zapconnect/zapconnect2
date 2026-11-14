@@ -596,6 +596,7 @@
   font-size: 14px;
   color: var(--text, #fff);
 }
+.session-provider { color: var(--text-muted, #aab0d9); font-size: 11px; }
 
 .session-empty{
   text-align:center;
@@ -713,12 +714,42 @@
   margin: 0; color: var(--text-muted, #aab0d9); font-size: 13px; line-height: 1.5;
 }
 .connection-kicker { color: #25d366; text-transform: uppercase; letter-spacing: .08em; font-size: 10px; font-weight: 700; }
+.connection-method-fieldset { min-width: 0; margin: 0 0 20px; padding: 0; border: 0; }
+.connection-method-fieldset legend {
+  margin: 0 0 9px; padding: 0; color: var(--text, #fff); font-size: 13px; font-weight: 600;
+}
+.connection-method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.connection-method-option {
+  display: flex; min-width: 0; min-height: 112px; align-items: flex-start; gap: 11px; padding: 14px;
+  border: 1px solid var(--border, #373e59); border-radius: 12px; background: var(--surface-2, #111828);
+  cursor: pointer; transition: border-color .16s ease, background-color .16s ease;
+}
+.connection-method-option:hover { border-color: rgba(37, 211, 102, .55); }
+.connection-method-option:focus-within { outline: 2px solid rgba(37, 211, 102, .55); outline-offset: 2px; }
+.connection-method-option.is-selected { border-color: #25d366; background: rgba(37, 211, 102, .07); }
+.connection-method-option input { flex: 0 0 auto; margin: 3px 0 0; accent-color: #25d366; }
+.connection-method-copy { display: block; min-width: 0; }
+.connection-method-title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--text, #fff); font-size: 14px; font-weight: 650; }
+.connection-method-badge {
+  padding: 3px 7px; border-radius: 999px; color: #9ce8bd; background: rgba(37, 211, 102, .15);
+  font-size: 9px; font-weight: 700; letter-spacing: .04em; white-space: nowrap;
+}
+.connection-method-badge.is-meta { color: #a9d9ff; background: rgba(33, 150, 243, .15); }
+.connection-method-description { display: block; margin-top: 7px; color: var(--text-muted, #aab0d9); font-size: 12px; line-height: 1.45; }
 .connection-layout { display: grid; grid-template-columns: minmax(250px, .9fr) minmax(270px, 1fr); align-items: start; gap: 24px; }
-.connection-form > label { display: block; margin-bottom: 8px; color: var(--text, #fff); font-size: 13px; font-weight: 600; }
+.connection-form label { display: block; margin-bottom: 8px; color: var(--text, #fff); font-size: 13px; font-weight: 600; }
 .connection-name-input { min-height: 0; resize: none; }
 .connection-field-hint { margin-top: 7px; font-size: 12px; }
 .connection-create-button { justify-content: center; margin-top: 16px; }
-.connection-create-button:disabled, #qr-refresh:disabled { cursor: wait; opacity: .65; }
+.connection-create-button:disabled, #qr-refresh:disabled { cursor: not-allowed; opacity: .6; }
+.meta-api-notice {
+  margin: 0; padding: 15px; border: 1px solid rgba(33, 150, 243, .28); border-radius: 10px;
+  color: var(--text, #fff); background: rgba(33, 150, 243, .07);
+}
+.meta-api-notice strong { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.meta-api-notice strong i { color: #79c4ff; }
+.meta-api-notice p { margin: 7px 0 0; color: var(--text-muted, #aab0d9); font-size: 12px; line-height: 1.5; }
+#whatsapp-connection[data-connection-method="meta"] #qr-preview { display: none !important; }
 .connection-steps { display: grid; gap: 15px; list-style: none; margin: 23px 0 0; padding: 0; }
 .connection-steps li { display: flex; align-items: flex-start; gap: 11px; }
 .connection-steps li > span {
@@ -735,6 +766,7 @@
 .qr-session-label { color: var(--text-muted, #aab0d9); font-size: 12px; font-weight: 600; text-align: center; }
 .connection-status { max-width: 320px; color: var(--text-muted, #aab0d9); font-size: 13px; line-height: 1.45; text-align: center; }
 .connection-status--success { color: #4ce3a2; }
+.connection-status--info { color: #9ed4ff; }
 .connection-status--warning { color: #ffc36b; }
 .connection-status--error { color: #ff8989; }
 .qr-area .qr-loading { min-width: 210px; border: 0; background: transparent; }
@@ -750,6 +782,8 @@
 }
 
 @media (max-width: 520px) {
+  .connection-method-grid { grid-template-columns: 1fr; }
+  .connection-method-option { min-height: 0; }
   .connection-card-header { align-items: flex-start; }
   .connection-brand-icon { width: 42px; height: 42px; flex-basis: 42px; }
   .connection-card-header p { font-size: 12px; }

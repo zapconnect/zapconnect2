@@ -12,6 +12,7 @@ import {
   recordSessionSend,
 } from "../utils/humanDelay";
 import { withTimeout } from "../utils/withTimeout";
+import { getWhatsAppClientSendTimeout } from "../services/metaWhatsApp";
 import {
   DISPATCH_CONSECUTIVE_FAILURE_LIMIT,
   DISPATCH_ERROR_RATE_SAMPLE_SIZE,
@@ -1009,13 +1010,13 @@ async function processSingleSchedule(
               safeRowFile.filename,
               finalMessage || ""
             ),
-            WPP_TIMEOUT_MS,
+            getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS, true),
             "sendFile"
           );
         } else if (finalMessage) {
           await withTimeout(
             client.sendText(target, finalMessage),
-            WPP_TIMEOUT_MS,
+            getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS),
             "sendText"
           );
         } else {

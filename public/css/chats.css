@@ -1316,6 +1316,57 @@ body.has-app-sidebar.app-chat-page .btn-voltar{
   background: #1ebe5d;
 }
 
+.btn-meta-templates {
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(33, 150, 243, .35);
+  border-radius: 50%;
+  background: rgba(33, 150, 243, .12);
+  color: #9ed4ff;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.btn-meta-templates:hover { background: rgba(33, 150, 243, .22); }
+.btn-meta-templates[hidden] { display: none !important; }
+
+.meta-template-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.meta-template-modal[hidden] { display: none !important; }
+.meta-template-backdrop { position: absolute; inset: 0; background: rgba(3, 9, 15, .72); }
+.meta-template-card {
+  position: relative;
+  width: min(100%, 500px);
+  padding: 22px;
+  border: 1px solid rgba(158, 212, 255, .2);
+  border-radius: 18px;
+  background: #17212b;
+  color: #e9edef;
+  box-shadow: 0 20px 65px rgba(0, 0, 0, .45);
+}
+.meta-template-card header, .meta-template-card footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.meta-template-card header span { color: #9ed4ff; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.meta-template-card h2 { margin: 4px 0 0; font-size: 18px; }
+.meta-template-card header button { border: 0; background: transparent; color: #b7c6d1; font-size: 24px; cursor: pointer; }
+.meta-template-hint, .meta-template-preview { color: #a9bac7; font-size: 13px; line-height: 1.5; }
+.meta-template-card label { display: block; margin: 16px 0 7px; font-size: 12px; font-weight: 700; }
+.meta-template-card select, .meta-template-variables input {
+  width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid #34434f; border-radius: 9px;
+  background: #101820; color: #e9edef; font: inherit;
+}
+.meta-template-variables { display: grid; gap: 10px; margin-top: 12px; }
+.meta-template-variable label { margin: 0 0 6px; color: #c7d5df; font-size: 12px; }
+.meta-template-error { min-height: 20px; color: #ff9696; font-size: 12px; }
+.meta-template-card footer { justify-content: flex-end; margin-top: 15px; }
+.meta-template-card footer button { min-height: 38px; padding: 0 14px; border: 1px solid #394b59; border-radius: 9px; background: #202e39; color: #e9edef; cursor: pointer; }
+.meta-template-card footer #btnMetaTemplateSend { border-color: #1877f2; background: #1877f2; color: #fff; font-weight: 700; }
+.meta-template-card footer #btnMetaTemplateSend:disabled { cursor: not-allowed; opacity: .55; }
+
 /* mÃ­dias */
 .msg-img {
   width: 100%;

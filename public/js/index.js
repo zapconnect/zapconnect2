@@ -378,6 +378,7 @@ const socket = io(API, {
 // 🚀 INIT
 // ===============================
 window.onload = () => {
+    initConnectionMethodPicker();
     initOnboardingChecklist();
     loadUser();
     loadStats();
@@ -916,9 +917,183 @@ async function logout() {
 // ===============================
 // 📱 CRIAR SESSÃO
 // ===============================
+let metaSdkPromise = null;
+
+function ensureMetaSignupSdk() {
+    const config = window.META_SIGNUP_CONFIG || {};
+    if (!config.configured || !config.appId || !config.configId) {
+        return Promise.reject(new Error("A integração oficial ainda aguarda a configuração do aplicativo Meta no servidor."));
+    }
+    if (window.FB) return Promise.resolve(window.FB);
+    if (metaSdkPromise) return metaSdkPromise;
+
+    metaSdkPromise = new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            metaSdkPromise = null;
+            reject(new Error("Não foi possível carregar a janela segura da Meta."));
+        }, 15000);
+        window.fbAsyncInit = () => {
+            try {
+                window.FB.init({
+                    appId: config.appId,
+                    autoLogAppEvents: true,
+                    xfbml: false,
+                    version: config.graphApiVersion || "v27.0",
+                });
+                clearTimeout(timeout);
+                resolve(window.FB);
+            } catch (error) {
+                clearTimeout(timeout);
+                reject(error);
+            }
+        };
+
+        const script = document.createElement("script");
+        script.async = true;
+        script.defer = true;
+        script.crossOrigin = "anonymous";
+        script.src = "https://connect.facebook.net/pt_BR/sdk.js";
+        script.onerror = () => {
+            clearTimeout(timeout);
+            metaSdkPromise = null;
+            reject(new Error("Não foi possível carregar o SDK da Meta."));
+        };
+        document.head.appendChild(script);
+    });
+    return metaSdkPromise;
+}
+
+function launchMetaEmbeddedSignup() {
+    return new Promise((resolve, reject) => {
+        if (!window.FB) {
+            reject(new Error("A janela da Meta ainda está carregando. Tente novamente."));
+            return;
+        }
+        let settled = false;
+        const timeout = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            resolve(null);
+        }, 4 * 60 * 1000);
+        const finish = (value) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            resolve(value);
+        };
+
+        let sessionInfoResolve;
+        const sessionInfoPromise = new Promise((sessionResolve) => {
+            sessionInfoResolve = sessionResolve;
+        });
+
+        const onSignupMessage = (event) => {
+            try {
+                const host = new URL(event.origin).hostname;
+                if (!host.endsWith("facebook.com")) return;
+                const message = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+                if (message?.type !== "WA_EMBEDDED_SIGNUP") return;
+                if (message?.data?.event === "FINISH") {
+                    sessionInfoResolve({
+                        phoneNumberId: String(message?.data?.phone_number_id || ""),
+                        wabaId: String(message?.data?.waba_id || ""),
+                    });
+                } else if (message?.data?.event === "CANCEL" || message?.data?.event === "ERROR") {
+                    sessionInfoResolve(null);
+                }
+            } catch { }
+        };
+        window.addEventListener("message", onSignupMessage);
+
+        window.FB.login(async (response) => {
+            try {
+                const code = String(response?.authResponse?.code || "");
+                if (!code) {
+                    window.removeEventListener("message", onSignupMessage);
+                    finish({ error: "A autorização da Meta foi cancelada ou não foi concluída." });
+                    return;
+                }
+                const sessionInfo = await Promise.race([
+                    sessionInfoPromise,
+                    new Promise((resolveInfo) => setTimeout(() => resolveInfo(null), 12000)),
+                ]);
+                window.removeEventListener("message", onSignupMessage);
+                if (!sessionInfo?.phoneNumberId || !sessionInfo?.wabaId) {
+                    finish({ error: "A Meta não retornou os dados do número. Inicie a conexão novamente." });
+                    return;
+                }
+                finish({ code, ...sessionInfo });
+            } catch (error) {
+                window.removeEventListener("message", onSignupMessage);
+                finish({ error: error?.message || "Não foi possível concluir a autorização da Meta." });
+            }
+        }, {
+            config_id: window.META_SIGNUP_CONFIG.configId,
+            response_type: "code",
+            override_default_response_type: true,
+            extras: { setup: {}, sessionInfoVersion: "3" },
+        });
+    });
+}
+
+function getSelectedConnectionMethod() {
+    return document.querySelector('input[name="whatsapp-connection-method"]:checked')?.value || "qr";
+}
+
+function syncConnectionMethodPicker() {
+    const section = document.getElementById("whatsapp-connection");
+    const qrFields = document.getElementById("qr-connection-fields");
+    const metaFields = document.getElementById("meta-connection-fields");
+    const metaNotice = document.getElementById("meta-api-notice");
+    const metaConfigHelp = document.getElementById("meta-config-help");
+    const button = document.getElementById("session-create-btn");
+    if (!section) return;
+
+    const isQrSelected = getSelectedConnectionMethod() === "qr";
+    section.dataset.connectionMethod = isQrSelected ? "qr" : "meta";
+
+    document.querySelectorAll("#whatsapp-connection .connection-method-option").forEach((option) => {
+        const input = option.querySelector('input[name="whatsapp-connection-method"]');
+        option.classList.toggle("is-selected", Boolean(input?.checked));
+    });
+
+    if (qrFields) qrFields.hidden = !isQrSelected;
+    if (metaFields) metaFields.hidden = isQrSelected;
+    if (metaNotice) metaNotice.hidden = isQrSelected;
+    if (metaConfigHelp) metaConfigHelp.hidden = Boolean(window.META_SIGNUP_CONFIG?.configured);
+    if (button) {
+        const icon = button.querySelector("i");
+        const label = button.querySelector("span");
+        const metaReady = Boolean(window.META_SIGNUP_CONFIG?.configured);
+        button.disabled = button.dataset.busy === "true" || (!isQrSelected && !metaReady);
+        if (icon) icon.className = isQrSelected ? "fa-solid fa-qrcode" : (metaReady ? "fa-brands fa-meta" : "fa-solid fa-lock");
+        if (label) label.textContent = isQrSelected ? "Gerar QR Code" : (metaReady ? "Conectar com a Meta" : "Configuração Meta pendente");
+    }
+}
+
+function initConnectionMethodPicker() {
+    document.querySelectorAll('input[name="whatsapp-connection-method"]').forEach((input) => {
+        input.addEventListener("change", syncConnectionMethodPicker);
+    });
+    syncConnectionMethodPicker();
+    if (window.META_SIGNUP_CONFIG?.configured) {
+        ensureMetaSignupSdk()
+            .then(() => syncConnectionMethodPicker())
+            .catch((error) => console.warn("SDK Meta indisponível:", error?.message || error));
+    }
+}
+
+function setConnectionMethodBusy(isBusy) {
+    document.querySelectorAll('input[name="whatsapp-connection-method"]').forEach((input) => {
+        input.disabled = isBusy;
+    });
+    const button = document.getElementById("session-create-btn");
+    if (button) button.dataset.busy = isBusy ? "true" : "false";
+    syncConnectionMethodPicker();
+}
+
 async function createSession() {
     const input = document.getElementById("session-name");
-    const button = document.getElementById("session-create-btn");
     const name = input?.value.trim() || "";
 
     if (!name) {
@@ -927,9 +1102,14 @@ async function createSession() {
         return;
     }
 
+    if (getSelectedConnectionMethod() === "meta") {
+        await connectMetaSession(name);
+        return;
+    }
+
     activeConnectionSessionName = name;
     showQrLoading(name);
-    if (button) button.disabled = true;
+    setConnectionMethodBusy(true);
 
     try {
         const res = await fetch(API + "/sessions/create", {
@@ -957,7 +1137,78 @@ async function createSession() {
         if (loading) loading.style.display = "none";
         notify("Erro ao iniciar a conexão do WhatsApp", "error");
     } finally {
-        if (button) button.disabled = false;
+        setConnectionMethodBusy(false);
+    }
+}
+
+async function connectMetaSession(sessionName) {
+    const input = document.getElementById("session-name");
+    const pinInput = document.getElementById("meta-two-step-pin");
+    const status = document.getElementById("meta-connection-status");
+    const pin = String(pinInput?.value || "").trim();
+    if (!/^\d{6}$/.test(pin)) {
+        notify("Informe o PIN de verificação em duas etapas com 6 dígitos.", "warning");
+        pinInput?.focus();
+        return;
+    }
+    if (!window.META_SIGNUP_CONFIG?.configured) {
+        notify("A integração oficial ainda aguarda a configuração do aplicativo Meta no servidor.", "warning");
+        return;
+    }
+
+    if (!window.FB) {
+        ensureMetaSignupSdk()
+            .then(() => notify("A conexão Meta está pronta. Clique novamente para continuar.", "info"))
+            .catch((error) => notify(error?.message || "Não foi possível carregar o SDK da Meta.", "error"));
+        return;
+    }
+
+    setConnectionMethodBusy(true);
+    if (status) {
+        status.hidden = false;
+        status.className = "connection-status connection-status--info";
+        status.textContent = "Abra a janela da Meta e autorize a conta comercial.";
+    }
+    try {
+        const signup = await launchMetaEmbeddedSignup();
+        if (!signup || signup.error) {
+            throw new Error(signup?.error || "A conexão foi cancelada.");
+        }
+        if (status) status.textContent = "Autorização recebida. Registrando o número na API Oficial…";
+        const response = await fetch(API + "/sessions/meta/connect", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                sessionName,
+                pin,
+                code: signup.code,
+                phoneNumberId: signup.phoneNumberId,
+                wabaId: signup.wabaId,
+            }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data?.ok) throw new Error(data?.error || "Não foi possível concluir a conexão oficial.");
+
+        if (input) input.value = "";
+        if (pinInput) pinInput.value = "";
+        if (status) {
+            status.className = "connection-status connection-status--success";
+            status.textContent = data.displayPhoneNumber
+                ? `API Oficial conectada: ${data.displayPhoneNumber}.`
+                : "API Oficial conectada com sucesso.";
+        }
+        notify("Número conectado pela API Oficial Meta.", "success");
+        await listSessions();
+    } catch (error) {
+        if (status) {
+            status.hidden = false;
+            status.className = "connection-status connection-status--error";
+            status.textContent = error?.message || "Não foi possível conectar pela API Oficial.";
+        }
+        notify(error?.message || "Não foi possível conectar pela API Oficial.", "error");
+    } finally {
+        setConnectionMethodBusy(false);
     }
 }
 
@@ -990,7 +1241,7 @@ async function listSessions() {
             <div class="session-empty">
                 <div class="session-illust">📱</div>
                 <h3>Conecte seu primeiro WhatsApp</h3>
-                <p>Crie uma sessão, escaneie o QR Code e comece a atender clientes pelo painel.</p>
+                <p>Escolha a conexão por QR Code ou API Oficial Meta para começar a atender clientes.</p>
                 <button class="btn btn-accent" onclick="scrollToCreateSession()">
                   <i class="fa-solid fa-qrcode"></i>
                   Criar sessão agora
@@ -1036,6 +1287,9 @@ async function listSessions() {
         const div = document.createElement("div");
         div.className = "session-card";
         const sessionNameText = escapeSessionHtml(s.session_name);
+        const providerLabel = s.provider === "meta"
+            ? "API Oficial Meta" + (s.meta_display_phone_number ? " · " + escapeSessionHtml(s.meta_display_phone_number) : "")
+            : "Conexão por QR Code";
         const sessionNameArg = escapeSessionHtml(
             JSON.stringify(String(s.session_name || ""))
                 .replace(/</g, "\\u003c")
@@ -1050,6 +1304,7 @@ async function listSessions() {
                 </div>
                 <div class="session-info">
                     <div class="session-name">${sessionNameText}</div>
+                    <div class="session-provider">${providerLabel}</div>
                     <span class="session-badge ${badgeClass}">${badgeLabel}</span>
                     ${sessionNote}
                 </div>

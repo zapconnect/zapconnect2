@@ -8,6 +8,11 @@ import path from "path";
 import { execSync } from "child_process";
 import { SpeechClient } from "@google-cloud/speech";
 import { getDB } from "./database";
+import {
+  decryptMetaAccessToken,
+  getWhatsAppClientSendTimeout,
+  MetaWhatsAppCloudClient,
+} from "./services/metaWhatsApp";
 import { splitMessages, sendMessagesWithDelay } from "./util";
 import { emitToUser } from "./lib/socketEmitter";
 import { canUseIA, consumeIaMessage } from "./services/iaLimiter";
@@ -503,7 +508,8 @@ async function getChatAIState(userId: number, chatId: string): Promise<boolean> 
 const AI_SELECTED = resolveRuntimeAiProvider(process.env.AI_SELECTED);
 const MAX_RETRIES = 3;
 
-const clients = new Map<string, wppconnect.Whatsapp>();
+const clients = new Map<string, any>();
+const metaClientsByPhoneNumberId = new Map<string, MetaWhatsAppCloudClient>();
 
 // Evitar eventos duplicados
 const eventsAttached = new Set<string>();
@@ -1330,7 +1336,7 @@ async function runFlowActions(
         options.logs?.push(`send_text: ${trimmed}` + (trimmed.length < rendered.length ? " [truncated]" : ""));
       } else {
         try {
-          await withTimeout(ctx.client.sendText(ctx.chatId, trimmed), WPP_TIMEOUT_MS, "sendText");
+          await withTimeout(ctx.client.sendText(ctx.chatId, trimmed), getWhatsAppClientSendTimeout(ctx.client, WPP_TIMEOUT_MS), "sendText");
           ctx.lastResponse = trimmed;
           await appendConversationHistoryQuietly({
             userId: ctx.userId,
@@ -1359,7 +1365,7 @@ async function runFlowActions(
         try {
           await withTimeout(
             ctx.client.sendFile(ctx.chatId, String(a.payload), "arquivo", ""),
-            WPP_TIMEOUT_MS,
+            getWhatsAppClientSendTimeout(ctx.client, WPP_TIMEOUT_MS, true),
             "sendFile"
           );
           await appendConversationHistoryQuietly({
@@ -1412,7 +1418,7 @@ async function runFlowActions(
               ctx.chatId,
               transferMessage
             ),
-            WPP_TIMEOUT_MS,
+            getWhatsAppClientSendTimeout(ctx.client, WPP_TIMEOUT_MS),
             "sendText"
           );
           await appendConversationHistoryQuietly({
@@ -2223,7 +2229,7 @@ async function handleAutomaticFallback(options: {
     try {
       const numberOnly = decision.config.alertPhone.replace(/\D/g, "");
       const targetJid = await ensureChat(client, numberOnly);
-      await withTimeout(client.sendText(targetJid, msg), WPP_TIMEOUT_MS, "sendText");
+      await withTimeout(client.sendText(targetJid, msg), getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS), "sendText");
     } catch (err) {
       console.error("Erro ao enviar alerta de fallback por WhatsApp:", err);
     }
@@ -2331,6 +2337,9 @@ async function closeSessionRuntime(full: string, sessionDir?: string, clientOver
     if (trackedClient) {
       clients.delete(full);
     }
+    if (client instanceof MetaWhatsAppCloudClient) {
+      metaClientsByPhoneNumberId.delete(client.phoneNumberId);
+    }
   }
 
   if (sessionDir) {
@@ -2421,7 +2430,7 @@ function extrairNumero(chatId: string) {
 //  FUNÇÃO QUE ANEXA EVENTOS (SEM DUPLICAR) + MODO HUMANO + IA POR CHAT + DIGITANDO
 // ===============================
 async function attachEvents(
-  client: wppconnect.Whatsapp,
+  client: any,
   userId: number,
   shortName: string
 ) {
@@ -2463,6 +2472,7 @@ async function attachEvents(
       ) {
         emitToUser(userId, "msg:status", {
           chatId: panelChatId,
+          sessionName: shortName,
           msgId: messageId,
           status: panelStatus,
           ack: normalizeChargeWhatsappAckValue((ack as any)?.ack),
@@ -2574,7 +2584,7 @@ async function attachEvents(
       if (!body) {
         const fallbackText = "Não entendi o áudio, pode resumir em texto?";
         try {
-          await withTimeout(client.sendText(chatId, fallbackText), WPP_TIMEOUT_MS, "sendText");
+          await withTimeout(client.sendText(chatId, fallbackText), getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS), "sendText");
           await appendConversationHistoryQuietly({
             userId,
             sessionName: shortName,
@@ -2630,7 +2640,7 @@ async function attachEvents(
           if (qualificationReminder) {
             await withTimeout(
               client.sendText(chatId, qualificationReminder),
-              WPP_TIMEOUT_MS,
+              getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS),
               "sendText"
             );
             await appendConversationHistoryQuietly({
@@ -2701,6 +2711,7 @@ async function attachEvents(
       try {
         const payload: any = {
           chatId,
+          sessionName: shortName,
           name:
             msg.sender?.pushname ||
             msg.sender?.name ||
@@ -2718,7 +2729,7 @@ async function attachEvents(
           payload.mediaBase64 = mediaBase64;
           payload.mediaText = body; // transcrição/texto original
         }
-        emitToUser(userId, "newMessage", payload);
+        if (!msg.__metaPanelEmitted) emitToUser(userId, "newMessage", payload);
       } catch { }
 
       const consentCommand = detectDispatchConsentCommand(body);
@@ -2753,7 +2764,7 @@ async function attachEvents(
                 chatId,
                 confirmationText
               ),
-              WPP_TIMEOUT_MS,
+              getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS),
               "sendText"
             );
             await appendConversationHistoryQuietly({
@@ -2782,7 +2793,7 @@ async function attachEvents(
                 chatId,
                 confirmationText
               ),
-              WPP_TIMEOUT_MS,
+              getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS),
               "sendText"
             );
             await appendConversationHistoryQuietly({
@@ -2926,7 +2937,7 @@ async function attachEvents(
           if (qualificationResult.responseText) {
             await withTimeout(
               client.sendText(chatId, qualificationResult.responseText),
-              WPP_TIMEOUT_MS,
+              getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS),
               "sendText"
             );
             await appendConversationHistoryQuietly({
@@ -2966,7 +2977,7 @@ async function attachEvents(
             chatId,
             limitMessage
           ),
-          WPP_TIMEOUT_MS,
+          getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS),
           "sendText"
         );
         await appendConversationHistoryQuietly({
@@ -3264,6 +3275,7 @@ async function attachEvents(
 
               emitToUser(userId, "newMessage", {
                 chatId: sentChatId,
+                sessionName: shortName,
                 body: sentBody,
                 timestamp,
                 fromBot: true,
@@ -3924,6 +3936,110 @@ export async function createWppSession(
   return creationPromise;
 }
 
+export async function registerMetaCloudSession(options: {
+  userId: number;
+  sessionName: string;
+  phoneNumberId: string;
+  wabaId: string;
+  accessToken: string;
+  displayPhoneNumber?: string | null;
+}) {
+  const full = `USER${options.userId}_${options.sessionName}`;
+  const existing = clients.get(full);
+  if (existing) await closeSessionRuntime(full);
+
+  const client = new MetaWhatsAppCloudClient(options);
+  clients.set(full, client);
+  metaClientsByPhoneNumberId.set(client.phoneNumberId, client);
+  try {
+    await attachEvents(client, options.userId, options.sessionName);
+    await primeFallbackCache(options.userId, options.sessionName);
+    await primeChatAICache(options.userId);
+  } catch (error) {
+    await closeSessionRuntime(full);
+    throw error;
+  }
+  emitToUser(options.userId, "server:online", { userId: options.userId });
+  emitToUser(options.userId, "sessions:changed", { userId: options.userId });
+  return { sessionName: full };
+}
+
+export async function restoreMetaCloudSession(userId: number, sessionName: string) {
+  const full = `USER${userId}_${sessionName}`;
+  const loaded = clients.get(full);
+  if (loaded instanceof MetaWhatsAppCloudClient) {
+    metaClientsByPhoneNumberId.set(loaded.phoneNumberId, loaded);
+    return { sessionName: full, exists: true };
+  }
+
+  const db = getDB();
+  const row = await db.get<any>(
+    `SELECT meta_phone_number_id, meta_waba_id, meta_access_token_enc, meta_display_phone_number
+     FROM sessions
+     WHERE user_id = ? AND session_name = ? AND provider = 'meta' LIMIT 1`,
+    [userId, sessionName]
+  );
+  if (!row?.meta_phone_number_id || !row?.meta_waba_id || !row?.meta_access_token_enc) {
+    throw new Error("A sessão Meta não tem todos os dados para reconectar.");
+  }
+
+  const client = new MetaWhatsAppCloudClient({
+    userId,
+    sessionName,
+    phoneNumberId: String(row.meta_phone_number_id),
+    wabaId: String(row.meta_waba_id),
+    accessToken: decryptMetaAccessToken(String(row.meta_access_token_enc)),
+    displayPhoneNumber: row.meta_display_phone_number,
+  });
+  clients.set(full, client);
+  metaClientsByPhoneNumberId.set(client.phoneNumberId, client);
+  try {
+    await attachEvents(client, userId, sessionName);
+    await primeFallbackCache(userId, sessionName);
+    await primeChatAICache(userId);
+  } catch (error) {
+    await closeSessionRuntime(full);
+    throw error;
+  }
+  await db.run(
+    `UPDATE sessions SET status = 'connected' WHERE user_id = ? AND session_name = ?`,
+    [userId, sessionName]
+  );
+  emitToUser(userId, "server:online", { userId });
+  return { sessionName: full };
+}
+
+export async function restartMetaCloudSession(userId: number, sessionName: string) {
+  const full = `USER${userId}_${sessionName}`;
+  await closeSessionRuntime(full);
+  return restoreMetaCloudSession(userId, sessionName);
+}
+
+export async function handleMetaWebhookPayload(payload: any) {
+  const entries = Array.isArray(payload?.entry) ? payload.entry : [];
+  for (const entry of entries) {
+    for (const change of Array.isArray(entry?.changes) ? entry.changes : []) {
+      const value = change?.value || {};
+      const phoneNumberId = String(value?.metadata?.phone_number_id || "").trim();
+      const client = metaClientsByPhoneNumberId.get(phoneNumberId);
+      if (!client) continue;
+
+      const contacts = Array.isArray(value?.contacts) ? value.contacts : [];
+      for (const message of Array.isArray(value?.messages) ? value.messages : []) {
+        const sender = String(message?.from || "");
+        const contactName = String(
+          contacts.find((contact: any) => String(contact?.wa_id || "") === sender)?.profile?.name || ""
+        );
+        await client.dispatchIncoming(message, contactName);
+      }
+
+      for (const status of Array.isArray(value?.statuses) ? value.statuses : []) {
+        await client.dispatchStatus(status);
+      }
+    }
+  }
+}
+
 
 
 // ===========================
@@ -3969,6 +4085,8 @@ export async function shutdownWppClients(): Promise<void> {
     await Promise.allSettled(closures);
   }
 
+  metaClientsByPhoneNumberId.clear();
+
   console.log(`🔌 WPPConnect: ${total} sessão(ões) finalizadas para shutdown`);
 }
 
@@ -3987,7 +4105,7 @@ async function sendSystemMessage(
       return;
     }
 
-    await withTimeout(client.sendText(chatId, text), WPP_TIMEOUT_MS, "sendText");
+    await withTimeout(client.sendText(chatId, text), getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS), "sendText");
     await appendConversationHistoryQuietly({
       userId: Number(userId),
       sessionName,

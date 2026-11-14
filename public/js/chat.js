@@ -12,7 +12,7 @@ if (!window.USER_ID) {
 }
 
 const socket = io({
-    auth: { userId: window.USER_ID }
+    auth: { userId: window.USER_ID, sessionName: window.SESSION_NAME }
 });
 
 /* ==========================================================
@@ -101,6 +101,14 @@ const contactTagDropdownHint = document.getElementById("contactTagDropdownHint")
 
 const inputMsg = document.getElementById("inputMsg");
 const btnSend = document.getElementById("btnSend");
+const btnMetaTemplates = document.getElementById("btnMetaTemplates");
+const metaTemplateModal = document.getElementById("metaTemplateModal");
+const metaTemplateSelect = document.getElementById("metaTemplateSelect");
+const metaTemplatePreview = document.getElementById("metaTemplatePreview");
+const metaTemplateVariables = document.getElementById("metaTemplateVariables");
+const metaTemplateError = document.getElementById("metaTemplateError");
+const btnMetaTemplateSend = document.getElementById("btnMetaTemplateSend");
+let metaTemplates = [];
 const draftBanner = document.getElementById("draftBanner");
 const draftBannerText = document.getElementById("draftBannerText");
 const btnDraftDiscard = document.getElementById("draftDiscard");
@@ -1805,13 +1813,14 @@ function renderMessages(chatId) {
             const mime = msg.mimetype || "";
             const mediaBase64 = msg.mediaBase64 || msg.body || "";
             const safeMime = escapeHtml(mime);
+            const mediaSource = msg.mediaUrl ? escapeHtml(msg.mediaUrl) : "data:" + safeMime + ";base64," + mediaBase64;
             const safeMediaText = escapeHtml(msg.mediaText || "");
 
             if (mime.startsWith("image/")) {
                 row.classList.add("msg-photo");
                 bubble.classList.add("msg-bubble-media");
                 bubble.innerHTML = `
-                    <img class="msg-img" src="data:${safeMime};base64,${mediaBase64}" alt="imagem enviada">
+                    <img class="msg-img" src="${mediaSource}" alt="imagem enviada">
                 `;
             } else if (mime.startsWith("audio/") || mime.includes("opus")) {
                 row.classList.add("msg-audio-row");
@@ -1824,7 +1833,7 @@ function renderMessages(chatId) {
                     <div class="audio-card">
                         <div class="audio-wave">${bars}</div>
                         <audio controls class="msg-audio">
-                            <source src="data:${safeMime};base64,${mediaBase64}" type="${safeMime}">
+                            <source src="${mediaSource}" type="${safeMime}">
                         </audio>
                         ${msg.mediaText ? `<p class="audio-caption">${safeMediaText}</p>` : ""}
                     </div>
@@ -1832,7 +1841,7 @@ function renderMessages(chatId) {
             } else if (mime.startsWith("video/")) {
                 row.classList.add("msg-video-row");
                 bubble.classList.add("msg-bubble-media");
-                bubble.innerHTML = `<video controls class="msg-video" src="data:${safeMime};base64,${mediaBase64}"></video>`;
+                bubble.innerHTML = `<video controls class="msg-video" src="${mediaSource}"></video>`;
             } else {
                 row.classList.add("msg-doc-row");
                 bubble.classList.add("msg-doc-card");
@@ -1844,7 +1853,7 @@ function renderMessages(chatId) {
                         <div class="doc-body">
                             <div class="doc-name">${escapeHtml(filename)}</div>
                             <div class="doc-meta">${safeMime || "Arquivo"}</div>
-                            <a class="doc-download" download href="data:${safeMime};base64,${msg.body}">⬇ Baixar</a>
+                    <a class="doc-download" download href="${msg.mediaUrl ? escapeHtml(msg.mediaUrl) : `data:${safeMime};base64,${msg.body || mediaBase64}`}">⬇ Baixar</a>
                         </div>
                     </div>
                 `;
@@ -2084,6 +2093,121 @@ btnSend.addEventListener("click", () => {
     setTimeout(() => renderMessages(currentChat), 40);
 });
 
+function closeMetaTemplateModal() {
+    if (metaTemplateModal) metaTemplateModal.hidden = true;
+}
+
+function getSelectedMetaTemplate() {
+    return metaTemplates.find(template => `${template.name}|${template.language}` === metaTemplateSelect?.value) || null;
+}
+
+function renderMetaTemplateSelection() {
+    const template = getSelectedMetaTemplate();
+    if (metaTemplateVariables) metaTemplateVariables.replaceChildren();
+    if (metaTemplateError) metaTemplateError.textContent = "";
+    if (!template) {
+        if (metaTemplatePreview) metaTemplatePreview.textContent = "";
+        if (btnMetaTemplateSend) btnMetaTemplateSend.disabled = true;
+        return;
+    }
+
+    if (metaTemplatePreview) metaTemplatePreview.textContent = template.body;
+    for (let index = 0; index < Number(template.variables || 0); index++) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "meta-template-variable";
+        const label = document.createElement("label");
+        label.textContent = `Valor de {{${index + 1}}}`;
+        const input = document.createElement("input");
+        input.type = "text";
+        input.maxLength = 1024;
+        input.dataset.templateParameter = String(index);
+        input.placeholder = `Texto do parâmetro ${index + 1}`;
+        wrapper.append(label, input);
+        metaTemplateVariables?.appendChild(wrapper);
+    }
+    if (btnMetaTemplateSend) btnMetaTemplateSend.disabled = false;
+}
+
+async function openMetaTemplateModal() {
+    if (!currentChat || !metaTemplateModal || !metaTemplateSelect) return;
+    metaTemplateModal.hidden = false;
+    if (metaTemplateError) metaTemplateError.textContent = "Carregando modelos aprovados…";
+    if (btnMetaTemplateSend) btnMetaTemplateSend.disabled = true;
+    try {
+        const response = await fetch(`/sessions/meta/templates?sessionName=${encodeURIComponent(window.SESSION_NAME || "")}`, {
+            credentials: "include",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data?.ok) throw new Error(data?.error || "Não foi possível carregar os modelos Meta.");
+        metaTemplates = Array.isArray(data.templates) ? data.templates : [];
+        metaTemplateSelect.replaceChildren();
+        if (!metaTemplates.length) {
+            metaTemplateSelect.add(new Option("Nenhum modelo de texto disponível", ""));
+            if (metaTemplateError) metaTemplateError.textContent = "A conta não tem modelos aprovados compatíveis com envio de texto.";
+            renderMetaTemplateSelection();
+            return;
+        }
+        metaTemplateSelect.add(new Option("Selecione um modelo…", ""));
+        metaTemplates.forEach(template => {
+            const label = `${template.name} · ${template.language}${template.category ? ` · ${template.category}` : ""}`;
+            metaTemplateSelect.add(new Option(label, `${template.name}|${template.language}`));
+        });
+        if (metaTemplateError) metaTemplateError.textContent = "";
+        renderMetaTemplateSelection();
+    } catch (error) {
+        if (metaTemplateError) metaTemplateError.textContent = error?.message || "Falha ao carregar modelos.";
+        if (metaTemplateSelect) metaTemplateSelect.replaceChildren(new Option("Não foi possível carregar", ""));
+    }
+}
+
+btnMetaTemplates?.addEventListener("click", openMetaTemplateModal);
+metaTemplateSelect?.addEventListener("change", renderMetaTemplateSelection);
+document.getElementById("btnMetaTemplateClose")?.addEventListener("click", closeMetaTemplateModal);
+document.getElementById("btnMetaTemplateCancel")?.addEventListener("click", closeMetaTemplateModal);
+metaTemplateModal?.addEventListener("click", event => {
+    if (event.target?.matches?.("[data-meta-template-close]")) closeMetaTemplateModal();
+});
+btnMetaTemplateSend?.addEventListener("click", async () => {
+    const template = getSelectedMetaTemplate();
+    if (!template || !currentChat) return;
+    const parameters = Array.from(metaTemplateVariables?.querySelectorAll("[data-template-parameter]") || [])
+        .sort((a, b) => Number(a.dataset.templateParameter) - Number(b.dataset.templateParameter))
+        .map(input => input.value.trim());
+    btnMetaTemplateSend.disabled = true;
+    if (metaTemplateError) metaTemplateError.textContent = "Enviando modelo…";
+    try {
+        const response = await fetch("/sessions/meta/send-template", {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                sessionName: window.SESSION_NAME,
+                chatId: currentChat,
+                templateName: template.name,
+                languageCode: template.language,
+                parameters,
+            }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data?.ok) throw new Error(data?.error || "Não foi possível enviar o modelo.");
+        closeMetaTemplateModal();
+        window.notify?.("Modelo aprovado enviado.", "success");
+    } catch (error) {
+        if (metaTemplateError) metaTemplateError.textContent = error?.message || "Não foi possível enviar o modelo.";
+        if (window.notify) window.notify(error?.message || "Não foi possível enviar o modelo.", "error");
+    } finally {
+        btnMetaTemplateSend.disabled = false;
+    }
+});
+
+if (btnMetaTemplates) btnMetaTemplates.hidden = window.SESSION_PROVIDER !== "meta";
+
+socket.on("message_send_error", payload => {
+    const message = String(payload?.error || "Não foi possível enviar a mensagem.");
+    if (window.notify) window.notify(message, "error");
+    else alert(message);
+});
+
 btnDraftDiscard?.addEventListener("click", discardCurrentDraft);
 window.addEventListener("beforeunload", () => {
     if (currentChat) {
@@ -2305,6 +2429,7 @@ socket.on("profilePic", data => {
 });
 
 socket.on("newMessage", msg => {
+    if (msg?.sessionName && String(msg.sessionName) !== String(window.SESSION_NAME || "")) return;
     ensureChat(msg.chatId, msg.name);
     if (msg.avatar) {
         chats[msg.chatId].pic = msg.avatar;
@@ -2317,6 +2442,29 @@ socket.on("newMessage", msg => {
         msg.id = msg.messageId;
     }
     msg.deliveryStatus = resolveOutgoingMessageStatus(msg) || msg.deliveryStatus || null;
+
+    // A API Meta emite a confirmação no adaptador e alguns fluxos também
+    // publicam o retorno do envio. Atualize a mensagem existente em vez de
+    // renderizar uma cópia com o mesmo wamid.
+    if (msg.messageId) {
+        const existing = chats[msg.chatId].msgs.find(existingMessage =>
+            normalizeMessageId(existingMessage?.messageId || existingMessage?.id || existingMessage?.msgId) === msg.messageId
+        );
+        if (existing) {
+            const nextStatus = resolveOutgoingMessageStatus(msg);
+            if (nextStatus && shouldUpgradeMessageStatus(resolveOutgoingMessageStatus(existing), nextStatus)) {
+                existing.deliveryStatus = nextStatus;
+                existing.status = nextStatus;
+                existing.ack = nextStatus === "read" ? 3 : nextStatus === "delivered" ? 2 : 1;
+            }
+            if (msg.mediaUrl && !existing.mediaUrl) existing.mediaUrl = msg.mediaUrl;
+            if (msg.mediaBase64 && !existing.mediaBase64) existing.mediaBase64 = msg.mediaBase64;
+            if (msg.mediaText && !existing.mediaText) existing.mediaText = msg.mediaText;
+            if (currentChat === msg.chatId) renderMessages(msg.chatId);
+            renderChatList();
+            return;
+        }
+    }
     chats[msg.chatId].msgs.push(msg);
 
     // Atualizar preview da última mensagem
@@ -2475,7 +2623,8 @@ socket.on("bot:typed", ({ chatId }) => {
     if (currentChat === chatId) hideTyping();
 });
 
-socket.on("msg:status", ({ chatId, msgId, status }) => {
+socket.on("msg:status", ({ chatId, msgId, status, sessionName }) => {
+    if (sessionName && String(sessionName) !== String(window.SESSION_NAME || "")) return;
     if (!chatId || !msgId || !status) return;
     updateMessageStatusInMemory(chatId, msgId, status);
     updateMessageStatusInDom(chatId, msgId, status);

@@ -413,6 +413,10 @@ import {
   getQRPathFor,
   deleteWppSession,
   getClient,
+  handleMetaWebhookPayload,
+  registerMetaCloudSession,
+  restartMetaCloudSession,
+  restoreMetaCloudSession,
   chatAILock,
   enableHumanTemporarily,
   chatHumanLock,
@@ -424,6 +428,18 @@ import {
   getWppRuntimeCacheStats,
   shutdownWppClients,
 } from "./wppManager";
+import {
+  encryptMetaAccessToken,
+  exchangeEmbeddedSignupCode,
+  countMetaTemplateParameters,
+  getWhatsAppClientSendTimeout,
+  getMetaPhoneDetails,
+  getMetaSignupConfig,
+  MetaWhatsAppCloudClient,
+  registerMetaPhoneNumber,
+  subscribeMetaWaba,
+  verifyMetaWebhookSignature,
+} from "./services/metaWhatsApp";
 import { simulateFlowRun, simulateWelcomeFlow } from "./wppManager";
 
 
@@ -1297,6 +1313,32 @@ app.use(
   express.raw({ type: "application/json" })
 );
 
+// Webhook da WhatsApp Cloud API: precisa preservar o corpo original para validar X-Hub-Signature-256.
+app.get("/webhook/meta", (req, res) => {
+  const verifyToken = String(process.env.META_WEBHOOK_VERIFY_TOKEN || "");
+  const mode = String(req.query["hub.mode"] || "");
+  const suppliedToken = String(req.query["hub.verify_token"] || "");
+  const challenge = String(req.query["hub.challenge"] || "");
+  if (mode === "subscribe" && verifyToken && suppliedToken === verifyToken && challenge) {
+    return res.status(200).send(challenge);
+  }
+  return res.sendStatus(403);
+});
+app.post("/webhook/meta", express.raw({ type: "application/json", limit: "5mb" }), async (req, res) => {
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  if (!verifyMetaWebhookSignature(rawBody, req.header("X-Hub-Signature-256"))) {
+    return res.sendStatus(401);
+  }
+  try {
+    const payload = JSON.parse(rawBody.toString("utf8"));
+    await handleMetaWebhookPayload(payload);
+    return res.sendStatus(200);
+  } catch (err: any) {
+    console.error("Falha ao processar webhook Meta:", err?.message || err);
+    return res.sendStatus(500);
+  }
+});
+
 // =======================================
 // 🌐 Middlewares globais
 // =======================================
@@ -1418,7 +1460,7 @@ app.get(
     const API_URL =
       process.env.API_URL || `${req.protocol}://${req.get("host")}`;
 
-    res.render("painel", { user, sessions, API_URL, showInitialAiSetup });
+    res.render("painel", { user, sessions, API_URL, showInitialAiSetup, metaSignup: getMetaSignupConfig() });
   }
 );
 
@@ -1530,6 +1572,16 @@ io.use(async (socket, next) => {
     if (!user || isSessionExpired(user)) return next(new Error("unauthorized"));
 
     socket.data.userId = user.id;
+    const requestedSessionName = String(socket.handshake.auth?.sessionName || "").trim();
+    if (requestedSessionName) {
+      const selectedSession = await getDB().get(
+        `SELECT session_name FROM sessions
+         WHERE user_id = ? AND session_name = ? AND status = 'connected' LIMIT 1`,
+        [user.id, requestedSessionName]
+      );
+      if (!selectedSession) return next(new Error("session_unavailable"));
+      socket.data.sessionName = requestedSessionName;
+    }
     next();
   } catch (err) {
     next(new Error("unauthorized"));
@@ -1590,11 +1642,13 @@ io.on("connection", (socket) => {
       const db = getDB();
 
       const session = await db.get(
-        `SELECT session_name
+        `SELECT session_name, provider
          FROM sessions
          WHERE user_id = ? AND status = 'connected'
+           AND (? = '' OR session_name = ?)
+         ORDER BY id DESC
          LIMIT 1`,
-        [userId]
+        [userId, String(socket.data.sessionName || ""), String(socket.data.sessionName || "")]
       );
 
       if (!session) {
@@ -1610,6 +1664,8 @@ io.on("connection", (socket) => {
         return;
       }
 
+      const sendTimeoutMs = getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS, Boolean(file));
+
       // 📎 ENVIO DE ARQUIVO
       if (file && mimetype && filename) {
         const safeFile = sanitizeIncomingFile({
@@ -1619,7 +1675,7 @@ io.on("connection", (socket) => {
         });
         const sentFileMessage = await withTimeout(
           client.sendFile(chatId, safeFile.dataUrl, safeFile.filename, body || ""),
-          WPP_TIMEOUT_MS,
+          sendTimeoutMs,
           "sendFile"
         );
         const sentAt = Date.now();
@@ -1628,6 +1684,7 @@ io.on("connection", (socket) => {
 
         io.to(`user:${userId}`).emit("newMessage", {
           chatId,
+          sessionName: session.session_name,
           body: safeFile.base64,
           mimetype: safeFile.mime,
           isMedia: true,
@@ -1673,13 +1730,14 @@ io.on("connection", (socket) => {
       }
 
       // 💬 ENVIO DE TEXTO
-      const sentTextMessage = await withTimeout(client.sendText(chatId, body), WPP_TIMEOUT_MS, "sendText");
+      const sentTextMessage = await withTimeout(client.sendText(chatId, body), sendTimeoutMs, "sendText");
       const sentAt = Date.now();
       const messageId = normalizeChargeWhatsappMessageId((sentTextMessage as any)?.id);
       const ackValue = normalizeChargeWhatsappAckValue((sentTextMessage as any)?.ack) ?? 1;
 
       io.to(`user:${userId}`).emit("newMessage", {
         chatId,
+        sessionName: session.session_name,
         body,
         fromMe: true,
         _isFromMe: true,
@@ -1716,6 +1774,10 @@ io.on("connection", (socket) => {
 
     } catch (err) {
       console.error("❌ Erro ao enviar mensagem do admin:", err);
+      socket.emit("message_send_error", {
+        chatId,
+        error: err instanceof Error ? err.message : "Não foi possível enviar a mensagem.",
+      });
     }
   });
 
@@ -1805,8 +1867,10 @@ io.on("connection", (socket) => {
         `SELECT session_name 
          FROM sessions 
          WHERE user_id = ? AND status = 'connected'
+           AND (? = '' OR session_name = ?)
+         ORDER BY id DESC
          LIMIT 1`,
-        [userId]
+        [userId, String(socket.data.sessionName || ""), String(socket.data.sessionName || "")]
       );
 
       if (!session) {
@@ -1935,8 +1999,10 @@ io.on("connection", (socket) => {
         `SELECT session_name 
        FROM sessions 
        WHERE user_id = ? AND status = 'connected'
+         AND (? = '' OR session_name = ?)
+       ORDER BY id DESC
        LIMIT 1`,
-        [userId]
+        [userId, String(socket.data.sessionName || ""), String(socket.data.sessionName || "")]
       );
 
       if (!session) {
@@ -2005,6 +2071,11 @@ io.on("connection", (socket) => {
           body: m.body || "",
           mimetype: m.mimetype || null,
           isMedia: !!m.mimetype,
+          mediaUrl: client?.isMetaCloudApi && m?.mediaId
+            ? `/sessions/meta/media/${encodeURIComponent(String(m.messageId || m.id?._serialized || ""))}?sessionName=${encodeURIComponent(session.session_name)}`
+            : null,
+          messageId: m.messageId || m.id?._serialized || null,
+          deliveryStatus: m.deliveryStatus || null,
           timestamp: (m.timestamp || Date.now()) * 1000,
           fromMe: m.fromMe === true,
           _isFromMe: m.fromMe === true
@@ -2889,13 +2960,14 @@ app.get("/chat", authMiddleware, subscriptionGuard, async (req, res) => {
   const user = (req as any).user;
   const db = getDB();
   let planConfig = null;
+  let sessionProvider = "qr";
 
   let sessionName = String(req.query.session || "").trim();
 
   // ✅ Se não vier na URL, pega a sessão conectada
   if (!sessionName) {
     const session = await db.get(
-      `SELECT session_name
+      `SELECT session_name, provider
        FROM sessions
        WHERE user_id = ? AND status = 'connected'
        ORDER BY id DESC
@@ -2904,6 +2976,15 @@ app.get("/chat", authMiddleware, subscriptionGuard, async (req, res) => {
     );
 
     sessionName = session?.session_name || "";
+    sessionProvider = String(session?.provider || "qr");
+  } else {
+    const session = await db.get(
+      `SELECT session_name, provider FROM sessions
+       WHERE user_id = ? AND session_name = ? AND status = 'connected' LIMIT 1`,
+      [user.id, sessionName]
+    );
+    if (!session) return res.redirect("/painel");
+    sessionProvider = String(session.provider || "qr");
   }
 
   // 🔥 Se mesmo assim não existir sessão conectada
@@ -2920,6 +3001,7 @@ app.get("/chat", authMiddleware, subscriptionGuard, async (req, res) => {
   return res.render("chat", {
     user,
     sessionName,
+    sessionProvider,
     planConfig,
   });
 });
@@ -3918,7 +4000,7 @@ app.post(
             const finalMessage = renderTemplate(contact.message ?? message ?? "", contact);
 
             if (!dispatchMedia) {
-              await withTimeout(client.sendText(chatId, finalMessage), WPP_TIMEOUT_MS, "sendText");
+              await withTimeout(client.sendText(chatId, finalMessage), getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS), "sendText");
             } else {
               await withTimeout(
                 client.sendFile(
@@ -3927,7 +4009,7 @@ app.post(
                   dispatchMedia.filename || filename || "arquivo",
                   finalMessage
                 ),
-                WPP_TIMEOUT_MS,
+                getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS, true),
                 "sendFile"
               );
             }
@@ -6679,6 +6761,194 @@ app.patch("/api/user/onboarding-step", authMiddleware, async (req, res) => {
   }
 });
 
+app.get("/api/meta/signup-config", authMiddleware, (_req, res) => {
+  const config = getMetaSignupConfig();
+  return res.json({
+    configured: config.configured,
+    appId: config.appId,
+    configId: config.configId,
+    graphApiVersion: config.graphApiVersion,
+  });
+});
+
+app.post("/sessions/meta/connect", authMiddleware, subscriptionGuard, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const { sessionName, code, phoneNumberId, wabaId, pin } = req.body || {};
+    const config = getMetaSignupConfig();
+    if (!config.configured) {
+      return res.status(503).json({ ok: false, error: "A integração oficial ainda aguarda a configuração do aplicativo Meta no servidor." });
+    }
+    if (!isSafeSessionName(sessionName)) {
+      return res.status(400).json({ ok: false, error: "Informe um nome válido para esta conexão." });
+    }
+    if (typeof code !== "string" || code.length < 8 || code.length > 4096) {
+      return res.status(400).json({ ok: false, error: "A autorização da Meta expirou. Inicie a conexão novamente." });
+    }
+    if (!/^\d{5,30}$/.test(String(phoneNumberId || "")) || !/^\d{5,30}$/.test(String(wabaId || ""))) {
+      return res.status(400).json({ ok: false, error: "A Meta não retornou os dados da conta e do número. Tente novamente." });
+    }
+    if (!/^\d{6}$/.test(String(pin || ""))) {
+      return res.status(400).json({ ok: false, error: "Informe o PIN de verificação em duas etapas com 6 dígitos escolhido para este número." });
+    }
+
+    const db = getDB();
+    const [existingSession, activeCount, existingPhone] = await Promise.all([
+      db.get(`SELECT id FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`, [user.id, sessionName]),
+      db.get<{ total: number | string }>(`SELECT COUNT(*) AS total FROM sessions WHERE user_id = ?`, [user.id]),
+      db.get(`SELECT id FROM sessions WHERE provider = 'meta' AND meta_phone_number_id = ? LIMIT 1`, [phoneNumberId]),
+    ]);
+    if (existingSession) return res.status(409).json({ ok: false, error: "Já existe uma conexão com esse nome." });
+    if (existingPhone) return res.status(409).json({ ok: false, error: "Este número já está conectado a uma conta ZapConnect." });
+
+    const planConfig = await getPlanConfig(user.plan);
+    const maxSessions = planConfig?.maxSessions ?? 0;
+    if (Number(activeCount?.total || 0) >= maxSessions) {
+      const displayName = planConfig?.displayName || String(user.plan || "seu plano");
+      return res.status(403).json({ ok: false, error: `O plano ${displayName} permite até ${maxSessions} conexão(ões) de WhatsApp.` });
+    }
+
+    const accessToken = await exchangeEmbeddedSignupCode(code);
+    await registerMetaPhoneNumber(String(phoneNumberId), accessToken, String(pin));
+    await subscribeMetaWaba(String(wabaId), accessToken);
+    const phoneDetails = await getMetaPhoneDetails(String(phoneNumberId), accessToken)
+      .catch(() => ({ displayPhoneNumber: "", verifiedName: "" }));
+
+    await db.run(
+      `INSERT INTO sessions
+        (user_id, session_name, status, provider, meta_phone_number_id, meta_waba_id, meta_access_token_enc, meta_display_phone_number)
+       VALUES (?, ?, 'connected', 'meta', ?, ?, ?, ?)`,
+      [user.id, sessionName, String(phoneNumberId), String(wabaId), encryptMetaAccessToken(accessToken), phoneDetails.displayPhoneNumber || null]
+    );
+
+    try {
+      await registerMetaCloudSession({
+        userId: Number(user.id),
+        sessionName,
+        phoneNumberId: String(phoneNumberId),
+        wabaId: String(wabaId),
+        accessToken,
+        displayPhoneNumber: phoneDetails.displayPhoneNumber,
+      });
+    } catch (error) {
+      await db.run(`DELETE FROM sessions WHERE user_id = ? AND session_name = ? AND provider = 'meta'`, [user.id, sessionName]);
+      throw error;
+    }
+
+    return res.json({
+      ok: true,
+      session: sessionName,
+      displayPhoneNumber: phoneDetails.displayPhoneNumber,
+      verifiedName: phoneDetails.verifiedName,
+    });
+  } catch (err: any) {
+    console.warn("Conexão Meta não concluída:", err?.message || err);
+    return res.status(502).json({ ok: false, error: err?.message || "Não foi possível concluir a conexão oficial com a Meta." });
+  }
+});
+
+app.get("/sessions/meta/templates", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const requestedName = String(req.query.sessionName || "").trim();
+    const session = await getDB().get<any>(
+      `SELECT session_name FROM sessions
+       WHERE user_id = ? AND provider = 'meta' AND status = 'connected'
+         AND (? = '' OR session_name = ?)
+       ORDER BY id DESC LIMIT 1`,
+      [user.id, requestedName, requestedName]
+    );
+    if (!session) return res.status(404).json({ ok: false, error: "Nenhuma conexão Meta ativa foi encontrada." });
+    const client = getClient(`USER${user.id}_${session.session_name}`);
+    if (!(client instanceof MetaWhatsAppCloudClient)) return res.status(503).json({ ok: false, error: "A conexão Meta ainda está iniciando." });
+    const templates = await client.listApprovedBodyTemplates();
+    return res.json({
+      ok: true,
+      templates: templates.map((template: any) => {
+        const body = (template.components || []).find((component: any) => String(component.type).toUpperCase() === "BODY");
+        return {
+          name: String(template.name || ""),
+          language: String(template.language || ""),
+          category: String(template.category || ""),
+          body: String(body?.text || template.name || ""),
+          variables: countMetaTemplateParameters(String(body?.text || "")),
+        };
+      }),
+    });
+  } catch (err: any) {
+    console.warn("Falha ao consultar modelos Meta:", err?.message || err);
+    return res.status(502).json({ ok: false, error: err?.message || "Não foi possível carregar os modelos aprovados." });
+  }
+});
+
+app.post("/sessions/meta/send-template", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const sessionName = String(req.body?.sessionName || "").trim();
+    const chatId = String(req.body?.chatId || "").trim();
+    const templateName = String(req.body?.templateName || "").trim();
+    const languageCode = String(req.body?.languageCode || "").trim();
+    const parameters = Array.isArray(req.body?.parameters)
+      ? req.body.parameters.map((value: unknown) => String(value || "").slice(0, 1024))
+      : [];
+    if (!isSafeSessionName(sessionName) || !chatId || !templateName || !languageCode) {
+      return res.status(400).json({ ok: false, error: "Dados do envio incompletos." });
+    }
+    const allowed = await getDB().get(
+      `SELECT id FROM sessions WHERE user_id = ? AND session_name = ? AND provider = 'meta' AND status = 'connected' LIMIT 1`,
+      [user.id, sessionName]
+    );
+    if (!allowed) return res.status(404).json({ ok: false, error: "A conexão Meta selecionada não está ativa." });
+    const client = getClient(`USER${user.id}_${sessionName}`);
+    if (!(client instanceof MetaWhatsAppCloudClient)) return res.status(503).json({ ok: false, error: "A conexão Meta ainda está iniciando." });
+    const sent = await client.sendTemplate(chatId, templateName, languageCode, parameters);
+    const normalizedChatId = chatId.includes("@") ? chatId : `${chatId}@c.us`;
+    io.to(`user:${user.id}`).emit("newMessage", {
+      chatId: normalizedChatId,
+      sessionName,
+      body: sent.preview || templateName,
+      fromMe: true,
+      _isFromMe: true,
+      id: sent.messageId,
+      messageId: sent.messageId,
+      ack: 1,
+      deliveryStatus: "sent",
+      timestamp: Date.now(),
+    });
+    return res.json({ ok: true, messageId: sent.messageId });
+  } catch (err: any) {
+    return res.status(400).json({ ok: false, error: err?.message || "Não foi possível enviar o modelo Meta." });
+  }
+});
+
+app.get("/sessions/meta/media/:messageId", authMiddleware, async (req, res) => {
+  try {
+    const user = (req as any).user;
+    const sessionName = String(req.query.sessionName || "").trim();
+    const messageId = String(req.params.messageId || "").trim();
+    if (!isSafeSessionName(sessionName) || !messageId) return res.sendStatus(404);
+    const stored = await getDB().get<any>(
+      `SELECT m.media_id, m.mimetype, m.message_type
+       FROM meta_messages m
+       JOIN sessions s ON s.user_id = m.user_id AND s.session_name = m.session_name
+       WHERE m.user_id = ? AND m.session_name = ? AND m.message_id = ? AND s.provider = 'meta'
+       LIMIT 1`,
+      [user.id, sessionName, messageId]
+    );
+    if (!stored?.media_id) return res.sendStatus(404);
+    const client = getClient(`USER${user.id}_${sessionName}`);
+    if (!(client instanceof MetaWhatsAppCloudClient)) return res.sendStatus(503);
+    const media = await client.decryptFile({ __metaMediaId: stored.media_id });
+    res.setHeader("Content-Type", stored.mimetype || "application/octet-stream");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    if (stored.message_type === "document") res.setHeader("Content-Disposition", "attachment");
+    return res.send(media);
+  } catch (err: any) {
+    console.warn("Falha ao baixar mídia da Meta:", err?.message || err);
+    return res.sendStatus(502);
+  }
+});
+
 // Criar Sessão
 app.post(
   "/sessions/create",
@@ -6748,7 +7018,7 @@ app.get("/sessions/list", authMiddleware, async (req, res) => {
 
   const db = getDB();
   const sessions = await db.all(
-    `SELECT id, session_name, status, created_at
+    `SELECT id, session_name, status, provider, meta_display_phone_number, created_at
      FROM sessions WHERE user_id = ? ORDER BY id DESC`,
     [user.id]
   );
@@ -6806,8 +7076,8 @@ app.post("/sessions/restart", authMiddleware, async (req, res) => {
   const user = (req as any).user;
 
   const db = getDB();
-  const session = await db.get<{ status: string }>(
-    `SELECT status FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
+  const session = await db.get<{ status: string; provider?: string }>(
+    `SELECT status, provider FROM sessions WHERE user_id = ? AND session_name = ? LIMIT 1`,
     [user.id, sessionName]
   );
 
@@ -6828,10 +7098,14 @@ app.post("/sessions/restart", authMiddleware, async (req, res) => {
     });
   }
 
-  await deleteWppSession(user.id, sessionName);
-  await createWppSession(user.id, sessionName, {
-    source: "manual_restart",
-  });
+  if (session.provider === "meta") {
+    await restartMetaCloudSession(user.id, sessionName);
+  } else {
+    await deleteWppSession(user.id, sessionName);
+    await createWppSession(user.id, sessionName, {
+      source: "manual_restart",
+    });
+  }
 
   io.to(`user:${user.id}`).emit("sessions:changed", { userId: user.id });
   res.json({ ok: true, message: "Sessão reiniciada com sucesso" });
@@ -6980,10 +7254,21 @@ export async function restoreSessionsOnStartup() {
   for (const s of sessions) {
     const task = (async () => {
       try {
-        await createWppSession(s.user_id, s.session_name, {
-          source: "startup_restore",
-        });
+        if (s.provider === "meta") {
+          await restoreMetaCloudSession(s.user_id, s.session_name);
+        } else {
+          await createWppSession(s.user_id, s.session_name, {
+            source: "startup_restore",
+          });
+        }
       } catch (err) {
+        if (s.provider === "meta") {
+          await db.run(
+            `UPDATE sessions SET status = 'disconnected'
+             WHERE user_id = ? AND session_name = ? AND provider = 'meta'`,
+            [s.user_id, s.session_name]
+          ).catch(() => {});
+        }
         console.warn(`⚠️ Falhou ao restaurar ${s.session_name}`, err);
       }
     })();

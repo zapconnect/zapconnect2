@@ -14,6 +14,7 @@
   <script>
     window.USER_ID = "<%= user.id %>";
     window.SESSION_NAME = "<%= typeof sessionName !== 'undefined' ? sessionName : '' %>";
+    window.SESSION_PROVIDER = "<%= typeof sessionProvider !== 'undefined' ? sessionProvider : 'qr' %>";
     window.CHAT_BOOTSTRAP = <%- JSON.stringify({
       user: {
         plan: user?.plan || "free",
@@ -203,12 +204,35 @@
           <!-- Input de arquivo oculto -->
           <input type="file" id="fileInput" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.zip,.txt" style="display:none;" />
           <button class="btn-attach" id="btnAttach" title="Anexar arquivo"><i class="fa-solid fa-paperclip"></i></button>
+          <button class="btn-meta-templates" id="btnMetaTemplates" type="button" title="Enviar modelo aprovado pela Meta" hidden>
+            <i class="fa-solid fa-file-circle-check"></i>
+          </button>
 
           <textarea id="inputMsg" class="inputMsg" placeholder="Digite uma mensagem" rows="1"></textarea>
           <button id="btnSend" class="btn-send">➤</button>
         </div>
       </footer>
 
+    </section>
+  </div>
+
+  <div id="metaTemplateModal" class="meta-template-modal" hidden>
+    <div class="meta-template-backdrop" data-meta-template-close></div>
+    <section class="meta-template-card" role="dialog" aria-modal="true" aria-labelledby="metaTemplateTitle">
+      <header>
+        <div><span>API Oficial Meta</span><h2 id="metaTemplateTitle">Enviar modelo aprovado</h2></div>
+        <button id="btnMetaTemplateClose" type="button" aria-label="Fechar">×</button>
+      </header>
+      <p class="meta-template-hint">Use um modelo aprovado para iniciar uma conversa ou falar fora da janela de 24 horas.</p>
+      <label for="metaTemplateSelect">Modelo</label>
+      <select id="metaTemplateSelect"><option value="">Carregando modelos…</option></select>
+      <p id="metaTemplatePreview" class="meta-template-preview"></p>
+      <div id="metaTemplateVariables" class="meta-template-variables"></div>
+      <p id="metaTemplateError" class="meta-template-error" role="status" aria-live="polite"></p>
+      <footer>
+        <button id="btnMetaTemplateCancel" type="button">Cancelar</button>
+        <button id="btnMetaTemplateSend" type="button" disabled>Enviar modelo</button>
+      </footer>
     </section>
   </div>
 

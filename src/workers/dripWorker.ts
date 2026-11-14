@@ -12,6 +12,7 @@ import {
   recordSessionSend,
 } from "../utils/humanDelay";
 import { withTimeout } from "../utils/withTimeout";
+import { getWhatsAppClientSendTimeout } from "../services/metaWhatsApp";
 import { ensureChat, getClient } from "../wppManager";
 
 const WPP_TIMEOUT_MS = Number(process.env.WPP_TIMEOUT_MS || 12_000);
@@ -630,13 +631,13 @@ async function processSingleDripEnrollment(
             step.filename || "arquivo",
             finalMessage || ""
           ),
-          WPP_TIMEOUT_MS,
+          getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS, true),
           "drip sendFile"
         );
       } else if (finalMessage) {
         await withTimeout(
           client.sendText(target, finalMessage),
-          WPP_TIMEOUT_MS,
+          getWhatsAppClientSendTimeout(client, WPP_TIMEOUT_MS),
           "drip sendText"
         );
       } else {
