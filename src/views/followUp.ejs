@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Follow-up &bull; ZapConnect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <%- include("partials/app-head-core") %>
+  <link rel="stylesheet" href="/css/follow-up.css" />
+  <link rel="stylesheet" href="/css/app-shell.css" />
+  <script src="/js/app-shell.js" defer></script>
+</head>
+<body class="has-app-sidebar app-screen-viewport follow-up-page">
+  <%- include("partials/app-sidebar", { activePage: "follow-up" }) %>
+  <div class="page-shell app-screen-scroll">
+    <div class="page-glow page-glow-a"></div>
+    <div class="page-glow page-glow-b"></div>
+
+    <header class="page-toolbar follow-up-toolbar">
+      <div class="compact-header-copy follow-up-title">
+        <span class="card-kicker">RELACIONAMENTO COM LEADS</span>
+        <h1 class="compact-title">Follow-up</h1>
+        <p class="compact-subtitle">Retome conversas no momento certo e acompanhe cada retorno.</p>
+      </div>
+      <div class="follow-up-header-actions">
+        <span id="follow-up-status-pill" class="status-pill follow-up-status-pill">Automações desligadas</span>
+        <button id="follow-up-refresh" class="btn btn-secondary" type="button">
+          <i class="fa-solid fa-rotate"></i> Atualizar
+        </button>
+        <button id="follow-up-save" class="btn btn-primary" type="button">
+          <i class="fa-solid fa-floppy-disk"></i> Salvar configuração
+        </button>
+      </div>
+    </header>
+
+    <main class="follow-up-content">
+      <nav class="follow-up-tabs" role="tablist" aria-label="Seções do Follow-up">
+        <button class="follow-up-tab is-active" type="button" role="tab" aria-selected="true" data-tab="configuration">Configuração</button>
+        <button class="follow-up-tab" type="button" role="tab" aria-selected="false" data-tab="scheduled">Agendados <span id="follow-up-scheduled-count">0</span></button>
+        <button class="follow-up-tab" type="button" role="tab" aria-selected="false" data-tab="leads">Leads parados <span id="follow-up-leads-count">0</span></button>
+        <button class="follow-up-tab" type="button" role="tab" aria-selected="false" data-tab="results">Resultados</button>
+      </nav>
+
+      <section class="follow-up-tab-panel is-active" data-panel="configuration" role="tabpanel">
+        <div class="fu-config-grid">
+          <article class="fu-card fu-automation-card">
+            <div class="fu-card-heading">
+              <div class="fu-heading-icon"><i class="fa-solid fa-stopwatch"></i></div>
+              <div>
+                <span class="fu-kicker">RETOMADA RÁPIDA</span>
+                <h2>Quando o lead para de responder</h2>
+              </div>
+              <label class="fu-switch" title="Ativar retomada automática">
+                <input id="warm-enabled" type="checkbox" />
+                <span></span>
+              </label>
+            </div>
+            <p class="fu-card-description">Se o cliente não responder à última mensagem enviada, o ZapConnect aguarda o intervalo definido e envia a próxima mensagem. Qualquer resposta cancela as etapas restantes.</p>
+            <div id="follow-up-steps" class="fu-steps"></div>
+            <button id="follow-up-add-step" class="btn btn-secondary fu-add-step" type="button"><i class="fa-solid fa-plus"></i> Adicionar mensagem</button>
+            <div class="fu-inline-note"><i class="fa-solid fa-circle-info"></i><span>Mensagens da IA são personalizadas com base no histórico recente da conversa.</span></div>
+          </article>
+
+          <article class="fu-card fu-automation-card">
+            <div class="fu-card-heading">
+              <div class="fu-heading-icon fu-heading-icon-purple"><i class="fa-solid fa-hourglass-half"></i></div>
+              <div>
+                <span class="fu-kicker">REENGAJAMENTO</span>
+                <h2>Quando o lead some</h2>
+              </div>
+              <label class="fu-switch" title="Ativar reengajamento de leads parados">
+                <input id="stalled-enabled" type="checkbox" />
+                <span></span>
+              </label>
+            </div>
+            <p class="fu-card-description">Os contatos aparecem na aba Leads parados após o período definido. A IA prepara uma mensagem individual, mas o envio só acontece depois da sua aprovação.</p>
+            <div class="fu-fields-grid">
+              <label class="fu-field">
+                <span>Considerar parado depois de</span>
+                <div class="fu-input-suffix"><input id="stalled-days" type="number" min="1" max="365" /><b>dias</b></div>
+              </label>
+              <label class="fu-field">
+                <span>Limite de envios por dia</span>
+                <div class="fu-input-suffix"><input id="daily-limit" type="number" min="1" max="20" /><b>máx. 20</b></div>
+              </label>
+              <label class="fu-field">
+                <span>Intervalo para tentar novamente</span>
+                <div class="fu-input-suffix"><input id="repeat-days" type="number" min="1" max="365" /><b>dias</b></div>
+              </label>
+              <label class="fu-field">
+                <span>Máximo de tentativas por lead</span>
+                <div class="fu-input-suffix"><input id="max-revisits" type="number" min="1" max="3" /><b>máx. 3</b></div>
+              </label>
+            </div>
+            <div class="fu-approval-note"><i class="fa-solid fa-user-check"></i><span>Você revisa e aprova cada mensagem antes de ela entrar na fila de envio.</span></div>
+          </article>
+
+          <article class="fu-card fu-window-card">
+            <div class="fu-card-heading">
+              <div class="fu-heading-icon fu-heading-icon-amber"><i class="fa-regular fa-clock"></i></div>
+              <div>
+                <span class="fu-kicker">HORÁRIO DE ENVIO</span>
+                <h2>Respeite o horário do seu negócio</h2>
+              </div>
+            </div>
+            <p class="fu-card-description">Mensagens fora desta janela aguardam o próximo horário permitido.</p>
+            <div class="fu-window-controls">
+              <label class="fu-field"><span>Início</span><input id="send-start" type="time" /></label>
+              <span class="fu-window-separator">até</span>
+              <label class="fu-field"><span>Fim</span><input id="send-end" type="time" /></label>
+            </div>
+            <div class="fu-fields-grid fu-session-field">
+              <label class="fu-field fu-field-wide">
+                <span>Sessão de WhatsApp para leads parados</span>
+                <select id="preferred-session"></select>
+                <small>Follow-ups de conversas recentes usam a sessão em que a conversa aconteceu.</small>
+              </label>
+            </div>
+          </article>
+
+          <aside class="fu-safety-card">
+            <i class="fa-solid fa-shield-halved"></i>
+            <div>
+              <strong>Envio protegido</strong>
+              <p>As duas automações começam desligadas. Respostas do cliente cancelam os envios pendentes, e números que pediram para parar continuam bloqueados.</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="follow-up-tab-panel" data-panel="scheduled" role="tabpanel" hidden>
+        <div class="fu-panel-heading">
+          <div><span class="fu-kicker">FILA DE ENVIO</span><h2>Agendados</h2><p>Revise rascunhos pendentes e acompanhe as próximas mensagens.</p></div>
+          <button class="btn btn-secondary" type="button" data-refresh-tab="scheduled"><i class="fa-solid fa-rotate"></i> Atualizar</button>
+        </div>
+        <div id="follow-up-scheduled-list" class="fu-list"></div>
+      </section>
+
+      <section class="follow-up-tab-panel" data-panel="leads" role="tabpanel" hidden>
+        <div class="fu-panel-heading">
+          <div><span class="fu-kicker">OPORTUNIDADES SEM ATIVIDADE</span><h2>Leads parados</h2><p>Prepare uma mensagem individual e revise o texto antes de aprovar.</p></div>
+          <button class="btn btn-secondary" type="button" data-refresh-tab="leads"><i class="fa-solid fa-rotate"></i> Atualizar</button>
+        </div>
+        <div id="follow-up-leads-list" class="fu-list"></div>
+      </section>
+
+      <section class="follow-up-tab-panel" data-panel="results" role="tabpanel" hidden>
+        <div class="fu-panel-heading">
+          <div><span class="fu-kicker">HISTÓRICO</span><h2>Resultados</h2><p>Mensagens enviadas, canceladas ou que precisam de atenção.</p></div>
+          <button class="btn btn-secondary" type="button" data-refresh-tab="results"><i class="fa-solid fa-rotate"></i> Atualizar</button>
+        </div>
+        <div id="follow-up-results-list" class="fu-list"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    window.__FOLLOW_UP_BOOTSTRAP__ = <%- JSON.stringify({ settings, sessions }) %>;
+  </script>
+  <script src="/js/toast.js"></script>
+  <script src="/js/follow-up.js"></script>
+</body>
+</html>

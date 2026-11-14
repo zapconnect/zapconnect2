@@ -2,6 +2,7 @@
   const currentPage = typeof activePage === "string" ? activePage : "";
   const currentUserName = user && user.name ? String(user.name).trim() : "Operador";
   const displayName = currentUserName.split(" ")[0] || currentUserName;
+  const userInitials = currentUserName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part.charAt(0)).join("").toUpperCase() || "O";
   const planName = String((user && user.plan) || "free").toUpperCase();
   const mobilePrimaryIds = ["chat", "crm", "disparo"];
   const isMobileMoreActive = !mobilePrimaryIds.includes(currentPage);
@@ -21,6 +22,7 @@
         { id: "disparo", label: "Disparo", href: "/disparo", icon: "fa-solid fa-bullhorn", dotClass: "dot-rose" },
         { id: "agendamentos", label: "Agendamentos", href: "/agendamentos", icon: "fa-solid fa-calendar-check", dotClass: "dot-gold" },
         { id: "drips", label: "Drip", href: "/drips", icon: "fa-solid fa-timeline", dotClass: "dot-purple" },
+        { id: "follow-up", label: "Follow-up", href: "/follow-up", icon: "fa-solid fa-arrow-rotate-left", dotClass: "dot-teal" },
         { id: "cobrancas", label: "Cobran\u00e7as", href: "/cobrancas", icon: "fa-solid fa-file-invoice-dollar", dotClass: "dot-orange" },
       ],
     },
@@ -37,19 +39,19 @@
   ];
 %>
 
-<button class="app-shell-toggle" type="button" aria-label="Abrir navegacao" aria-expanded="false" data-app-shell-toggle>
+<button class="app-shell-toggle" type="button" aria-label="Abrir menu" aria-controls="app-shell-sidebar" aria-expanded="false" data-app-shell-toggle>
   <i class="fa-solid fa-bars"></i>
 </button>
 
 <div class="app-shell-backdrop" data-app-shell-close></div>
 
-<aside class="app-shell-sidebar" id="app-shell-sidebar" aria-label="Navegacao principal">
+<aside class="app-shell-sidebar" id="app-shell-sidebar" aria-label="Menu principal">
   <div class="app-shell-brand-row">
     <a href="/painel" class="app-shell-brand-link">
       <img src="/img/logo3.png" alt="ZapConnect" class="app-shell-brand-logo">
       <div>
         <strong>Zap<span class="app-shell-brand-connect">Connect</span></strong>
-        <span class="app-shell-brand-caption">Navega&ccedil;&atilde;o do app</span>
+        <span class="app-shell-brand-caption">Atendimento e vendas</span>
       </div>
     </a>
 
@@ -61,9 +63,9 @@
   <button
     class="app-shell-collapse"
     type="button"
-    aria-label="Recolher barra lateral"
+    aria-label="Recolher menu"
     aria-pressed="false"
-    title="Recolher barra lateral"
+    title="Recolher menu"
     data-app-shell-label="Recolher menu"
     data-app-shell-collapse
   >
@@ -71,10 +73,13 @@
     <span class="app-shell-collapse-copy" data-app-shell-collapse-copy>Recolher menu</span>
   </button>
 
-  <div class="app-shell-intro">
-    <span class="app-shell-intro-label">Sempre &agrave; m&atilde;o</span>
-    <strong>Ol&aacute;, <%= displayName %></strong>
-    <p>Plano <%= planName %>. Troque de m&oacute;dulo sem voltar ao painel.</p>
+  <div class="app-shell-profile">
+    <span class="app-shell-avatar" aria-hidden="true"><%= userInitials %></span>
+    <div class="app-shell-profile-copy">
+      <span class="app-shell-profile-label">Conta ativa</span>
+      <strong><%= displayName %></strong>
+      <span class="app-shell-plan"><i class="fa-solid fa-sparkles" aria-hidden="true"></i> Plano <%= planName %></span>
+    </div>
   </div>
 
   <% navGroups.forEach((group) => { %>
@@ -91,8 +96,7 @@
             <% if (isActive) { %>aria-current="page"<% } %>
             <% if (item.chatLink) { %>data-app-shell-chat-link="true"<% } %>
           >
-            <span class="app-shell-link-dot <%= item.dotClass %>" aria-hidden="true"></span>
-            <span class="app-shell-link-icon"><i class="<%= item.icon %>"></i></span>
+            <span class="app-shell-link-icon <%= item.dotClass %>" aria-hidden="true"><i class="<%= item.icon %>"></i></span>
             <span class="app-shell-link-copy"><%= item.label %></span>
           </a>
         <% }) %>
@@ -100,10 +104,6 @@
     </section>
   <% }) %>
 
-  <div class="app-shell-footer">
-    <strong>Fluxo cont&iacute;nuo</strong>
-    <p>Principal, Envios e Configura&ccedil;&otilde;es agora ficam fixos em qualquer rota.</p>
-  </div>
 </aside>
 
 <nav class="app-shell-mobile-tabs" aria-label="Navegacao principal mobile">
@@ -139,6 +139,7 @@
     type="button"
     class="app-shell-mobile-tab app-shell-mobile-tab-button <%= isMobileMoreActive ? 'is-active' : '' %>"
     data-app-shell-toggle
+    aria-controls="app-shell-sidebar"
     aria-expanded="false"
     aria-label="Abrir mais destinos"
   >

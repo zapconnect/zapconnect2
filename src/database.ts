@@ -337,25 +337,6 @@ export async function initDB() {
     // já existe
   }
 
-  try {
-    await pool.query(
-      `CREATE TABLE IF NOT EXISTS quick_replies (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT NOT NULL,
-        shortcut VARCHAR(50) NOT NULL,
-        title VARCHAR(100) NOT NULL,
-        content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        INDEX idx_user (user_id),
-        UNIQUE KEY uniq_user_shortcut (user_id, shortcut),
-        CONSTRAINT fk_quick_replies_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      )`
-    );
-    console.log("✅ Tabela quick_replies pronta");
-  } catch (err) {
-    console.error("⚠️ Não foi possível garantir a tabela quick_replies:", err);
-  }
-
   // ===============================
   // 🔧 CRIAÇÃO DAS TABELAS (MARIA DB SAFE)
   // ===============================
@@ -597,6 +578,60 @@ export async function initDB() {
       FOREIGN KEY (campaign_id) REFERENCES drip_campaigns(id) ON DELETE CASCADE,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (crm_id) REFERENCES crm(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS follow_up_settings (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL UNIQUE,
+      config LONGTEXT NOT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS follow_up_items (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      crm_id INT DEFAULT NULL,
+      session_name VARCHAR(255) NOT NULL,
+      chat_id VARCHAR(255) NOT NULL,
+      contact_name VARCHAR(255) DEFAULT NULL,
+      contact_phone VARCHAR(30) NOT NULL,
+      kind VARCHAR(20) NOT NULL,
+      step_index INT NOT NULL DEFAULT 0,
+      source_activity_at BIGINT NOT NULL,
+      cycle_id BIGINT NOT NULL DEFAULT 0,
+      status VARCHAR(24) NOT NULL DEFAULT 'pending',
+      due_at BIGINT DEFAULT NULL,
+      draft_message TEXT DEFAULT NULL,
+      attempt_count INT NOT NULL DEFAULT 0,
+      last_error TEXT DEFAULT NULL,
+      sent_at BIGINT DEFAULT NULL,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      INDEX idx_follow_up_due_status (status, due_at),
+      INDEX idx_follow_up_user_chat (user_id, chat_id(80), status),
+      INDEX idx_follow_up_user_crm (user_id, crm_id, kind, status),
+      INDEX idx_follow_up_contact_history (user_id, crm_id, kind, sent_at),
+      UNIQUE KEY uniq_follow_up_crm_cycle (user_id, crm_id, kind, cycle_id, step_index),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (crm_id) REFERENCES crm(id) ON DELETE CASCADE
+    )
+    `,
+
+    `
+    CREATE TABLE IF NOT EXISTS follow_up_contact_activity (
+      user_id INT NOT NULL,
+      phone VARCHAR(30) NOT NULL,
+      last_inbound_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (user_id, phone),
+      INDEX idx_follow_up_activity_user_last_inbound (user_id, last_inbound_at),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
     `,
 
@@ -1301,15 +1336,46 @@ export async function initDB() {
     `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_config LONGTEXT`,
     `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ai_agent_id INT DEFAULT NULL`,
     `ALTER TABLE chat_histories ADD COLUMN IF NOT EXISTS session_scope_version TINYINT NOT NULL DEFAULT 0`,
-    `ALTER TABLE kb_sources ADD COLUMN IF NOT EXISTS embedding_version INT DEFAULT 1`
+    `ALTER TABLE kb_sources ADD COLUMN IF NOT EXISTS embedding_version INT DEFAULT 1`,
+    `ALTER TABLE follow_up_items ADD COLUMN IF NOT EXISTS cycle_id BIGINT NOT NULL DEFAULT 0`
   ];
 
   for (const sql of tables) {
-    await pool.query(sql);
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      const tableName = sql.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`?([\w]+)/i)?.[1] ?? "desconhecida";
+      const dbError = err as {
+        code?: string;
+        errno?: number;
+        sqlState?: string;
+        sqlMessage?: string;
+        message?: string;
+      };
+
+      console.error(`Falha ao criar/verificar a tabela ${tableName}:`, {
+        code: dbError.code,
+        errno: dbError.errno,
+        sqlState: dbError.sqlState,
+        message: dbError.sqlMessage || dbError.message || String(err),
+      });
+      throw err;
+    }
   }
 
   for (const sql of alters) {
     await runCompatibleAddColumn(sql);
+  }
+
+  const cycleIndexColumns = await getIndexColumns("follow_up_items", "uniq_follow_up_crm_cycle");
+  if (cycleIndexColumns.join(",") !== "user_id,crm_id,kind,cycle_id,step_index") {
+    await pool.query("UPDATE follow_up_items SET cycle_id = source_activity_at WHERE cycle_id = 0");
+    if (cycleIndexColumns.length) {
+      await pool.query("ALTER TABLE follow_up_items DROP INDEX uniq_follow_up_crm_cycle");
+    }
+    await pool.query(
+      "ALTER TABLE follow_up_items ADD UNIQUE KEY uniq_follow_up_crm_cycle (user_id, crm_id, kind, cycle_id, step_index)"
+    );
   }
 
   try {
@@ -1350,6 +1416,8 @@ export async function initDB() {
     "CREATE INDEX IF NOT EXISTS idx_drip_enrollments_user_created ON drip_enrollments (user_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_drip_enrollments_campaign_status ON drip_enrollments (campaign_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_drip_enrollments_contact_phone ON drip_enrollments (contact_phone)",
+    "CREATE INDEX IF NOT EXISTS idx_follow_up_settings_user ON follow_up_settings (user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_follow_up_items_due_status ON follow_up_items (status, due_at)",
     "CREATE INDEX IF NOT EXISTS idx_qualification_flows_user_active ON qualification_flows (user_id, active)",
     "CREATE INDEX IF NOT EXISTS idx_qualification_flows_updated ON qualification_flows (user_id, updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_qualification_sessions_chat_status ON qualification_sessions (user_id, chat_id, status)",

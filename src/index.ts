@@ -16,6 +16,7 @@ import { startNotificationWorker } from "./workers/notificationWorker";
 import { startSubscriptionReconciler } from "./workers/subscriptionReconciler";
 import { startAnalyticsWorker } from "./workers/analyticsWorker";
 import { startDripWorker } from "./workers/dripWorker";
+import { startFollowUpWorker } from "./workers/followUpWorker";
 
 async function start() {
   try {
@@ -44,6 +45,9 @@ async function start() {
 
     startDripWorker();
     console.log("Worker de drip iniciado");
+
+    startFollowUpWorker();
+    console.log("Worker de Follow-up iniciado");
 
     startCobrancasSweepCron();
     console.log("Sweep de cobranças iniciado");

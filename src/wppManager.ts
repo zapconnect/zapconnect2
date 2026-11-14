@@ -53,6 +53,10 @@ import {
   loadRecentHistory,
 } from "./services/chatHistoryService";
 import { appendConversationHistoryEntries } from "./services/conversationHistoryService";
+import {
+  cancelFollowUpsForInboundMessage,
+  scheduleWarmFollowUp,
+} from "./services/followUpService";
 
 type PanelMessageDeliveryStatus = "sent" | "delivered" | "read";
 
@@ -384,6 +388,11 @@ async function saveCRMClient(
           [name, avatar, lastSeen, existing.id]
         );
         crmWriteCache.set(cacheKey, { name, avatar, lastWrite: lastSeen });
+      } else {
+        await db.run(
+          `UPDATE crm SET last_seen = ? WHERE id = ?`,
+          [lastSeen, existing.id]
+        );
       }
 
       let parsedTags: string[] = [];
@@ -2495,6 +2504,15 @@ async function attachEvents(
     // =================================================
     if (!chatId) return;
 
+    try {
+      await cancelFollowUpsForInboundMessage({
+        userId,
+        phone: chatId.replace(/\D/g, ""),
+      });
+    } catch (followUpError) {
+      console.warn("Não foi possível cancelar follow-ups após resposta do contato:", followUpError);
+    }
+
     // =================================================
     //  CHAVES DE CONTROLE (usadas em diversos pontos abaixo)
     // =================================================
@@ -3232,12 +3250,14 @@ async function attachEvents(
 
           emitPanelTypingEvent(userId, shortName, chatId, "stop");
 
+          let lastSentAt = 0;
           await sendMessagesWithDelay({
             client,
             messages,
             targetNumber: msg.from,
             sessionName: shortName,
             onSent: async ({ chatId: sentChatId, body: sentBody, timestamp, sentMessage }) => {
+              lastSentAt = timestamp;
               const messageId = normalizeChargeWhatsappMessageId((sentMessage as any)?.id);
               const ackValue = normalizeChargeWhatsappAckValue((sentMessage as any)?.ack) ?? 1;
               const status = resolvePanelMessageStatusFromAck(ackValue) || "sent";
@@ -3276,6 +3296,21 @@ async function attachEvents(
               }
             } catch (historyErr) {
               console.warn("Falha ao persistir historico do chat:", historyErr);
+            }
+          }
+
+          if (lastSentAt) {
+            try {
+              await scheduleWarmFollowUp({
+                userId,
+                sessionName: shortName,
+                chatId,
+                contactName,
+                contactPhone: phoneForCtx,
+                sourceActivityAt: lastSentAt,
+              });
+            } catch (followUpError) {
+              console.warn("Não foi possível agendar o follow-up da conversa:", followUpError);
             }
           }
 

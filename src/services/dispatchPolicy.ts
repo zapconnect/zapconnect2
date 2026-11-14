@@ -12,7 +12,7 @@ export type DispatchPolicySkip = {
   reason: string;
 };
 
-export type DispatchCampaignKind = "broadcast" | "schedule" | "drip";
+export type DispatchCampaignKind = "broadcast" | "schedule" | "drip" | "follow_up";
 
 export type DispatchPolicyResult = {
   allowedContacts: DispatchTarget[];

@@ -22,6 +22,7 @@ import analyticsRoutes from "./routes/analytics";
 import cobrancasRoutes from "./routes/cobrancas";
 import contactTagsRoutes from "./routes/contactTags";
 import dripRoutes from "./routes/drips";
+import followUpRoutes from "./routes/followUp";
 import mercadopagoRoutes from "./routes/mercadopago";
 import quickRepliesRoutes from "./routes/quickReplies";
 import qualificationRoutes from "./routes/qualification";
@@ -56,6 +57,7 @@ import {
   updateDripEnrollmentContactSnapshot,
 } from "./services/dripCampaignService";
 import { buildCrmDashboardSummary } from "./services/crmDashboard";
+import { scheduleWarmFollowUp } from "./services/followUpService";
 import { shouldShowInitialAiSetup } from "./services/initialAiSetup";
 
 import { sendVerifyEmail } from "./utils/sendVerifyEmail";
@@ -1620,6 +1622,7 @@ io.on("connection", (socket) => {
           WPP_TIMEOUT_MS,
           "sendFile"
         );
+        const sentAt = Date.now();
         const messageId = normalizeChargeWhatsappMessageId((sentFileMessage as any)?.id);
         const ackValue = normalizeChargeWhatsappAckValue((sentFileMessage as any)?.ack) ?? 1;
 
@@ -1637,7 +1640,7 @@ io.on("connection", (socket) => {
           messageId,
           ack: ackValue,
           deliveryStatus: mapAckToPanelStatus(ackValue),
-          timestamp: Date.now()
+          timestamp: sentAt
         });
 
         await db.run(
@@ -1657,12 +1660,21 @@ io.on("connection", (socket) => {
             },
           ],
         });
+        await scheduleWarmFollowUp({
+          userId,
+          sessionName: session.session_name,
+          chatId,
+          contactName: "",
+          contactPhone: String(chatId).replace(/\D/g, ""),
+          sourceActivityAt: sentAt,
+        }).catch((error) => console.warn("Não foi possível agendar follow-up após envio manual:", error));
         io.to(`user:${userId}`).emit("onboarding:step", { step: 4 });
         return;
       }
 
       // 💬 ENVIO DE TEXTO
       const sentTextMessage = await withTimeout(client.sendText(chatId, body), WPP_TIMEOUT_MS, "sendText");
+      const sentAt = Date.now();
       const messageId = normalizeChargeWhatsappMessageId((sentTextMessage as any)?.id);
       const ackValue = normalizeChargeWhatsappAckValue((sentTextMessage as any)?.ack) ?? 1;
 
@@ -1675,7 +1687,7 @@ io.on("connection", (socket) => {
         messageId,
         ack: ackValue,
         deliveryStatus: mapAckToPanelStatus(ackValue),
-        timestamp: Date.now()
+        timestamp: sentAt
       });
 
       await db.run(
@@ -1690,6 +1702,16 @@ io.on("connection", (socket) => {
         chatId,
         entries: [{ role: "model", parts: [{ text: String(body || "").trim() }] }],
       });
+      if (String(body || "").trim()) {
+        await scheduleWarmFollowUp({
+          userId,
+          sessionName: session.session_name,
+          chatId,
+          contactName: "",
+          contactPhone: String(chatId).replace(/\D/g, ""),
+          sourceActivityAt: sentAt,
+        }).catch((error) => console.warn("Não foi possível agendar follow-up após envio manual:", error));
+      }
       io.to(`user:${userId}`).emit("onboarding:step", { step: 4 });
 
     } catch (err) {
@@ -5922,6 +5944,7 @@ app.post("/auth/login", loginLimiter, async (req, res) => {
 // Mantem as rotas publicas de autenticacao acessiveis antes de proteger /cobrancas.
 app.use("/", authMiddleware, analyticsRoutes);
 app.use("/", authMiddleware, dripRoutes);
+app.use("/", authMiddleware, followUpRoutes);
 app.use("/", authMiddleware, qualificationRoutes);
 app.use("/", authMiddleware, cobrancasRoutes);
 app.use("/", authMiddleware, quickRepliesRoutes);
