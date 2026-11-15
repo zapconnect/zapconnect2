@@ -1005,7 +1005,7 @@ function launchMetaEmbeddedSignup() {
         };
         window.addEventListener("message", onSignupMessage);
 
-        window.FB.login(async (response) => {
+        const handleLoginResponse = async (response) => {
             try {
                 const code = String(response?.authResponse?.code || "");
                 if (!code) {
@@ -1027,6 +1027,11 @@ function launchMetaEmbeddedSignup() {
                 window.removeEventListener("message", onSignupMessage);
                 finish({ error: error?.message || "Não foi possível concluir a autorização da Meta." });
             }
+        };
+
+        // O SDK da Meta exige um callback síncrono para FB.login.
+        window.FB.login((response) => {
+            void handleLoginResponse(response);
         }, {
             config_id: window.META_SIGNUP_CONFIG.configId,
             response_type: "code",
