@@ -728,6 +728,11 @@
 .connection-method-option:focus-within { outline: 2px solid rgba(37, 211, 102, .55); outline-offset: 2px; }
 .connection-method-option.is-selected { border-color: #25d366; background: rgba(37, 211, 102, .07); }
 .connection-method-option input { flex: 0 0 auto; margin: 3px 0 0; accent-color: #25d366; }
+.connection-method-option.is-coming-soon { cursor: not-allowed; opacity: .78; }
+.connection-method-option.is-coming-soon:hover { border-color: var(--border, #373e59); }
+.connection-method-option.is-coming-soon:focus-within { outline: none; }
+.connection-method-option.is-coming-soon .connection-method-badge { color: #f6d58b; background: rgba(236, 176, 61, .15); }
+.connection-method-option input:disabled { cursor: not-allowed; }
 .connection-method-copy { display: block; min-width: 0; }
 .connection-method-title { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: var(--text, #fff); font-size: 14px; font-weight: 650; }
 .connection-method-badge {

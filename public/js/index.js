@@ -1051,9 +1051,18 @@ function syncConnectionMethodPicker() {
     const metaFields = document.getElementById("meta-connection-fields");
     const metaNotice = document.getElementById("meta-api-notice");
     const metaConfigHelp = document.getElementById("meta-config-help");
+    const qrInput = document.querySelector('input[name="whatsapp-connection-method"][value="qr"]');
+    const metaInput = document.querySelector('input[name="whatsapp-connection-method"][value="meta"]');
     const button = document.getElementById("session-create-btn");
     if (!section) return;
 
+    if (metaInput) {
+        metaInput.disabled = true;
+        if (metaInput.checked) {
+            metaInput.checked = false;
+            if (qrInput) qrInput.checked = true;
+        }
+    }
     const isQrSelected = getSelectedConnectionMethod() === "qr";
     section.dataset.connectionMethod = isQrSelected ? "qr" : "meta";
 
@@ -1081,16 +1090,11 @@ function initConnectionMethodPicker() {
         input.addEventListener("change", syncConnectionMethodPicker);
     });
     syncConnectionMethodPicker();
-    if (window.META_SIGNUP_CONFIG?.configured) {
-        ensureMetaSignupSdk()
-            .then(() => syncConnectionMethodPicker())
-            .catch((error) => console.warn("SDK Meta indisponível:", error?.message || error));
-    }
 }
 
 function setConnectionMethodBusy(isBusy) {
     document.querySelectorAll('input[name="whatsapp-connection-method"]').forEach((input) => {
-        input.disabled = isBusy;
+        input.disabled = isBusy || input.value === "meta";
     });
     const button = document.getElementById("session-create-btn");
     if (button) button.dataset.busy = isBusy ? "true" : "false";
@@ -1108,7 +1112,7 @@ async function createSession() {
     }
 
     if (getSelectedConnectionMethod() === "meta") {
-        await connectMetaSession(name);
+        notify("A API Oficial Meta está em desenvolvimento e estará disponível em breve.", "info");
         return;
     }
 
@@ -1246,7 +1250,7 @@ async function listSessions() {
             <div class="session-empty">
                 <div class="session-illust">📱</div>
                 <h3>Conecte seu primeiro WhatsApp</h3>
-                <p>Escolha a conexão por QR Code ou API Oficial Meta para começar a atender clientes.</p>
+                <p>Conecte por QR Code para começar. A API Oficial Meta estará disponível em breve.</p>
                 <button class="btn btn-accent" onclick="scrollToCreateSession()">
                   <i class="fa-solid fa-qrcode"></i>
                   Criar sessão agora

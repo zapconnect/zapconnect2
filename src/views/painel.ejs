@@ -493,7 +493,7 @@
           <div>
             <span class="connection-kicker">CONECTE SEU WHATSAPP</span>
             <h2 id="whatsapp-connection-title">Escolha como conectar</h2>
-            <p>Selecione o tipo de conexão para o número que sua equipe usará no ZapConnect.</p>
+            <p>Conecte seu número por QR Code. A API Oficial Meta estará disponível em breve.</p>
           </div>
         </header>
 
@@ -511,14 +511,14 @@
               </span>
             </label>
 
-            <label class="connection-method-option">
-              <input type="radio" name="whatsapp-connection-method" value="meta">
+            <label class="connection-method-option is-coming-soon" aria-disabled="true">
+              <input type="radio" name="whatsapp-connection-method" value="meta" disabled>
               <span class="connection-method-copy">
                 <span class="connection-method-title">
                   API Oficial Meta
-                  <span class="connection-method-badge is-meta"><%= metaSignup?.configured ? "DISPONÍVEL" : "CONFIGURAÇÃO PENDENTE" %></span>
+                  <span class="connection-method-badge is-meta is-coming-soon-badge">EM BREVE</span>
                 </span>
-                <span class="connection-method-description">Cloud API oficial. O pagamento das mensagens fica na conta Meta da empresa e conversas iniciadas pela empresa usam modelos aprovados.</span>
+                <span class="connection-method-description"><strong>Solução em desenvolvimento.</strong> A conexão pela API Oficial ainda não está disponível.</span>
               </span>
             </label>
           </div>
