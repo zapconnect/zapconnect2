@@ -1637,6 +1637,23 @@ async function toggleIA() {
 socket.on("connect", () => {
     console.log("🟢 Socket conectado");
     setOnlineStatus(true);
+
+    // QR events emitted while Socket.IO was disconnected are not replayed.
+    // Restore the saved image for the active manual session after reconnect.
+    const sessionName = activeConnectionSessionName;
+    if (!currentUser || !sessionName) return;
+
+    listSessions().then(() => {
+        if (!socket.connected || activeConnectionSessionName !== sessionName) return;
+        const activeSession = (window._cachedSessions || []).find(
+            (session) => session.session_name === sessionName
+        );
+        if (activeSession?.status === "pending") {
+            showSessionQr(sessionName);
+        }
+    }).catch((error) => {
+        console.warn("Não foi possível recuperar o QR após reconectar o socket:", error);
+    });
 });
 
 socket.on("disconnect", () => {

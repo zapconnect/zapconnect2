@@ -3625,7 +3625,7 @@ async function doCreateWppSession(
     waitForLogin: !automaticStart,
     // QR e link codes são credenciais temporárias; não os escreva no log do WPPConnect.
     logQR: false,
-    catchQR: async (base64Qrimg, _asciiQR, attempts) => {
+    catchQR: (base64Qrimg, _asciiQR, attempts) => {
       console.log(` QR (${full}) tentativa ${attempts}`);
       if (automaticStart) {
         autoRecoveryBlockedState = autoRecoveryBlockedState || "notLogged";
@@ -3637,12 +3637,31 @@ async function doCreateWppSession(
         return;
       }
 
-      console.log(" QR salvo em:", getQRPathFor(full));
-      if (base64Qrimg) {
-        const base64 = base64Qrimg.split("base64,")[1];
-        fs.writeFileSync(getQRPathFor(full), Buffer.from(base64, "base64"));
+      if (!base64Qrimg) {
+        console.error(`ERRO QR vazio recebido do WPPConnect para ${full}.`);
+        return;
       }
 
+      const imageValue = String(base64Qrimg).trim();
+      const commaIndex = imageValue.indexOf(",");
+      const base64 = imageValue.startsWith("data:") && commaIndex >= 0
+        ? imageValue.slice(commaIndex + 1)
+        : imageValue;
+      const imageBuffer = Buffer.from(base64.replace(/\s/g, ""), "base64");
+      if (!imageBuffer.length) {
+        console.error(`ERRO Imagem QR inválida recebida do WPPConnect para ${full}.`);
+        return;
+      }
+
+      const qrPath = getQRPathFor(full);
+      try {
+        fs.writeFileSync(qrPath, imageBuffer);
+      } catch (error) {
+        console.error(`ERRO Não foi possível salvar o QR de ${full}:`, error);
+        return;
+      }
+
+      console.log(` QR salvo em: ${qrPath} (${imageBuffer.length} bytes)`);
       try {
         emitToUser(userId, "session:qr", { userId, sessionName: shortName, full });
       } catch { }
