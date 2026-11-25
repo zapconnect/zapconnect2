@@ -510,6 +510,38 @@ const MAX_RETRIES = 3;
 
 const clients = new Map<string, any>();
 const metaClientsByPhoneNumberId = new Map<string, MetaWhatsAppCloudClient>();
+const autoCloseGuardedPages = new WeakSet<object>();
+
+function guardAutoClosePageClose(page: any) {
+  if (!page || typeof page !== "object" || autoCloseGuardedPages.has(page)) return;
+
+  const originalClose = page.close;
+  if (typeof originalClose !== "function") return;
+
+  page.close = function (...args: any[]) {
+    let closeResult: unknown;
+    try {
+      closeResult = originalClose.apply(this, args);
+    } catch (error) {
+      if (isClosedPuppeteerConnectionError(error)) return Promise.resolve();
+      throw error;
+    }
+
+    return Promise.resolve(closeResult).catch((error) => {
+      if (isClosedPuppeteerConnectionError(error)) return;
+      throw error;
+    });
+  };
+
+  autoCloseGuardedPages.add(page);
+}
+
+function isClosedPuppeteerConnectionError(error: unknown) {
+  const candidate = error as { name?: unknown; message?: unknown } | null;
+  const name = String(candidate?.name || "");
+  const message = String(candidate?.message || error || "");
+  return name === "ConnectionClosedError" || /connection closed/i.test(message);
+}
 
 // Evitar eventos duplicados
 const eventsAttached = new Set<string>();
@@ -3616,7 +3648,13 @@ async function doCreateWppSession(
       } catch { }
 
     },
-    statusFind: async (status) => {
+    statusFind: async function (this: any, status) {
+      // WPPConnect invokes this callback immediately before calling page.close()
+      // without awaiting its promise. Catch only the already-closed CDP race.
+      if (status === "autocloseCalled") {
+        guardAutoClosePageClose(this?.page);
+      }
+
       console.log(" STATUS FIND DISPAROU:", status);
 
       if (status === "notLogged") {
