@@ -3598,6 +3598,7 @@ async function doCreateWppSession(
   let autoStartupConnectedStateSeen = false;
   let manualLoginRequired = false;
   let manualQrAuthenticated = false;
+  let manualInChatConfirmed = false;
 
   const createOptions: any = {
     session: full,
@@ -3682,6 +3683,7 @@ async function doCreateWppSession(
         } else {
           manualLoginRequired = true;
           manualQrAuthenticated = false;
+          manualInChatConfirmed = false;
         }
         // O WPPConnect pode emitir inChat antes de confirmar a autenticação.
         // notLogged precisa invalidar o connected provisório em qualquer fluxo.
@@ -3711,6 +3713,7 @@ async function doCreateWppSession(
             [userId, shortName]
           );
         } else {
+          manualInChatConfirmed = true;
           console.log(" WHATSAPP CONECTADO — EMITINDO server:online");
           resetReconnectTracking(full);
           await db.run(
@@ -3729,18 +3732,27 @@ async function doCreateWppSession(
       if (status === "qrReadSuccess") {
         if (!automaticStart) manualQrAuthenticated = true;
         // O QR ter sido lido ainda não confirma que a sessão entrou no chat.
+        // Preserve connected if inChat arrived first; callbacks can finish out of order.
+        const qrReadStatus = manualInChatConfirmed ? "connected" : "connecting";
         await db.run(
-          `UPDATE sessions SET status = 'connecting' WHERE user_id = ? AND session_name = ?`,
-          [userId, shortName]
+          `UPDATE sessions SET status = ? WHERE user_id = ? AND session_name = ?`,
+          [qrReadStatus, userId, shortName]
         );
-        try {
-          emitToUser(userId, "session:stateChange", {
-            userId,
-            sessionName: shortName,
-            full,
-            state: "connecting",
-          });
-        } catch { }
+        if (qrReadStatus === "connected") {
+          resetReconnectTracking(full);
+          try {
+            emitToUser(userId, "server:online", { userId });
+          } catch { }
+        } else {
+          try {
+            emitToUser(userId, "session:stateChange", {
+              userId,
+              sessionName: shortName,
+              full,
+              state: "connecting",
+            });
+          } catch { }
+        }
       }
 
       if (["browserClose", "disconnectedMobile", "serverClose"].includes(status)) {
@@ -3794,24 +3806,27 @@ async function doCreateWppSession(
     }
   }
 
-  if (!automaticStart && manualQrAuthenticated && typeof client?.isLoggedIn === "function") {
-    try {
-      const loggedIn = await withTimeout(
-        Promise.resolve(client.isLoggedIn()),
-        5000,
-        "manual authentication check"
-      );
-      if (loggedIn) {
-        await updateSessionStatus(userId, shortName, "connected");
-        manualLoginRequired = false;
-        manualQrAuthenticated = false;
-        try {
-          emitToUser(userId, "server:online", { userId });
-        } catch { }
-      } else {
-        await updateSessionStatus(userId, shortName, "connecting");
-      }
-    } catch {
+  if (!automaticStart && manualQrAuthenticated) {
+    let loggedIn = false;
+    if (typeof client?.isLoggedIn === "function") {
+      try {
+        loggedIn = Boolean(await withTimeout(
+          Promise.resolve(client.isLoggedIn()),
+          5000,
+          "manual authentication check"
+        ));
+      } catch { }
+    }
+
+    if (loggedIn || manualInChatConfirmed) {
+      await updateSessionStatus(userId, shortName, "connected");
+      resetReconnectTracking(full);
+      manualLoginRequired = false;
+      manualQrAuthenticated = false;
+      try {
+        emitToUser(userId, "server:online", { userId });
+      } catch { }
+    } else {
       await updateSessionStatus(userId, shortName, "connecting");
     }
   }
